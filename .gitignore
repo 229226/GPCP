@@ -14,3 +14,7 @@ __pycache__/
 # third-party checkouts are not vendored
 third_party/*
 !third_party/.gitkeep
+
+# CVA6 instruction tracer output
+trace_hart_*.dasm
+trace_hart_*.log

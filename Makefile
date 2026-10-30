@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean sw-check
+.PHONY: all test build clean sw-check soc soc-run
 
 all: test
 
@@ -15,5 +15,12 @@ sw-check:
 	$(MAKE) -C sw all
 	$(MAKE) -C sw rv64
 
+# B2: CVA6 + CGRA SoC
+soc:
+	$(MAKE) -C sim/soc
+
+soc-run:
+	$(MAKE) -C sim/soc run
+
 clean:
-	rm -rf build sim/cgra/build
+	rm -rf build sim/cgra/build sim/soc/build
