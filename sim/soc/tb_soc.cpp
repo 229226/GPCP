@@ -1,11 +1,14 @@
 // -----------------------------------------------------------------------------
-// GPCP SoC testbench (milestone B2)
+// GPCP SoC testbench (B3: Linux)
 //
-// Loads a bare-metal image into the SoC RAM through the backdoor port, releases
-// the CVA6 core, and waits until the program writes the exit register.
+// Loads one or more images into the SoC RAM through the backdoor port, releases
+// the CVA6 core and runs until the program writes the simulation exit register
+// (0x4001_0000) or the cycle budget is exhausted.
 //
 // Usage:
-//   ./Vgpcp_soc --prog prog.bin --max-cycles N --results 0x2000 --nwords 17 --dump out.txt
+//   ./Vgpcp_soc --load fw.bin@0x80000000 --load kernel@0x80200000 \
+//               --load dtb@0x82000000 --load initrd@0x84000000 \
+//               --max-cycles N [--results 0x... --nwords N] [--dump out.txt]
 // -----------------------------------------------------------------------------
 #include <verilated.h>
 #include "Vgpcp_soc.h"
@@ -16,10 +19,10 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <utility>
 
 static Vgpcp_soc* dut = nullptr;
 
@@ -37,12 +40,15 @@ static std::vector<uint8_t> load_bin(const std::string& path) {
                                 std::istreambuf_iterator<char>());
 }
 
+struct Image { std::string path; uint64_t addr; };
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
 
-    std::string prog_path, dump_path;
-    uint64_t max_cycles = 20000000ull;
-    uint32_t results_word = 0x400;   // 0x2000 / 8
+    std::vector<Image> images;
+    std::string dump_path;
+    uint64_t max_cycles = 200000000ull;
+    uint32_t results_addr = 0x80002000u;
     uint32_t nwords = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -51,14 +57,18 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) { std::fprintf(stderr, "missing value for %s\n", a.c_str()); std::exit(1); }
             return argv[++i];
         };
-        if (a == "--prog") prog_path = next();
-        else if (a == "--dump") dump_path = next();
+        if (a == "--load") {
+            std::string spec = next();
+            size_t at = spec.rfind('@');
+            if (at == std::string::npos) { std::fprintf(stderr, "bad --load %s\n", spec.c_str()); return 1; }
+            images.push_back({spec.substr(0, at), std::strtoull(spec.c_str() + at + 1, nullptr, 0)});
+        } else if (a == "--dump") dump_path = next();
         else if (a == "--max-cycles") max_cycles = std::strtoull(next().c_str(), nullptr, 0);
-        else if (a == "--results") results_word = (uint32_t)std::strtoul(next().c_str(), nullptr, 0);
+        else if (a == "--results") results_addr = (uint32_t)std::strtoul(next().c_str(), nullptr, 0);
         else if (a == "--nwords") nwords = (uint32_t)std::strtoul(next().c_str(), nullptr, 0);
     }
-    if (prog_path.empty()) {
-        std::fprintf(stderr, "usage: %s --prog prog.bin [--max-cycles N] [--results word] [--nwords N] [--dump f]\n", argv[0]);
+    if (images.empty()) {
+        std::fprintf(stderr, "no images; use --load file@addr\n");
         return 1;
     }
 
@@ -68,26 +78,31 @@ int main(int argc, char** argv) {
     dut->ram_we = 0;
     dut->eval();
 
-    // ---- preload the program image while reset is asserted
-    std::vector<uint8_t> img = load_bin(prog_path);
-    if (img.size() > 512u * 1024u) {
-        std::fprintf(stderr, "image too large: %zu bytes\n", img.size());
-        return 2;
-    }
-    uint32_t words = (uint32_t)((img.size() + 7) / 8);
-    img.resize(words * 8, 0);
-    for (uint32_t w = 0; w < words; w++) {
-        uint64_t v = 0;
-        for (int b = 0; b < 8; b++) v |= (uint64_t)img[w * 8 + b] << (8 * b);
-        dut->ram_we = 1;
-        dut->ram_waddr = (uint16_t)w;
-        dut->ram_wdata = v;
-        tick();
+    // ---- preload images while reset is asserted
+    for (const auto& img : images) {
+        if (img.addr & 0x7ull) {
+            std::fprintf(stderr, "[tb] %s: address 0x%llx is not 8-byte aligned\n",
+                         img.path.c_str(), (unsigned long long)img.addr);
+            return 2;
+        }
+        std::vector<uint8_t> data = load_bin(img.path);
+        uint32_t words = (uint32_t)((data.size() + 7) / 8);
+        data.resize(words * 8, 0);
+        uint32_t base = (uint32_t)(img.addr >> 3);
+        for (uint32_t w = 0; w < words; w++) {
+            uint64_t v = 0;
+            for (int b = 0; b < 8; b++) v |= (uint64_t)data[w * 8 + b] << (8 * b);
+            dut->ram_we = 1;
+            dut->ram_waddr = (uint32_t)(base + w) & 0x7FFFFF;
+            dut->ram_wdata = v;
+            tick();
+        }
         dut->ram_we = 0;
+        std::fprintf(stderr, "[tb] loaded %-40s %8zu bytes @ 0x%08llx\n",
+                     img.path.c_str(), data.size(), (unsigned long long)img.addr);
     }
-    std::fprintf(stderr, "[tb] loaded %zu bytes (%u words) from %s\n", img.size(), words, prog_path.c_str());
 
-    // ---- release reset and run
+    // ---- release reset
     for (int i = 0; i < 4; i++) tick();
     dut->rst_ni = 1;
     for (int i = 0; i < 4; i++) tick();
@@ -96,7 +111,7 @@ int main(int argc, char** argv) {
     while (!dut->exit_o && cycles < max_cycles) {
         tick();
         cycles++;
-        if ((cycles % 1000000ull) == 0)
+        if ((cycles % 10000000ull) == 0)
             std::fprintf(stderr, "[tb] %llu cycles...\n", (unsigned long long)cycles);
     }
 
@@ -110,7 +125,7 @@ int main(int argc, char** argv) {
     }
 
     for (uint32_t i = 0; i < nwords; i++) {
-        dut->ram_raddr = (uint16_t)(results_word + i);
+        dut->ram_raddr = (uint32_t)((results_addr >> 3) + i) & 0x7FFFFF;
         dut->eval();
         std::printf("word %u 0x%016llx\n", i, (unsigned long long)dut->ram_rdata);
         os << "word " << i << " 0x" << std::hex << std::setw(16) << std::setfill('0')
@@ -122,7 +137,7 @@ int main(int argc, char** argv) {
         f << os.str();
     }
 
-    std::fprintf(stderr, "[tb] %s after %llu cycles\n",
+    std::fprintf(stderr, "\n[tb] %s after %llu cycles\n",
                  dut->exit_o ? "exit" : "TIMEOUT", (unsigned long long)cycles);
 
     delete dut;

@@ -10,7 +10,7 @@
 typedef unsigned int   u32;
 typedef unsigned long  u64;
 
-#define CGRA_BASE    0x40000000UL
+#define CGRA_BASE    0x50000000UL
 #define REG_CTRL     0x0000u
 #define REG_NUM      0x0004u
 #define REG_STATUS   0x0000u

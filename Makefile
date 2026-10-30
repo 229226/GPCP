@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean sw-check soc soc-run
+.PHONY: all test build clean sw-check soc soc-run linux
 
 all: test
 
@@ -21,6 +21,10 @@ soc:
 
 soc-run:
 	$(MAKE) -C sim/soc run
+
+# B3: OpenSBI + Linux on the SoC
+linux:
+	$(MAKE) -C sim/soc linux
 
 clean:
 	rm -rf build sim/cgra/build sim/soc/build

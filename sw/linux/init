@@ -1,0 +1,23 @@
+#!/bin/sh
+# GPCP B3 init script (runs from the initramfs)
+
+echo "=== GPCP Linux (CVA6 + CGRA) ==="
+
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+
+echo "--- uname ---"
+uname -a
+
+echo "--- cpuinfo ---"
+head -5 /proc/cpuinfo
+
+echo "--- memory ---"
+grep MemTotal /proc/meminfo
+
+echo "--- cgra test ---"
+/dev/cgra_test
+
+echo "--- done ---"
+poweroff -f

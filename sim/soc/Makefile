@@ -24,13 +24,13 @@ SRCS := rtl/cgra/cgra_pkg.sv \
 	rtl/soc/gpcp_soc.sv \
 	sim/soc/tb_soc.cpp
 
-VFLAGS := --cc --exe --build -O2 --build-jobs 2 --timing \
+VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 4 \
 	--top-module gpcp_soc \
 	-Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-WIDTH -Wno-WIDTHTRUNC \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run clean
+.PHONY: all run linux clean
 
 all:
 	mkdir -p $(ROOT)/$(OBJ)
@@ -39,9 +39,19 @@ all:
 
 run: all
 	$(MAKE) -C $(ROOT)/sw/soc
-	env -u LD_LIBRARY_PATH $(BIN) --prog $(ROOT)/build/sw/cgra_bm.bin --results 0x400 --nwords 24 \
+	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/cgra_bm.bin@0x80000000 --results 0x80002000 --nwords 24 \
 		--dump $(ROOT)/$(OBJ)/soc_dump.txt
 	python3 $(ROOT)/tools/check_soc.py $(ROOT)/$(OBJ)/soc_dump.txt
+
+# B3: OpenSBI + Linux + initramfs
+linux: all
+	$(MAKE) -C $(ROOT)/sw/linux
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/third_party/opensbi/build/platform/generic/firmware/fw_jump.bin@0x80000000 \
+		--load $(ROOT)/third_party/linux-6.6.52/arch/riscv/boot/Image@0x80200000 \
+		--load $(ROOT)/build/linux/gpcp.dtb@0x81F00000 \
+		--load $(ROOT)/build/linux/initramfs.cpio@0x82000000 \
+		--max-cycles 500000000
 
 clean:
 	rm -rf $(ROOT)/$(OBJ)

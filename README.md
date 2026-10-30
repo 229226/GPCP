@@ -3,13 +3,17 @@
 > 目标：用 **RISC-V CPU + CGRA 阵列**实现 gNB 侧完整无线协议（LTE + 5G NR 双模），
 > 优先复用开源项目。当前阶段为**纯仿真原型**（科研性质）。
 
-## 当前状态：M0 + B2 已完成 ✅
+## 当前状态：M0 / B2 完成，B3 进行中
 
 - **M0**：4×4 CGRA 阵列 RTL（int16 MAC / int32 累加，最近邻 1 周期路由）、全局定序器、
   AXI4-Lite 从口、Verilator 模型、Python 微码汇编器 + 黄金模型比对；
   已通过 `matmul4x4`、`fir16`。
 - **B2**：真实 **CVA6（RV64GC）** 核在 Verilator 中启动裸机程序，通过 AXI4 驱动 CGRA，
   回读结果与黄金模型一致（2058 周期）。
+- **B3（进行中）**：SoC 升级为 Linux 可用映射（CLINT / PLIC / 16550 UART / 64 MiB RAM，
+  AXI 原子 + LR/SC 独占访问）。**OpenSBI v1.9 完整启动**并跳转 Linux 6.6 内核，
+  内核已进入虚拟地址空间执行；受 Verilator 速度（约 70k cycles/s）限制，
+  跑到 BusyBox 用户态需要长时间仿真。
 
 ```
 # M0：CGRA 单元测试
@@ -22,6 +26,10 @@ python3 tools/cgra.py test
 make -C sim/soc run
 # [info] exit_code=0x0000600d cycles=2058
 # [ OK ] CVA6 -> CGRA matmul matches the golden model
+
+# B3：构建 Linux 栈并启动（耗时较长）
+bash scripts/build_b3.sh
+make -C sim/soc linux
 ```
 
 ## 目录结构
@@ -76,9 +84,10 @@ riscv64-unknown-elf-gcc --specs=/usr/lib/picolibc/riscv64-unknown-elf/picolibc.s
 - [docs/03-路线图.md](docs/03-路线图.md)：M0–M4 里程碑与验收标准
 - [docs/04-环境搭建.md](docs/04-环境搭建.md)：工具链版本、安装命令与两个必踩的坑
 - [docs/05-soc-b2.md](docs/05-soc-b2.md)：CVA6 + CGRA SoC 的地址映射、AXI 从机实现、复现步骤
+- [docs/06-linux-b3.md](docs/06-linux-b3.md)：Linux 版 SoC、OpenSBI 补丁、AXI 原子/LR-SC、镜像布局
 
 ## 下一步
 
-1. **B3**：CVA6 跑 Linux（BusyBox initramfs），扩 RAM、加 UART/PLIC 中断；
+1. **B3 收尾**：以更小的内核/更快的仿真跑到 BusyBox 用户态，验证 `/dev/mem` 访问 CGRA；
 2. **B4**：srsRAN 参考实现 + free5GC 端到端；
 3. 硬件侧：CGRA 加 DMA 描述符环、scratchpad、8×8 扩展。
