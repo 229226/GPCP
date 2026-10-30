@@ -1,0 +1,16 @@
+# build products
+build/
+sim/*/build/
+*.o
+*.a
+*.vcd
+*.fst
+*.wlf
+
+# python
+__pycache__/
+*.pyc
+
+# third-party checkouts are not vendored
+third_party/*
+!third_party/.gitkeep
