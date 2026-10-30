@@ -62,6 +62,7 @@ riscv64-unknown-elf-gcc --specs=/usr/lib/picolibc/riscv64-unknown-elf/picolibc.s
 - [docs/01-架构选型.md](docs/01-架构选型.md)：开源项目对比、引擎分工、带宽预算、许可策略
 - [docs/02-cgra-isa.md](docs/02-cgra-isa.md)：指令编码、link 语义、寄存器映射、kernel 映射
 - [docs/03-路线图.md](docs/03-路线图.md)：M0–M4 里程碑与验收标准
+- [docs/04-环境搭建.md](docs/04-环境搭建.md)：工具链版本、安装命令与两个必踩的坑
 
 ## 下一步（M1）
 
