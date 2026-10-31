@@ -45,10 +45,11 @@
 #define WORDS_IN    64      /* 4 words per bank (Yr,Yi,Xr,Xi)        */
 #define WORDS_OUT   48      /* 3 words per bank (min1,min2,sign)     */
 
-#define CYC_A       15
-#define CYC_B       20
-#define CYC_C       52
-#define CHAIN_CYCLES (CYC_A + CYC_B + CYC_C)     /* 87 */
+#define CYC_A       15      /* LS channel estimate      */
+#define CYC_B       20      /* MMSE numerator + |H|^2   */
+#define CYC_D       40      /* 16-QAM max-log demapper  */
+#define CYC_C       52      /* LDPC check node          */
+#define CHAIN_CYCLES (CYC_A + CYC_B + CYC_D + CYC_C)     /* 127 */
 
 /* per-bank scratchpad word map (page relative) */
 #define W_YR   0
@@ -61,6 +62,11 @@
 #define W_NI   21
 #define W_MAG  22
 #define W_SIGN 6
+#define W_LLR_I1 24      /* 16-QAM bits: I MSB, I LSB, Q MSB, Q LSB */
+#define W_LLR_I0 25
+#define W_LLR_Q1 26
+#define W_LLR_Q0 27
+#define LLR_SHIFT 10     /* LLR normalisation (metric units -> soft bits) */
 
 #define MSTATUS_MIE 0x8u
 #define MIE_MEIE    0x800u
@@ -126,10 +132,14 @@ static void wait_ring(uint32_t n)
     uint32_t g = 0;
     uint32_t t0 = mmio_r(CLINT_MTIME);
     while (gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_RING_DONE) < n) {
+#if RINGDBG
+        /* poll only while debugging: a wfi would hide a dead engine */
+#else
         __asm__ __volatile__("csrci mstatus, 8");
         if (gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_RING_DONE) < n)
             __asm__ __volatile__("wfi");
         __asm__ __volatile__("csrsi mstatus, 8");
+#endif
         if (++g > 400000u) { errs++; break; }
     }
     t_ring += mmio_r(CLINT_MTIME) - t0;
@@ -205,14 +215,53 @@ static void build_chain(void)
         emit(CYC_A + 17, p, GPCP_OP_ST, 5, 0, 0, GPCP_SPAD_IDX(p, W_NI));
         emit(CYC_A + 18, p, GPCP_OP_ST, 6, 0, 0, GPCP_SPAD_IDX(p, W_MAG));
 
-        /* ---- stage C: min-sum check node (ldpc_cn) ---- */
+        /* ---- stage D: 16-QAM max-log soft demapper ----
+         * Works on the matched-filter output (Nr,Ni) and the channel gain
+         * |H|^2, so the decision metric M(s) = |H|^2 s^2 - 2 Re{y conj(H)} s
+         * needs no division.  PAM-4 Gray label on each axis:
+         *   a=-3:"10"  a=-1:"11"  a=+1:"01"  a=+3:"00"
+         * LLR(bit) = min_{b=1} M - min_{b=0} M, normalised by >> LLR_SHIFT. */
         {
             const uint32_t b = CYC_A + CYC_B;
-            /* 4 messages: Nr, Ni, |H|^2 and Hr (all sign-extended in the spad) */
-            emit(b + 0, p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, W_NR));
-            emit(b + 1, p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, W_NI));
-            emit(b + 2, p, GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, W_MAG));
-            emit(b + 3, p, GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, W_HR));
+            for (uint32_t axis = 0; axis < 2; axis++) {
+                const uint32_t base = b + axis * 20;
+                const uint32_t rw   = axis ? W_NI : W_NR;
+                const uint32_t l1   = axis ? W_LLR_Q1 : W_LLR_I1;
+                const uint32_t l0   = axis ? W_LLR_Q0 : W_LLR_I0;
+
+                emit(base + 0,  p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, rw));   /* r  */
+                emit(base + 1,  p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, W_MAG));/* m  */
+                emit(base + 2,  p, GPCP_OP_SHL, 0, 0, 2, 1);                      /* 2r */
+                emit(base + 3,  p, GPCP_OP_MUL, 2, GPCP_SRC_IMM, 3, 3);          /* 6r */
+                emit(base + 4,  p, GPCP_OP_SHL, 1, 0, 0, 3);                      /* 8m */
+                emit(base + 5,  p, GPCP_OP_ADD, 0, 1, 4, 0);                      /* 9m */
+                emit(base + 6,  p, GPCP_OP_SUB, 1, 2, 5, 0);                      /* M(+1) */
+                emit(base + 7,  p, GPCP_OP_ADD, 1, 2, 6, 0);                      /* M(-1) */
+                emit(base + 8,  p, GPCP_OP_SUB, 4, 3, 0, 0);                      /* M(+3) */
+                emit(base + 9,  p, GPCP_OP_ADD, 4, 3, 7, 0);                      /* M(-3) */
+                /* MSB: 1 for the negative half */
+                emit(base + 10, p, GPCP_OP_MIN, 6, 7, 1, 0);                      /* min(M-1,M-3) */
+                emit(base + 11, p, GPCP_OP_MIN, 5, 0, 2, 0);                      /* min(M+1,M+3) */
+                emit(base + 12, p, GPCP_OP_SUB, 1, 2, 3, 0);
+                emit(base + 13, p, GPCP_OP_SHR, 3, 0, 4, LLR_SHIFT);
+                emit(base + 14, p, GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(p, l1));
+                /* LSB: 1 for {-3,+1} */
+                emit(base + 15, p, GPCP_OP_MIN, 7, 5, 1, 0);                      /* min(M-3,M+1) */
+                emit(base + 16, p, GPCP_OP_MIN, 6, 0, 2, 0);                      /* min(M-1,M+3) */
+                emit(base + 17, p, GPCP_OP_SUB, 1, 2, 3, 0);
+                emit(base + 18, p, GPCP_OP_SHR, 3, 0, 4, LLR_SHIFT);
+                emit(base + 19, p, GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(p, l0));
+            }
+        }
+
+        /* ---- stage C: min-sum check node (ldpc_cn) ---- */
+        {
+            const uint32_t b = CYC_A + CYC_B + CYC_D;
+            /* the four soft bits of the 16-QAM symbol are the four messages */
+            emit(b + 0, p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, W_LLR_I1));
+            emit(b + 1, p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, W_LLR_I0));
+            emit(b + 2, p, GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, W_LLR_Q1));
+            emit(b + 3, p, GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, W_LLR_Q0));
 
             /* abs(x) = (x ^ (x>>31)) - (x>>31), stored to word 8..11 */
             uint32_t cyc = b + 4;
@@ -312,11 +361,31 @@ static uint32_t self_check(void)
             int32_t ni = (hi * yr - hr * yi) >> 15;
             int32_t mag = (hr * hr + hi * hi) >> 15;
 
-            int32_t msg[4] = { nr, ni, mag, hr };
+            /* 16-QAM max-log demapper, mirroring the microcode exactly */
+            int32_t msgs[4];
+            for (int axis = 0; axis < 2; axis++) {
+                int32_t r = axis ? ni : nr;
+                int32_t m = mag;
+                int32_t two_r = (int32_t)((uint32_t)r << 1);
+                int32_t six_r = (int32_t)((uint32_t)sx16_s(two_r) * 3u);
+                int32_t m8 = (int32_t)((uint32_t)m << 3);
+                int32_t m9 = m8 + m;
+                int32_t mp1 = m - two_r, mm1 = m + two_r;   /* M(+1), M(-1) */
+                int32_t mp3 = m9 - six_r, mm3 = m9 + six_r; /* M(+3), M(-3) */
+                int32_t min_pos = mp1 < mp3 ? mp1 : mp3;
+                int32_t min_neg = mm1 < mm3 ? mm1 : mm3;
+                int32_t min_lsb1 = mm3 < mp1 ? mm3 : mp1;   /* min(M-3,M+1) */
+                int32_t min_lsb0 = mm1 < mp3 ? mm1 : mp3;   /* min(M-1,M+3) */
+                int32_t llr_msb = (int32_t)(min_neg - min_pos) >> LLR_SHIFT;
+                int32_t llr_lsb = (int32_t)(min_lsb1 - min_lsb0) >> LLR_SHIFT;
+                msgs[axis * 2 + 0] = llr_msb;
+                msgs[axis * 2 + 1] = llr_lsb;
+            }
+
             uint32_t ab[4];
             int sign = 0;
             for (int k = 0; k < 4; k++) {
-                int32_t v = msg[k];
+                int32_t v = msgs[k];
                 int32_t sg = v >> 31;                 /* arithmetic */
                 ab[k] = (uint32_t)((v ^ sg) - sg);
                 sign ^= (uint32_t)((v >> 31) & 1);

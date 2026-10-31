@@ -171,7 +171,8 @@ module cgra_axi_lite (
       .busy   (o_busy),
       .done   (o_done),
       .cycle_o(o_cycle),
-      .irq_o  (o_irq)
+      .irq_o  (o_irq),
+      .dbg_soc_state(4'd0)
   );
 
 endmodule

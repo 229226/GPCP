@@ -25,6 +25,13 @@ from pathlib import Path
 SLOTS = 4
 NPES = 16
 WORDS_OUT = 48
+LLR_SHIFT = 10
+CHAIN_CYCLES = 127   # 15 LS + 20 MMSE + 40 LLR + 52 LDPC-CN
+
+
+def s32(v):
+    v &= 0xFFFFFFFF
+    return v - 0x100000000 if v & 0x80000000 else v
 
 
 def sx16(v):
@@ -62,8 +69,23 @@ def golden_slot(s):
         nr = (hr * yr + hi * yi) >> 15
         ni = (hi * yr - hr * yi) >> 15
         mag = (hr * hr + hi * hi) >> 15
-        msgs = [nr, ni, mag, hr]
-        # the microcode works on the 32-bit sign of each message
+
+        # 16-QAM max-log demapper, mirroring the microcode (no division)
+        msgs = []
+        for axis in range(2):
+            r = ni if axis else nr
+            m = mag
+            two_r = s32(r << 1)
+            six_r = s32(sx16(two_r) * 3)          # MUL sign-extends operands
+            m9 = s32(s32(m << 3) + m)
+            mp1, mm1 = s32(m - two_r), s32(m + two_r)
+            mp3, mm3 = s32(m9 - six_r), s32(m9 + six_r)
+            min_pos = min(mp1, mp3)
+            min_neg = min(mm1, mm3)
+            llr_msb = s32(min_neg - min_pos) >> LLR_SHIFT
+            llr_lsb = s32(min(mm3, mp1) - min(mm1, mp3)) >> LLR_SHIFT
+            msgs += [llr_msb, llr_lsb]
+
         ab = [abs(v) for v in msgs]
         sign = 0
         for v in msgs:
@@ -141,7 +163,8 @@ def main():
           f"irqs={word(193)} descs={word(196)}")
     if cyc:
         print(f"[info] chain: {SLOTS} slots in {cyc} cycles "
-              f"({cyc / SLOTS:.0f} cycles/slot, {cyc / SLOTS / 87:.2f}x the 87-cycle array run; "
+              f"({cyc / SLOTS:.0f} cycles/slot, {cyc / SLOTS / CHAIN_CYCLES:.2f}x the "
+              f"{CHAIN_CYCLES}-cycle array run; "
               f"array-wait={word(199)} ring-wait={word(200)})")
     if errs:
         print(f"[FAIL] {len(errs)} mismatch(es)")

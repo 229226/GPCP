@@ -90,7 +90,9 @@ module cgra_top #(
     output logic        done,
     output logic [15:0] cycle_o,
     // level interrupt: array done and/or copy-engine done (masked by ENABLE)
-    output logic        irq_o
+    output logic        irq_o,
+    // debug only: SoC-side slave state, readable through REG_DBG_STATE[15:12]
+    input  logic [3:0]  dbg_soc_state
 );
 
   import cgra_pkg::*;
@@ -159,6 +161,9 @@ module cgra_top #(
   logic [15:0] dma_wleft, dma_bw, dma_nidx, dma_4k;
   logic [31:0] dma_baddr;
   logic        dma_odd, dma_odd_full, dma_last_odd;
+  logic [3:0]  dstate_q;
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) dstate_q <= D_IDLE; else dstate_q <= dstate;
   assign dma_wleft     = dma_run_len - dma_idx;
   assign dma_nb_raw    = (dma_wleft >= 16'(2 * DMA_BEATS))
                          ? 8'(DMA_BEATS)
@@ -219,10 +224,11 @@ module cgra_top #(
   logic [9:0]  spad_rd_addr0, spad_rd_addr1;
   logic [31:0] spad_rd_data0, spad_rd_data1;
 
-  assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid;
+  // the beat is consumed only on the handshake (valid && ready), never on valid alone
+  assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready;
   assign spad_dma_addr0  = dma_cur[9:0];
   assign spad_dma_wdata0 = m_axi_rdata[31:0];
-  assign spad_dma_we1    = (dstate == D_SIN) && m_axi_rvalid && !dma_last_odd;
+  assign spad_dma_we1    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && !dma_last_odd;
   assign spad_dma_addr1  = dma_nxt_cur[9:0];
   assign spad_dma_wdata1 = m_axi_rdata[63:32];
   assign spad_rd_addr0   = dma_cur[9:0];
@@ -231,6 +237,11 @@ module cgra_top #(
   // ---------------- AXI4 master ----------------
   always_comb begin
     // read channel: one INCR burst per descriptor chunk (data beats are streamed)
+    // AXI rule: once asserted, a valid (and its payload) is held until the
+    // partner's ready is seen - here every strobe is a function of the state
+    // register only, and the state advances exclusively on valid && ready, so
+    // the hold requirement is structural.  Ready may come and go freely; the
+    // payload never changes while a valid is waiting.
     m_axi_arvalid = (dstate == D_AR);
     m_axi_arid    = 4'd0;
     m_axi_araddr  = rd_desc ? (ring_base + {ring_head, 5'b0}) : dma_baddr;
@@ -295,171 +306,173 @@ module cgra_top #(
 
       if (DBG && m_axi_arvalid && m_axi_arready)
         $display("[cg-dma] AR addr=%h len=%0d rd_desc=%b", m_axi_araddr, m_axi_arlen, rd_desc);
+      if (DBG && (dstate != dstate_q))
+        $display("[cg-fsm] %0d->%0d wr_st=%b bcnt=%0d nb=%0d idx=%0d",
+                 dstate_q, dstate, wr_status, dma_bcnt, dma_nb, dma_idx);
       if (DBG && m_axi_awvalid && m_axi_awready)
         $display("[cg-dma] AW addr=%h len=%0d status=%b", m_axi_awaddr, m_axi_awlen, wr_status);
 
-      if (wr_en) begin
-        case (wr_addr)
-          REG_DMA_SRC:    dma_src    <= wr_data;
-          REG_DMA_DST:    dma_dst    <= wr_data[15:0];
-          REG_DMA_LEN:    dma_len    <= (wr_data[15:0] > 16'd1024) ? 16'd1024 : wr_data[15:0];
-          REG_DMA_STRIDE: dma_stride <= wr_data[15:0];
-          REG_DMA_ROW:    dma_row    <= wr_data[15:0];
-          REG_DMA_PAGE:   dma_page   <= wr_data[0];
-          REG_BUF_PAGE:   ;   // handled by the sequencer block (single driver)
-          REG_RING_BASE:  ring_base  <= wr_data;
-          REG_RING_SIZE:  ring_size  <= wr_data[15:0];
-          REG_RING_HEAD:  ring_head  <= wr_data[15:0];
-          REG_RING_TAIL:  ring_tail  <= wr_data[15:0];
-          REG_RING_CTRL:  ring_en    <= wr_data[0];
-          REG_DMA_CTRL: begin
-            if (wr_data[2]) dma_done <= 1'b0;
-            if (wr_data[0] && !dma_busy && (dma_len != 16'd0)) begin
-              dma_busy   <= 1'b1;
-              dma_done   <= 1'b0;
-              dma_idx    <= 16'd0;
-              dma_cur    <= dma_dst;
-              dma_row_cnt<= 16'd0;
-              dma_beat   <= 2'd0;
-              dma_bcnt   <= 8'd0;
-              dma_dir    <= wr_data[1];
-              ring_mode  <= 1'b0;
-              rd_desc    <= 1'b0;
-              wr_status  <= 1'b0;
-              // snapshot the descriptor for this transfer
-              dma_run_src    <= dma_src;
-              dma_run_len    <= dma_len;
-              dma_run_stride <= dma_stride;
-              dma_run_row    <= dma_row;
-              dstate <= wr_data[1] ? D_AW : D_AR;
-            end
+      unique case (dstate)
+        D_IDLE: begin
+          // ring mode: fetch the next descriptor as soon as there is work
+          if (ring_en && !dma_busy && (ring_size != 16'd0) && (ring_head != ring_tail)) begin
+            dma_busy  <= 1'b1;
+            dma_done  <= 1'b0;
+            dma_beat  <= 2'd0;
+            dma_bcnt  <= 8'd0;
+            ring_mode <= 1'b1;
+            rd_desc   <= 1'b1;
+            dstate    <= D_AR;
           end
-          default: ;
-        endcase
-      end else begin
-        unique case (dstate)
-          D_IDLE: begin
-            // ring mode: fetch the next descriptor as soon as there is work
-            if (ring_en && !dma_busy && (ring_size != 16'd0) && (ring_head != ring_tail)) begin
-              dma_busy  <= 1'b1;
-              dma_done  <= 1'b0;
-              dma_beat  <= 2'd0;
-              dma_bcnt  <= 8'd0;
-              ring_mode <= 1'b1;
-              rd_desc   <= 1'b1;
-              dstate    <= D_AR;
-            end
+        end
+        D_AR: begin
+          if (m_axi_arvalid && m_axi_arready) begin
+            dma_beat <= 2'd0;
+            dma_bcnt <= 8'd0;
+            dstate   <= rd_desc ? D_RDESC : D_SIN;
           end
-          D_AR: begin
-            if (m_axi_arready) begin
-              dma_beat <= 2'd0;
+        end
+        D_RDESC: begin
+          if (m_axi_rvalid && m_axi_rready) begin
+            desc_buf[dma_beat] <= m_axi_rdata;
+            if (m_axi_rlast) dstate <= D_DESC_SET;
+            else             dma_beat <= dma_beat + 2'd1;
+          end
+        end
+        D_DESC_SET: begin
+          dma_run_src    <= desc_buf[0][31:0];
+          dma_run_len    <= (desc_buf[1][15:0] > 16'd1024) ? 16'd1024 : desc_buf[1][15:0];
+          dma_run_stride <= desc_buf[1][47:32];
+          dma_run_row    <= desc_buf[1][63:48];
+          dma_cur        <= desc_buf[0][47:32];
+          dma_page       <= desc_buf[0][48];
+          dma_dir        <= desc_buf[0][49];
+          desc_irq       <= desc_buf[0][50];
+          desc_addr      <= ring_base + {ring_head, 5'b0};
+          dma_idx        <= 16'd0;
+          dma_row_cnt    <= 16'd0;
+          dma_bcnt       <= 8'd0;
+          rd_desc        <= 1'b0;
+          dstate         <= desc_buf[0][49] ? D_AW : D_AR;
+        end
+        D_SIN: begin
+          // streaming in: the beat that arrives is written to the scratchpad
+          // in the same cycle (two words per beat)
+          if (m_axi_rvalid && m_axi_rready) begin
+            if (m_axi_rlast) begin
               dma_bcnt <= 8'd0;
-              dstate   <= rd_desc ? D_RDESC : D_SIN;
-            end
-          end
-          D_RDESC: begin
-            if (m_axi_rvalid) begin
-              desc_buf[dma_beat] <= m_axi_rdata;
-              if (m_axi_rlast) dstate <= D_DESC_SET;
-              else             dma_beat <= dma_beat + 2'd1;
-            end
-          end
-          D_DESC_SET: begin
-            dma_run_src    <= desc_buf[0][31:0];
-            dma_run_len    <= (desc_buf[1][15:0] > 16'd1024) ? 16'd1024 : desc_buf[1][15:0];
-            dma_run_stride <= desc_buf[1][47:32];
-            dma_run_row    <= desc_buf[1][63:48];
-            dma_cur        <= desc_buf[0][47:32];
-            dma_page       <= desc_buf[0][48];
-            dma_dir        <= desc_buf[0][49];
-            desc_irq       <= desc_buf[0][50];
-            desc_addr      <= ring_base + {ring_head, 5'b0};
-            dma_idx        <= 16'd0;
-            dma_row_cnt    <= 16'd0;
-            dma_bcnt       <= 8'd0;
-            rd_desc        <= 1'b0;
-            dstate         <= desc_buf[0][49] ? D_AW : D_AR;
-          end
-          D_SIN: begin
-            // streaming in: the beat that arrives is written to the scratchpad
-            // in the same cycle (two words per beat)
-            if (m_axi_rvalid) begin
-              if (m_axi_rlast) begin
-                dma_bcnt <= 8'd0;
-                dma_idx  <= dma_nidx;
-                if (dma_nidx >= dma_run_len) begin
-                  if (ring_mode) begin
-                    wr_status <= 1'b1;
-                    dstate    <= D_AW;
-                  end else begin
-                    dma_busy    <= 1'b0;
-                    dma_done    <= 1'b1;
-                    dstate      <= D_IDLE;
-                    dma_irq_evt <= 1'b1;
-                  end
+              dma_idx  <= dma_nidx;
+              if (dma_nidx >= dma_run_len) begin
+                if (ring_mode) begin
+                  wr_status <= 1'b1;
+                  dstate    <= D_AW;
                 end else begin
-                  dstate <= D_AR;
+                  dma_busy    <= 1'b0;
+                  dma_done    <= 1'b1;
+                  dstate      <= D_IDLE;
+                  dma_irq_evt <= 1'b1;
                 end
               end else begin
-                dma_bcnt <= dma_bcnt + 8'd1;
+                dstate <= D_AR;
               end
-              if (dma_last_odd) {dma_cur, dma_row_cnt} <= {dma_nxt_cur,  dma_nxt_cnt};
-              else              {dma_cur, dma_row_cnt} <= {dma_nxt2_cur, dma_nxt2_cnt};
-            end
-          end
-          D_AW: begin
-            if (m_axi_awready) begin
-              dma_bcnt <= 8'd0;
-              dstate   <= D_SOUT;
-            end
-          end
-          D_SOUT: begin
-            // streaming out: each accepted W beat is read from the scratchpad
-            if (m_axi_wready) begin
+            end else begin
               dma_bcnt <= dma_bcnt + 8'd1;
-              if (dma_last_odd) {dma_cur, dma_row_cnt} <= {dma_nxt_cur,  dma_nxt_cnt};
-              else              {dma_cur, dma_row_cnt} <= {dma_nxt2_cur, dma_nxt2_cnt};
-              if (m_axi_wlast) dstate <= D_BRESP;
             end
+            if (dma_last_odd) {dma_cur, dma_row_cnt} <= {dma_nxt_cur,  dma_nxt_cnt};
+            else              {dma_cur, dma_row_cnt} <= {dma_nxt2_cur, dma_nxt2_cnt};
           end
-          D_BRESP: begin
-            if (m_axi_bvalid) begin
-              if (wr_status) begin
-                // completion status of a ring descriptor
-                wr_status <= 1'b0;
-                if (desc_irq) dma_irq_evt <= 1'b1;
-                ring_done <= ring_done + 16'd1;
-                ring_head <= (ring_head + 16'd1 >= ring_size) ? 16'd0 : ring_head + 16'd1;
-                if (ring_en && (((ring_head + 16'd1 >= ring_size) ? 16'd0
-                                                               : ring_head + 16'd1) != ring_tail)) begin
-                  dma_beat <= 2'd0;
-                  rd_desc  <= 1'b1;
-                  dstate   <= D_AR;
+        end
+        D_AW: begin
+          if (m_axi_awvalid && m_axi_awready) begin
+            dma_bcnt <= 8'd0;
+            dstate   <= D_SOUT;
+          end
+        end
+        D_SOUT: begin
+          // streaming out: each accepted W beat is read from the scratchpad
+          if (m_axi_wvalid && m_axi_wready) begin
+            dma_bcnt <= dma_bcnt + 8'd1;
+            if (dma_last_odd) {dma_cur, dma_row_cnt} <= {dma_nxt_cur,  dma_nxt_cnt};
+            else              {dma_cur, dma_row_cnt} <= {dma_nxt2_cur, dma_nxt2_cnt};
+            if (m_axi_wlast) dstate <= D_BRESP;
+          end
+        end
+        D_BRESP: begin
+          if (m_axi_bvalid && m_axi_bready) begin
+            if (wr_status) begin
+              // completion status of a ring descriptor
+              wr_status <= 1'b0;
+              if (desc_irq) dma_irq_evt <= 1'b1;
+              ring_done <= ring_done + 16'd1;
+              ring_head <= (ring_head + 16'd1 >= ring_size) ? 16'd0 : ring_head + 16'd1;
+              if (ring_en && (((ring_head + 16'd1 >= ring_size) ? 16'd0
+                                                             : ring_head + 16'd1) != ring_tail)) begin
+                dma_beat <= 2'd0;
+                rd_desc  <= 1'b1;
+                dstate   <= D_AR;
+              end else begin
+                dma_busy <= 1'b0;
+                dstate   <= D_IDLE;
+              end
+            end else begin
+              dma_idx <= dma_nidx;
+              if (dma_nidx >= dma_run_len) begin
+                if (ring_mode) begin
+                  wr_status <= 1'b1;
+                  dstate    <= D_AW;
                 end else begin
-                  dma_busy <= 1'b0;
-                  dstate   <= D_IDLE;
+                  dma_busy    <= 1'b0;
+                  dma_done    <= 1'b1;
+                  dstate      <= D_IDLE;
+                  dma_irq_evt <= 1'b1;
                 end
               end else begin
-                dma_idx <= dma_nidx;
-                if (dma_nidx >= dma_run_len) begin
-                  if (ring_mode) begin
-                    wr_status <= 1'b1;
-                    dstate    <= D_AW;
-                  end else begin
-                    dma_busy    <= 1'b0;
-                    dma_done    <= 1'b1;
-                    dstate      <= D_IDLE;
-                    dma_irq_evt <= 1'b1;
-                  end
-                end else begin
-                  dstate <= D_AW;
-                end
+                dstate <= D_AW;
               end
             end
           end
-          default: dstate <= D_IDLE;
-        endcase
-      end
+        end
+        default: dstate <= D_IDLE;
+      endcase
+    if (wr_en) begin
+      case (wr_addr)
+        REG_DMA_SRC:    dma_src    <= wr_data;
+        REG_DMA_DST:    dma_dst    <= wr_data[15:0];
+        REG_DMA_LEN:    dma_len    <= (wr_data[15:0] > 16'd1024) ? 16'd1024 : wr_data[15:0];
+        REG_DMA_STRIDE: dma_stride <= wr_data[15:0];
+        REG_DMA_ROW:    dma_row    <= wr_data[15:0];
+        REG_DMA_PAGE:   dma_page   <= wr_data[0];
+        REG_BUF_PAGE:   ;   // handled by the sequencer block (single driver)
+        REG_RING_BASE:  ring_base  <= wr_data;
+        REG_RING_SIZE:  ring_size  <= wr_data[15:0];
+        REG_RING_HEAD:  ring_head  <= wr_data[15:0];
+        REG_RING_TAIL:  ring_tail  <= wr_data[15:0];
+        REG_RING_CTRL:  ring_en    <= wr_data[0];
+        REG_DMA_CTRL: begin
+          if (wr_data[2]) dma_done <= 1'b0;
+          if (wr_data[0] && !dma_busy && (dma_len != 16'd0)) begin
+            dma_busy   <= 1'b1;
+            dma_done   <= 1'b0;
+            dma_idx    <= 16'd0;
+            dma_cur    <= dma_dst;
+            dma_row_cnt<= 16'd0;
+            dma_beat   <= 2'd0;
+            dma_bcnt   <= 8'd0;
+            dma_dir    <= wr_data[1];
+            ring_mode  <= 1'b0;
+            rd_desc    <= 1'b0;
+            wr_status  <= 1'b0;
+            // snapshot the descriptor for this transfer
+            dma_run_src    <= dma_src;
+            dma_run_len    <= dma_len;
+            dma_run_stride <= dma_stride;
+            dma_run_row    <= dma_row;
+            dstate <= wr_data[1] ? D_AW : D_AR;
+          end
+        end
+        default: ;
+      endcase
+    end
     end
   end
 
@@ -543,7 +556,7 @@ module cgra_top #(
   // ---------------- host read mux ----------------
   always_comb begin
     rd_data = 32'b0;
-    if (rd_addr < 16'h0060) begin
+    if (rd_addr < 16'h0064) begin
       case (rd_addr[6:0])
         6'h00: rd_data = {cycle_cnt, 13'b0, 1'b0, done, busy};
         6'h04: rd_data = {16'b0, num_cycles};
@@ -569,6 +582,8 @@ module cgra_top #(
         7'h54: rd_data = {16'b0, ring_tail};
         7'h58: rd_data = {29'b0, dma_busy, (ring_head == ring_tail), ring_en};
         7'h5C: rd_data = {16'b0, ring_done};
+        7'h60: rd_data = {16'b0, dbg_soc_state, wr_status, rd_desc, 2'b0, 4'(dstate),
+                          dma_bcnt[3:0]};
         default: rd_data = 32'b0;
       endcase
     end else if (rd_addr >= REG_PE_BASE && rd_addr < (REG_PE_ACC + 16'h40)) begin

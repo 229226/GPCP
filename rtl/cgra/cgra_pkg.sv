@@ -111,6 +111,7 @@ package cgra_pkg;
   localparam logic [15:0] REG_RING_CTRL = 16'h0058; // W: [0] enable
                                                     // R: [0] enabled [1] idle [2] busy
   localparam logic [15:0] REG_RING_DONE = 16'h005C; // R: descriptors completed so far
+  localparam logic [15:0] REG_DBG_STATE = 16'h0060; // R: engine FSM state (debug)
   localparam logic [31:0] DESC_STATUS_MAGIC = 32'hC0DE_0000;
 
   // ---------------- scratchpad (distributed, banked) ----------------

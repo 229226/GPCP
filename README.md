@@ -19,9 +19,11 @@
   （一拍 2 字），突发长度 `DMA_BEATS`（默认 32 拍、4 KiB 裁剪，即写合并）：
   **1024 字线性拷贝 0.70 周期/字**（约 4 倍于逐字版）。描述符放 RAM，引擎自取、
   自写状态字、自推进 head（`make -C sim/soc run-ring`）。
-- **L1 接收链**：`chnest → MMSE → LDPC-CN` 融合成一段 **87 拍/槽**的微码，三个阶段
-  全部在片内 scratchpad 上传递；输入/输出由**描述符环**驱动、阵列与 DMA 在**双页**上
-  重叠：**4 个 slot 1923 周期（481 周期/slot）**（`make -C sim/soc run-rxchain`）。
+- **L1 接收链**：`chnest → MMSE → 16-QAM max-log 软解调(LLR) → LDPC-CN` 融合成一段
+  **127 拍/槽**的微码，四个阶段全部在片内 scratchpad 上传递（**解调没有除法**，
+  用 `M(s)=|H|²s²−2Re{y·conj(H)}s` 的 max-log 度量）；输入/输出由**描述符环**驱动、
+  阵列与 DMA 在**双页**上重叠：**4 个 slot 2057 周期（514 周期/slot）**
+  （`make -C sim/soc run-rxchain`）。
 - **B2**：真实 **CVA6（RV64GC）** 核在 Verilator 中启动裸机程序，通过 AXI4 驱动 CGRA，
   回读结果与黄金模型一致（2059 周期）。
 - **B3（进行中）**：SoC 升级为 Linux 可用映射（CLINT / PLIC / 16550 UART / 64 MiB RAM，
@@ -56,7 +58,7 @@ make -C sim/soc run-ring
 # L1：接收链 chnest -> MMSE -> LDPC-CN（融合微码 + 环 + 双缓冲）
 make -C sim/soc run-rxchain
 # [ OK ] L1 receive chain ...: 4 slots, ring drove 8 descriptors, results match
-# [info] chain: 4 slots in 1923 cycles (481 cycles/slot, 5.53x the 87-cycle array run)
+# [info] chain: 4 slots in 2057 cycles (514 cycles/slot, 4.05x the 127-cycle array run)
 
 # B3：构建 Linux 栈并启动（耗时较长）
 bash scripts/build_b3.sh

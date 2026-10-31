@@ -152,7 +152,8 @@ module gpcp_soc #(
       .busy   (cgra_busy),
       .done   (cgra_done),
       .cycle_o(cgra_cycle),
-      .irq_o  (cgra_irq)
+      .irq_o  (cgra_irq),
+      .dbg_soc_state(4'(astate))
   );
 
   // ---------------------------------------------------------------- AXI slave FSM
@@ -223,12 +224,25 @@ module gpcp_soc #(
   logic [31:0] a_addr_q;
   logic [7:0]  a_beats, a_len_q;
   logic        a_grant;
+  // read data already offered but not yet accepted: RVALID must stay asserted
+  // (with the same payload) until RREADY arrives, so the beat is latched here
+  // whenever the master is not ready in the cycle we first offer it
+  logic        a_rpend;
 
+  // AXI4 handshake rules (both sides):
+  //  * a valid, once asserted, is held until the partner's ready is seen - it
+  //    is never withdrawn just because ready happens to be low;
+  //  * a transfer happens only on valid && ready (never on ready alone);
+  //  * a payload (address / data / last) does not change while its valid waits;
+  //  * ready may be asserted and withdrawn freely (nothing depends on it).
+  // The CGRA side only gets a bus slot when the CPU leaves one free, so the
+  // ready signals below (and the first cycle of the read state) are gated by
+  // a_grant; the held read beat (a_rpend) keeps RVALID valid across the gap.
   assign a_grant    = (state == S_IDLE) && !ar_accept && !aw_accept;
   assign cg_awready = (astate == A_IDLE) && a_grant;
   assign cg_arready = (astate == A_IDLE) && a_grant;
   assign cg_wready  = (astate == A_WR) && a_grant;
-  assign cg_rvalid  = (astate == A_RD) && a_grant;
+  assign cg_rvalid  = (astate == A_RD) && (a_grant || a_rpend);
   assign cg_rdata   = (decode_region({32'b0, a_addr_q}) == R_RAM)
                       ? ram[a_addr_q[25:3]] : 64'b0;
   assign cg_rlast   = (a_beats == a_len_q);
@@ -240,7 +254,11 @@ module gpcp_soc #(
       a_addr_q <= 32'b0;
       a_beats  <= 8'd0;
       a_len_q  <= 8'd0;
+      a_rpend  <= 1'b0;
     end else begin
+      // one default per cycle: RVALID is only "sticky" while the master is
+      // unwilling to take the beat offered right now
+      a_rpend <= (astate == A_RD) && cg_rvalid && !cg_rready;
       if (GPCP_DBG) begin
         if (cg_awvalid && cg_awready) $display("[cg-axi] AW addr=%h len=%0d", cg_awaddr, cg_awlen);
         if (cg_wvalid && cg_wready)   $display("[cg-axi] W  addr=%h last=%b", a_addr_q, cg_wlast);
@@ -270,7 +288,9 @@ module gpcp_soc #(
           end
         end
         A_B: begin
-          if (cg_bready) astate <= A_IDLE;
+          // BVALID (astate == A_B) is held until BREADY is seen; both sides
+          // advance only on the handshake, so the response cannot be lost
+          if (cg_bvalid && cg_bready) astate <= A_IDLE;
         end
         A_RD: begin
           if (cg_rvalid && cg_rready) begin
