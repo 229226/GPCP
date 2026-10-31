@@ -144,13 +144,17 @@ SoC 侧对 64-bit store 也会拆成两次 32-bit 寄存器写（见 `gpcp_soc.s
   直接写下一组描述符（ping-pong 调度），不会破坏正在跑的传输；
 - 传输进行中写 `DMA_CTRL[0]` 被忽略（`busy` 为 1 时不启动）；
 - 方向：`DIR=0` 为 RAM→scratchpad，`DIR=1` 为 scratchpad→RAM；
-- **突发**：内存侧按 **64-bit beat** 传输，每次突发最多 8 拍（16 个字），
-  同一突发的拍背靠背、每拍 1 周期（地址 +8）；不足 16 个字时按剩余字数缩突发，
-  末尾单字用 `wstrb=0x0F` 只写低 32 位；
+- **突发（真 AXI4 主口）**：拷贝引擎对外是一个 64-bit 的 AXI4 master（`ARLEN/AWLEN`、
+  `ARBURST=INCR`、`WLAST/RLAST`、`B` 响应、ID 固定 0），每次突发最多 8 拍
+  （16 个字），不足时缩突发，末尾单字用 `wstrb=0x0F`；突发地址按 4 KiB 边界裁剪，
+  不会跨页；
+- **SoC 侧**：CGRA 主口连到一个 AXI4 从机（第 2 个 master），与 CVA6 的从机共用 RAM；
+  仲裁规则是 **CPU 优先**（CPU 那一拍在握手时，CGRA 的 beat 就不授予），
+  所以 CPU 的读写不会丢、也不会被 DMA 拖慢；
 - **scratchpad 侧**：一拍内的两个 32 位字用**两个写端口**写同一 bank 的不同 word
   （读出方向也有两个读端口），所以入向是「8 拍读 + 8 拍写」16 个字 / 16 周期；
-- 实测吞吐：**1024 个字的线性拷贝 1208 周期（1.18 周期/字）**，比逐字版本（约 3 周期/字）
-  快约 2.5 倍；
+- 实测吞吐：**1024 个字的线性拷贝 1271 周期（1.24 周期/字）**，比逐字版本（约 3 周期/字）
+  快约 2.4 倍；
 - 对齐要求：**SRC（以及出向的 RAM 目的地址）必须 8 字节对齐**（beat 是 64 位，
   RAM 按 64 位字取数）；裸机侧用 `__attribute__((aligned(8)))`；
 - 2D 行走：`ROW != 0` 时，每行 `ROW` 个字，行末索引 +`STRIDE-ROW+1`；
@@ -162,9 +166,9 @@ SoC 侧对 64-bit store 也会拆成两次 32-bit 寄存器写（见 `gpcp_soc.s
 - **软件必须在写 `DMA_CTRL.start` 之前执行 `fence`**（裸机里是 `fence iorw, iorw`，
   已封装进 `gpcp_cgra_dma_start()`）:start 是 posted store，可能越过前面的描述符写，
   导致锁存到旧值（例如 `ROW=0`，2D 拷贝退化成线性）；
-- CPU 与 DMA 共享 RAM 时 **CPU 优先**：引擎的每一拍只在 CPU 不使用总线的周期授予，
-  CPU 的读写不会丢；SoC 侧的应答是**组合**的（同拍给 `ready` 与读数据），
-  所以引擎不会因为「读数据晚一拍」而重复读到上一拍的数据。
+- CPU 与 DMA 共享 RAM 时 **CPU 优先**：CGRA 的每一拍只在 CPU 不使用总线的周期授予，
+  CPU 的读写不会丢；CGRA 侧是完整 AXI4 握手（AW/W/B、AR/R），
+  由 SoC 内的第 2 个 AXI 从机（`astate` 状态机）服务。
 
 ### 3.2 中断
 
@@ -259,8 +263,8 @@ for each (pe, reg) v = cgra_read(...);
 2. 无跨行/跨列的 2 跳以上路由，复杂 FFT 需要多拍搬运；
 3. 结果归约（如 FIR 的空间求和、FFT 蝶形跨距 2/4/8）由软件多拍实现，效率低；
 4. 单发射、无谓词/无循环硬件；
-5. 拷贝引擎是内部 64-bit beat 主口（不是 AXI INCR 突发），每次突发最多 8 拍；
-   没有跨描述符的预取/流水，也没有 out-of-order 完成。
+5. 拷贝引擎是 AXI4 主口，但一次只发一个突发（无 outstanding），也没有
+   narrow/unaligned transfer 支持（要求 8 字节对齐、INCR）。
 
 ---
 
@@ -272,7 +276,7 @@ for each (pe, reg) v = cgra_read(...);
 | scratchpad | 每 PE 64×32b（双口），支持 `LD/ST imm` 与邻 PE 共享 |
 | 双发射 | 64b 指令：1 算术 + 1 访存/路由 |
 | 谓词与循环 | `pred` 位 + `loop_start/loop_end` 硬件计数 |
-| DMA | 描述符环 + 双缓冲，AXI4 主口（**双缓冲、2D 拷贝、突发、环、中断已实现**，见 3.1/3.3；真 AXI 突发待做） |
+| DMA | 描述符环 + 双缓冲 + AXI4 主口（**双缓冲、2D 拷贝、INCR 突发、环、中断已实现**，见 3.1/3.3） |
 | 复数支持 | `CMAC`：一次完成 (ar·br − ai·bi, ar·bi + ai·br) |
 | FFT 专用 | 蝶形跨距路由网络（stage 可配置） |
 | 编译 | MLIR dialect（`cgra`）→ 布局布线 → 微码二进制 |

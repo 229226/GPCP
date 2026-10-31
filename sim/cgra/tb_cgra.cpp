@@ -31,6 +31,73 @@ static std::vector<uint32_t> g_din;
 static bool g_stream = false;
 static std::vector<uint32_t> g_dma_mem(1024, 0);   // copy-engine backing store (standalone, 32-bit words)
 
+// ---------------------------------------------------------------------------
+// Tiny AXI4 slave for the copy-engine master: one outstanding INCR burst,
+// 64-bit beats.  The model answers combinationally in the same cycle.
+// ---------------------------------------------------------------------------
+struct AxiSlave {
+    bool     r_active = false;
+    uint32_t r_addr = 0, r_beat = 0, r_len = 0;
+    bool     w_active = false;
+    uint32_t w_addr = 0, w_beat = 0, w_len = 0;
+    bool     b_pending = false;
+} g_slv;
+
+static uint32_t mem_w(uint32_t byte_addr) { return (byte_addr >> 2) & 0x3FF; }
+
+static uint64_t mem_ld64(uint32_t byte_addr) {
+    return (uint64_t)g_dma_mem[mem_w(byte_addr)] |
+           ((uint64_t)g_dma_mem[mem_w(byte_addr + 4)] << 32);
+}
+
+static void axi_slave_drive() {
+    dut->m_axi_arready = !g_slv.r_active;
+    dut->m_axi_awready = !g_slv.w_active && !g_slv.b_pending;
+    dut->m_axi_wready  = g_slv.w_active;
+    dut->m_axi_rvalid  = g_slv.r_active;
+    dut->m_axi_rlast   = g_slv.r_active && (g_slv.r_beat == g_slv.r_len);
+    dut->m_axi_rdata   = g_slv.r_active ? mem_ld64(g_slv.r_addr) : 0;
+    dut->m_axi_bvalid  = g_slv.b_pending;
+    dut->m_axi_bid     = 0;
+    dut->m_axi_bresp   = 0;
+    dut->m_axi_rid     = 0;
+    dut->m_axi_rresp   = 0;
+}
+
+static void axi_slave_update() {
+    if (dut->m_axi_awvalid && dut->m_axi_awready) {
+        g_slv.w_addr = dut->m_axi_awaddr;
+        g_slv.w_len  = dut->m_axi_awlen;
+        g_slv.w_beat = 0;
+        g_slv.w_active = true;
+    }
+    if (dut->m_axi_wvalid && dut->m_axi_wready) {
+        uint8_t st = dut->m_axi_wstrb;
+        if (st & 0x0F) g_dma_mem[mem_w(g_slv.w_addr)] = (uint32_t)dut->m_axi_wdata;
+        if (st & 0xF0) g_dma_mem[mem_w(g_slv.w_addr + 4)] = (uint32_t)(dut->m_axi_wdata >> 32);
+        g_slv.w_addr += 8;
+        if (dut->m_axi_wlast) {
+            g_slv.w_active = false;
+            g_slv.b_pending = true;
+        } else {
+            g_slv.w_beat++;
+        }
+    }
+    if (dut->m_axi_bvalid && dut->m_axi_bready) g_slv.b_pending = false;
+
+    if (dut->m_axi_arvalid && dut->m_axi_arready) {
+        g_slv.r_addr = dut->m_axi_araddr;
+        g_slv.r_len  = dut->m_axi_arlen;
+        g_slv.r_beat = 0;
+        g_slv.r_active = true;
+    }
+    if (dut->m_axi_rvalid && dut->m_axi_rready) {
+        g_slv.r_addr += 8;
+        if (g_slv.r_beat == g_slv.r_len) g_slv.r_active = false;
+        else g_slv.r_beat++;
+    }
+}
+
 static void tick() {
     dut->clk = 0;
     dut->eval();
@@ -39,26 +106,9 @@ static void tick() {
         dut->din = dut->o_busy ? g_din[(dut->o_cycle < g_din.size()) ? dut->o_cycle : (g_din.size() - 1)] : 0;
     else
         dut->din = 0;
-    // simple synchronous memory model for the copy-engine master port
-    // (64-bit beats, 8-byte aligned; two 32-bit words per beat)
-    dut->dma_ready = 0;
-    if (dut->dma_valid) {
-        uint64_t w = 0;
-        // 2*(idx) and 2*(idx)+1 hold the two words of the beat; the model uses the
-        // address itself so weird (unaligned) descriptors still land somewhere
-        auto load = [&](uint32_t a) -> uint32_t {
-            uint32_t i = (a >> 2) & 0x3FF;
-            return g_dma_mem[i];
-        };
-        w = (uint64_t)load(dut->dma_addr) | ((uint64_t)load(dut->dma_addr + 4) << 32);
-        dut->dma_rdata = w;
-        if (dut->dma_we) {
-            uint8_t st = dut->dma_wstrb;
-            if (st & 0x0F) g_dma_mem[(dut->dma_addr >> 2) & 0x3FF] = (uint32_t)dut->dma_wdata;
-            if (st & 0xF0) g_dma_mem[((dut->dma_addr + 4) >> 2) & 0x3FF] = (uint32_t)(dut->dma_wdata >> 32);
-        }
-        dut->dma_ready = 1;
-    }
+    axi_slave_drive();
+    dut->eval();                 // let the design see the slave's responses
+    axi_slave_update();          // resolve the handshakes of this cycle
     dut->clk = 1;
     dut->eval();
 }

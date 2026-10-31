@@ -112,15 +112,20 @@ module gpcp_soc #(
   logic [15:0] cgra_wr_addr;
   logic [31:0] cgra_wr_data;
   logic [15:0] cgra_rd_addr;
-  // copy-engine master (DMA) into the SoC RAM: 64-bit beats, 8-byte aligned.
-  // The response is combinational (ready + data in the same cycle), so the
-  // engine can advance one beat per cycle and never re-reads the old address.
-  logic        cgra_dma_valid, cgra_dma_we;
-  logic [31:0] cgra_dma_addr;
-  logic [63:0] cgra_dma_wdata;
-  logic [7:0]  cgra_dma_wstrb;
-  logic [63:0] cgra_dma_rdata;
-  logic        cgra_dma_ready;
+  // CGRA copy engine: AXI4 master #2 (64-bit beats, INCR bursts, 8-byte aligned).
+  // The SoC grants it RAM cycles only when the CPU is idle, so the CPU (AXI4
+  // slave #1) always wins the arbitration.
+  logic        cg_awvalid, cg_awready, cg_wvalid, cg_wready;
+  logic [31:0] cg_awaddr;
+  logic [7:0]  cg_awlen, cg_arlen;
+  logic [63:0] cg_wdata;
+  logic [7:0]  cg_wstrb;
+  logic        cg_wlast;
+  logic        cg_bvalid, cg_bready;
+  logic        cg_arvalid, cg_arready;
+  logic [31:0] cg_araddr;
+  logic        cg_rvalid, cg_rready, cg_rlast;
+  logic [63:0] cg_rdata;
 
   cgra_top #(.DBG(GPCP_DBG)) u_cgra (
       .clk    (clk_i),
@@ -131,13 +136,19 @@ module gpcp_soc #(
       .rd_addr(cgra_rd_addr),
       .rd_data(cgra_rd),
       .din    (32'b0),
-      .dma_valid(cgra_dma_valid),
-      .dma_we   (cgra_dma_we),
-      .dma_addr (cgra_dma_addr),
-      .dma_wdata(cgra_dma_wdata),
-      .dma_wstrb(cgra_dma_wstrb),
-      .dma_rdata(cgra_dma_rdata),
-      .dma_ready(cgra_dma_ready),
+      .m_axi_awvalid(cg_awvalid), .m_axi_awready(cg_awready),
+      .m_axi_awid(), .m_axi_awaddr(cg_awaddr),
+      .m_axi_awlen(cg_awlen), .m_axi_awsize(), .m_axi_awburst(),
+      .m_axi_wvalid(cg_wvalid), .m_axi_wready(cg_wready),
+      .m_axi_wdata(cg_wdata), .m_axi_wstrb(cg_wstrb), .m_axi_wlast(cg_wlast),
+      .m_axi_bvalid(cg_bvalid), .m_axi_bready(cg_bready),
+      .m_axi_bid(4'd0), .m_axi_bresp(2'd0),
+      .m_axi_arvalid(cg_arvalid), .m_axi_arready(cg_arready),
+      .m_axi_arid(), .m_axi_araddr(cg_araddr),
+      .m_axi_arlen(cg_arlen), .m_axi_arsize(), .m_axi_arburst(),
+      .m_axi_rvalid(cg_rvalid), .m_axi_rready(cg_rready),
+      .m_axi_rdata(cg_rdata), .m_axi_rlast(cg_rlast),
+      .m_axi_rid(4'd0), .m_axi_rresp(2'd0),
       .busy   (cgra_busy),
       .done   (cgra_done),
       .cycle_o(cgra_cycle),
@@ -198,14 +209,80 @@ module gpcp_soc #(
 
   assign rd_bpb = 8'b1 << rd_size_q;
 
-  // ---------------------------------------------------------------- DMA grant
-  // The copy engine gets a beat only in a cycle where the CPU accepts nothing,
-  // and the response (ready + read data) is combinational: the engine sees its
-  // data in the same cycle it presents the address, so it advances one beat per
-  // cycle and can never latch a stale beat.
-  assign cgra_dma_ready = cgra_dma_valid && (state == S_IDLE) && !ar_accept && !aw_accept;
-  assign cgra_dma_rdata = (decode_region({32'b0, cgra_dma_addr}) == R_RAM)
-                          ? ram[cgra_dma_addr[25:3]] : 64'b0;
+  // ---------------------------------------------------------------- CGRA AXI slave
+  // AXI4 slave for the copy engine: one outstanding INCR burst, 64-bit beats.
+  // A beat is admitted only in a cycle where the CPU side accepts nothing.
+  typedef enum logic [1:0] {
+    A_IDLE = 2'd0,
+    A_WR   = 2'd1,
+    A_B    = 2'd2,
+    A_RD   = 2'd3
+  } astate_e;
+  astate_e astate;
+
+  logic [31:0] a_addr_q;
+  logic [7:0]  a_beats, a_len_q;
+  logic        a_grant;
+
+  assign a_grant    = (state == S_IDLE) && !ar_accept && !aw_accept;
+  assign cg_awready = (astate == A_IDLE) && a_grant;
+  assign cg_arready = (astate == A_IDLE) && a_grant;
+  assign cg_wready  = (astate == A_WR) && a_grant;
+  assign cg_rvalid  = (astate == A_RD) && a_grant;
+  assign cg_rdata   = (decode_region({32'b0, a_addr_q}) == R_RAM)
+                      ? ram[a_addr_q[25:3]] : 64'b0;
+  assign cg_rlast   = (a_beats == a_len_q);
+  assign cg_bvalid  = (astate == A_B);
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      astate  <= A_IDLE;
+      a_addr_q <= 32'b0;
+      a_beats  <= 8'd0;
+      a_len_q  <= 8'd0;
+    end else begin
+      if (GPCP_DBG) begin
+        if (cg_awvalid && cg_awready) $display("[cg-axi] AW addr=%h len=%0d", cg_awaddr, cg_awlen);
+        if (cg_wvalid && cg_wready)   $display("[cg-axi] W  addr=%h last=%b", a_addr_q, cg_wlast);
+        if (cg_arvalid && cg_arready) $display("[cg-axi] AR addr=%h len=%0d", cg_araddr, cg_arlen);
+        if (cg_rvalid && cg_rready)   $display("[cg-axi] R  addr=%h last=%b", a_addr_q, cg_rlast);
+        if (cg_bvalid && cg_bready)   $display("[cg-axi] B");
+      end
+      unique case (astate)
+        A_IDLE: begin
+          if (cg_awvalid && cg_awready) begin
+            a_addr_q <= cg_awaddr;
+            a_len_q  <= cg_awlen;
+            a_beats  <= 8'd0;
+            astate   <= A_WR;
+          end else if (cg_arvalid && cg_arready) begin
+            a_addr_q <= cg_araddr;
+            a_len_q  <= cg_arlen;
+            a_beats  <= 8'd0;
+            astate   <= A_RD;
+          end
+        end
+        A_WR: begin
+          if (cg_wvalid && cg_wready) begin
+            a_addr_q <= a_addr_q + 32'd8;
+            a_beats  <= a_beats + 8'd1;
+            if (cg_wlast) astate <= A_B;
+          end
+        end
+        A_B: begin
+          if (cg_bready) astate <= A_IDLE;
+        end
+        A_RD: begin
+          if (cg_rvalid && cg_rready) begin
+            a_addr_q <= a_addr_q + 32'd8;
+            a_beats  <= a_beats + 8'd1;
+            if (cg_rlast) astate <= A_IDLE;
+          end
+        end
+        default: astate <= A_IDLE;
+      endcase
+    end
+  end
 
   // ---------------------------------------------------------------- peripheral read helpers
   function automatic logic [63:0] clint_read(input logic [15:0] off);
@@ -591,13 +668,12 @@ module gpcp_soc #(
 
             if (core_req.w.last) state <= S_B;
             else                 state <= S_WR;
-          end else if (cgra_dma_valid) begin
-            // Copy engine: 64-bit beat, write side only (reads are served
-            // combinationally above).  The CPU always has priority.
-            if (cgra_dma_we && (decode_region({32'b0, cgra_dma_addr}) == R_RAM)) begin
+          end else if (cg_wvalid && cg_wready) begin
+            // CGRA AXI slave: one 64-bit beat of a write burst (CPU has priority)
+            if (decode_region({32'b0, a_addr_q}) == R_RAM) begin
               for (int b = 0; b < 8; b++)
-                if (cgra_dma_wstrb[b])
-                  ram[cgra_dma_addr[25:3]][b*8 +: 8] <= cgra_dma_wdata[b*8 +: 8];
+                if (cg_wstrb[b])
+                  ram[a_addr_q[25:3]][b*8 +: 8] <= cg_wdata[b*8 +: 8];
             end
           end
         end

@@ -14,9 +14,10 @@
   `make -C sim/soc run-dma` 跑 3 个 slot 的流水并逐位比对黄金模型。
 - **完成中断 + PLIC**：CGRA 的阵列/拷贝完成事件经最小 PLIC（源 1）接到 CVA6 机器外部
   中断，CPU 用 `wfi` 等 slot 完成（`make -C sim/soc run-irq`）。
-- **突发拷贝 + 描述符环**：内存侧 64-bit beat、一次描述符内最多 8 拍背靠背
-  （**1024 字线性拷贝 1.18 周期/字**，约 2.5 倍于逐字版）；描述符放 RAM，引擎自取、
-  自写状态字、自推进 head（`make -C sim/soc run-ring`）。
+- **突发拷贝 + 描述符环**：拷贝引擎是**完整 AXI4 主口**（INCR 突发、`WLAST/RLAST`、B 响应，
+  SoC 侧加了第 2 个 AXI 从机、CPU 优先仲裁）；**1024 字线性拷贝 1.24 周期/字**
+  （约 2.4 倍于逐字版）。描述符放 RAM，引擎自取、自写状态字、自推进 head
+  （`make -C sim/soc run-ring`）。
 - **B2**：真实 **CVA6（RV64GC）** 核在 Verilator 中启动裸机程序，通过 AXI4 驱动 CGRA，
   回读结果与黄金模型一致（2059 周期）。
 - **B3（进行中）**：SoC 升级为 Linux 可用映射（CLINT / PLIC / 16550 UART / 64 MiB RAM，
@@ -44,9 +45,9 @@ make -C sim/soc run-dma
 make -C sim/soc run-irq
 # [ OK ] interrupt-driven DMA + double buffering: 2 slots, 5 completion interrupt(s) ...
 
-# L1：描述符环 + 突发拷贝
+# L1：描述符环 + 突发拷贝（真 AXI4 主口）
 make -C sim/soc run-ring
-# [ OK ] descriptor ring + burst copy: 4 descriptors consumed, ... 1.18 cycles/word
+# [ OK ] descriptor ring + burst copy: 4 descriptors consumed, ... 1.24 cycles/word
 
 # B3：构建 Linux 栈并启动（耗时较长）
 bash scripts/build_b3.sh
