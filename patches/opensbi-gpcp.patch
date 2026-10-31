@@ -12,47 +12,6 @@ index f1752d5..8699a25 100644
  	bnez	a6, _wait_for_boot_hart
  #elif defined(__riscv_zalrsc)
  _sc_fail:
-diff --git a/lib/sbi/sbi_ecall.c b/lib/sbi/sbi_ecall.c
-index 65c5a55..bf8b294 100644
---- a/lib/sbi/sbi_ecall.c
-+++ b/lib/sbi/sbi_ecall.c
-@@ -129,6 +129,15 @@ int sbi_ecall_handler(struct sbi_trap_context *tcntx)
- 	struct sbi_ecall_return out = {0};
- 	bool is_0_1_spec = 0;
- 
-+	/* GPCP debug: report the dominant SBI call without recursing into ecall */
-+	{
-+		static unsigned long gpcp_cnt;
-+		if (gpcp_cnt < 32)
-+			sbi_printf("[ecall] cnt=%lu ext=0x%lx func=0x%lx\n",
-+				   gpcp_cnt, extension_id, func_id);
-+		gpcp_cnt++;
-+	}
-+
- 	ext = sbi_ecall_find_extension(extension_id);
- 	if (ext && ext->handle) {
- 		ret = ext->handle(extension_id, func_id, regs, &out);
-diff --git a/lib/sbi/sbi_trap.c b/lib/sbi/sbi_trap.c
-index e694188..f57287b 100644
---- a/lib/sbi/sbi_trap.c
-+++ b/lib/sbi/sbi_trap.c
-@@ -311,6 +311,16 @@ struct sbi_trap_context *sbi_trap_handler(struct sbi_trap_context *tcntx)
- 	struct sbi_trap_regs *regs = &tcntx->regs;
- 	ulong mcause = tcntx->trap.cause;
- 
-+	/* GPCP debug: report trap causes (bounded output) */
-+	{
-+		static unsigned long gpcp_trap_cnt;
-+		if (gpcp_trap_cnt < 64 || !(gpcp_trap_cnt % 20000UL))
-+			sbi_printf("[trap] n=%lu cause=0x%lx tval=0x%lx epc=0x%lx\n",
-+				   gpcp_trap_cnt, mcause, tcntx->trap.tval,
-+				   (unsigned long)tcntx->regs.mepc);
-+		gpcp_trap_cnt++;
-+	}
-+
- 	/* Update trap context pointer */
- 	tcntx->prev_context = sbi_trap_get_context(scratch);
- 	sbi_trap_set_context(scratch, tcntx);
 diff --git a/platform/generic/platform.c b/platform/generic/platform.c
 index 1df0280..9b46dc3 100644
 --- a/platform/generic/platform.c
