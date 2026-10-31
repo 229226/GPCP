@@ -89,6 +89,9 @@ class Kernel:
     din: List[int] = field(default_factory=list)
     check: object = None
     spad_dump: Tuple[int, int] = (0, 0)   # (byte address, word count)
+    dma_mem: List[int] = field(default_factory=list)          # backing store words
+    dma_ops: List[Tuple[int, int, int, int, int]] = field(default_factory=list)
+    buf_page: int = 0
 
 
 def sx16(v: int) -> int:
@@ -536,6 +539,60 @@ def kernel_ldpc_cn(a, b, c, d) -> Kernel:
                   spad_dump=(spad_addr(0, 0), 16 * 32))
 
 
+def kernel_dma_pingpong() -> Kernel:
+    """Copy engine fills both scratchpad pages; the array runs LS on page 1.
+
+    Demonstrates double buffering: page 0 keeps the vector loaded by the first
+    descriptor, page 1 is loaded by the second descriptor and consumed by the
+    kernel (BUF_PAGE = 1).
+    """
+    rnd = random.Random(61)
+
+    def make():
+        yr = [rnd.randint(-2000, 2000) for _ in range(16)]
+        yi = [rnd.randint(-2000, 2000) for _ in range(16)]
+        xr = [rnd.choice([-1, 1]) for _ in range(16)]
+        xi = [rnd.choice([-1, 1]) for _ in range(16)]
+        words = []
+        for i in range(16):
+            words += [yr[i] & 0xFFFF, yi[i] & 0xFFFF, xr[i] & 0xFFFF, xi[i] & 0xFFFF]
+        return words, (yr, yi, xr, xi)
+
+    w0, d0 = make()
+    w1, d1 = make()
+    mem = w0 + w1
+
+    base = kernel_chnest([0] * 16, [0] * 16, [0] * 16, [0] * 16)
+    # src bytes, dst, len, page, dir, stride, row: source word 4i+k -> bank i, word k
+    ops = [(0, 0, 64, 0, 0, 32, 4), (256, 0, 64, 1, 0, 32, 4)]
+
+    def check(st):
+        errs = []
+        # page 0 must still hold the first vector (buffers are isolated)
+        for i in range(16):
+            for k in range(4):
+                got = st.get(("spad", spad_addr(i, k)))
+                exp = w0[i * 4 + k] & 0xFFFFFFFF
+                if got != exp:
+                    errs.append(f"page0 bank{i} w{k}: got 0x{got:08x} expected 0x{exp:08x}")
+        # page 1 results live in banks 32..47 (host addresses)
+        yr, yi, xr, xi = d1
+        for i in range(16):
+            hr = (sx16(yr[i]) * sx16(xr[i]) + sx16(yi[i]) * sx16(xi[i])) >> 15
+            hi = (sx16(yi[i]) * sx16(xr[i]) - sx16(yr[i]) * sx16(xi[i])) >> 15
+            got_r = st.get(("spad", spad_addr(32 + i, 4)))
+            got_i = st.get(("spad", spad_addr(32 + i, 5)))
+            if got_r != (hr & 0xFFFFFFFF):
+                errs.append(f"page1 H[{i}].re: got 0x{got_r:08x} expected 0x{hr & 0xFFFFFFFF:08x}")
+            if got_i != (hi & 0xFFFFFFFF):
+                errs.append(f"page1 H[{i}].im: got 0x{got_i:08x} expected 0x{hi & 0xFFFFFFFF:08x}")
+        return errs
+
+    return Kernel("dma_pingpong", base.cycles, base.words, [], [], check,
+                  spad_dump=(spad_addr(0, 0), 64 * 32),
+                  dma_mem=mem, dma_ops=ops, buf_page=1)
+
+
 def build_fft_kernel() -> Kernel:
     rnd = random.Random(11)
     xr = [rnd.randint(-3000, 3000) for _ in range(16)]
@@ -604,7 +661,16 @@ def write_kernel(k: Kernel, d: Path) -> Dict[str, Path]:
     pre.write_text("\n".join(f"0x{a:04x} 0x{v:08x}" for a, v in k.preload) + "\n")
     din = d / "din.txt"
     din.write_text("\n".join(f"0x{v & 0xFFFF:04x}" for v in k.din) + "\n")
-    return {"prog": prog, "preload": pre, "din": din, "dump": d / "dump.txt", "dir": d}
+    paths = {"prog": prog, "preload": pre, "din": din, "dump": d / "dump.txt", "dir": d}
+    if k.dma_mem:
+        p = d / "dma_mem.txt"
+        p.write_text("\n".join(f"0x{v & 0xFFFFFFFF:08x}" for v in k.dma_mem) + "\n")
+        paths["dma_mem"] = p
+    if k.dma_ops:
+        p = d / "dma_ops.txt"
+        p.write_text("\n".join(" ".join(str(x) for x in op) for op in k.dma_ops) + "\n")
+        paths["dma_ops"] = p
+    return paths
 
 
 def parse_dump(path: Path) -> dict:
@@ -630,6 +696,12 @@ def run_kernel(k: Kernel, verbose: bool = True) -> bool:
         cmd += ["--din", str(paths["din"])]
     if k.spad_dump[1]:
         cmd += ["--spad-dump", hex(k.spad_dump[0]), str(k.spad_dump[1])]
+    if "dma_mem" in paths:
+        cmd += ["--dma-mem", str(paths["dma_mem"])]
+    if "dma_ops" in paths:
+        cmd += ["--dma-ops", str(paths["dma_ops"])]
+    if k.buf_page:
+        cmd += ["--buf-page", str(k.buf_page)]
     r = subprocess.run(cmd, env=clean_env(), capture_output=True, text=True)
     if r.returncode != 0:
         print(f"[FAIL] {k.name}: simulator error rc={r.returncode}\n{r.stderr}")
@@ -663,7 +735,8 @@ def build_fir_kernel() -> Kernel:
 
 KERNELS = {"matmul": build_matmul_kernel, "fir16": build_fir_kernel,
            "fft16": build_fft_kernel, "chnest16": build_chnest_kernel,
-           "mmse16": build_mmse_kernel, "ldpc_cn": build_ldpc_kernel}
+           "mmse16": build_mmse_kernel, "ldpc_cn": build_ldpc_kernel,
+           "dma_pingpong": kernel_dma_pingpong}
 
 
 def main() -> int:

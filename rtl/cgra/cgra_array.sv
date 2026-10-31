@@ -27,7 +27,17 @@ module cgra_array (
     input  logic [15:0]                          rd_addr,
     output logic [31:0]                          rd_data,
     // streaming input into the array
-    input  logic [31:0]                          din
+    input  logic [31:0]                          din,
+    // double buffering: array page / copy-engine page
+    input  logic                                 buf_page,
+    input  logic                                 dma_page,
+    // copy-engine write port into the scratchpad (page-relative index)
+    input  logic                                 dma_we,
+    input  logic [9:0]                           dma_addr,
+    input  logic [31:0]                          dma_wdata,
+    // copy-engine read port (spad -> memory direction)
+    input  logic [9:0]                           dma_rd_addr,
+    output logic [31:0]                          dma_rd_data
 );
 
   import cgra_pkg::*;
@@ -51,18 +61,19 @@ module cgra_array (
 
   // host scratchpad access
   logic        host_sp_we;
-  logic [4:0]  host_bank, host_word;
-  logic [9:0]  host_idx;
+  logic [5:0]  host_bank;
+  logic [4:0]  host_word;
+  logic [10:0] host_idx;
 
   always_comb begin
     host_sp_we = 1'b0;
-    host_bank  = 5'b0;
+    host_bank  = 6'b0;
     host_word  = 5'b0;
-    host_idx   = 10'b0;
+    host_idx   = 11'b0;
     if ((wr_addr >= REG_SPAD_BASE) &&
         (wr_addr < (REG_SPAD_BASE + SPAD_BYTES))) begin
       host_idx  = (wr_addr - REG_SPAD_BASE) >> 2;
-      host_bank = host_idx[9:5];
+      host_bank = host_idx[10:5];
       host_word = host_idx[4:0];
       host_sp_we = wr_en && (wr_addr[1:0] == 2'b00);
     end
@@ -78,18 +89,25 @@ module cgra_array (
       wa    = 10'b0;
       wd    = 32'b0;
       for (int p = 0; p < NPES; p++) begin
-        if (!found && pe_we[p] && (pe_waddr[p][9:5] == b[4:0])) begin
+        // only the PE instruction of the *running* cycle may write; while the
+        // sequencer is idle the last microcode word stays visible, and without
+        // this gate an idle array would keep storing into the scratchpad
+        if (en && !found && pe_we[p] && (pe_waddr[p][9:5] == b[4:0]) && (buf_page == b[5])) begin
           found = 1'b1;
           wa    = pe_waddr[p];
           wd    = pe_wdata[p];
         end
       end
-      if (host_sp_we && (host_bank == b[4:0]))
+      if (host_sp_we && (host_bank == b[5:0]))
         spad[b][host_word] <= wr_data;
+      else if (dma_we && (dma_page == b[5]) && (dma_addr[9:5] == b[4:0]))
+        spad[b][dma_addr[4:0]] <= dma_wdata;
       else if (found)
         spad[b][wa[4:0]] <= wd;
     end
   end
+
+  assign dma_rd_data = spad[{dma_page, dma_rd_addr[9:5]}][dma_rd_addr[4:0]];
 
   // ---------------- host register decode (PE windows) ----------------
   logic [3:0] host_pe;
@@ -163,7 +181,8 @@ module cgra_array (
         );
 
         // combinational scratchpad read (one read port per PE)
-        assign pe_rdata_sp[PE_ID] = spad[pe_raddr[PE_ID][9:5]][pe_raddr[PE_ID][4:0]];
+        assign pe_rdata_sp[PE_ID] =
+            spad[{buf_page, pe_raddr[PE_ID][9:5]}][pe_raddr[PE_ID][4:0]];
       end
     end
   endgenerate

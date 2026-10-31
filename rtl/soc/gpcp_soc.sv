@@ -111,6 +111,11 @@ module gpcp_soc #(
   logic [15:0] cgra_wr_addr;
   logic [31:0] cgra_wr_data;
   logic [15:0] cgra_rd_addr;
+  // copy-engine master (DMA) into the SoC RAM
+  logic        cgra_dma_valid, cgra_dma_we;
+  logic [31:0] cgra_dma_addr, cgra_dma_wdata;
+  logic [31:0] dma_rdata_q;
+  logic        dma_ready_q;
 
   cgra_top u_cgra (
       .clk    (clk_i),
@@ -121,6 +126,12 @@ module gpcp_soc #(
       .rd_addr(cgra_rd_addr),
       .rd_data(cgra_rd),
       .din    (32'b0),
+      .dma_valid(cgra_dma_valid),
+      .dma_we   (cgra_dma_we),
+      .dma_addr (cgra_dma_addr),
+      .dma_wdata(cgra_dma_wdata),
+      .dma_rdata(dma_rdata_q),
+      .dma_ready(dma_ready_q),
       .busy   (cgra_busy),
       .done   (cgra_done),
       .cycle_o(cgra_cycle)
@@ -313,7 +324,10 @@ module gpcp_soc #(
       uart_scr    <= 8'b0;
       uart_dll    <= 8'b0;
       uart_dlm    <= 8'b0;
+      dma_ready_q <= 1'b0;
+      dma_rdata_q <= 32'b0;
     end else begin
+      dma_ready_q <= 1'b0;
       unique case (state)
         S_IDLE: begin
           if (ar_accept) begin
@@ -464,6 +478,25 @@ module gpcp_soc #(
 
             if (core_req.w.last) state <= S_B;
             else                 state <= S_WR;
+          end else if (cgra_dma_valid) begin
+            // Copy engine: one 32-bit word per handshake.  The CPU always has
+            // priority: this branch is only reached when no AXI transaction is
+            // being accepted, so CPU writes can never be dropped by the DMA.
+            if (decode_region({32'b0, cgra_dma_addr}) == R_RAM) begin
+              if (cgra_dma_we) begin
+                // 32-bit word moves: honour addr[2] for the RAM half
+                if (cgra_dma_addr[2])
+                  ram[cgra_dma_addr[25:3]][63:32] <= cgra_dma_wdata;
+                else
+                  ram[cgra_dma_addr[25:3]][31:0]  <= cgra_dma_wdata;
+              end else begin
+                dma_rdata_q <= cgra_dma_addr[2] ? ram[cgra_dma_addr[25:3]][63:32]
+                                                : ram[cgra_dma_addr[25:3]][31:0];
+              end
+            end else begin
+              dma_rdata_q <= 32'b0;
+            end
+            dma_ready_q <= 1'b1;
           end
         end
 

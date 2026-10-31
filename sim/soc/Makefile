@@ -35,7 +35,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run linux clean
+.PHONY: all run run-dma linux clean
 
 all:
 	mkdir -p $(ROOT)/$(OBJ)
@@ -43,10 +43,18 @@ all:
 		-f sim/soc/cva6.f $(SRCS) --Mdir $(OBJ) -o Vgpcp_soc
 
 run: all
-	$(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/cgra_bm.bin@0x80000000 --results 0x80002000 --nwords 24 \
 		--dump $(ROOT)/$(OBJ)/soc_dump.txt
 	python3 $(ROOT)/tools/check_soc.py $(ROOT)/$(OBJ)/soc_dump.txt
+
+# DMA + double buffering: CVA6 streams three slots through the two scratchpad
+# pages while the array computes on the other page
+run-dma: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/dma_bm.bin@0x80000000 --results 0x80010000 --nwords 50 \
+		--dump $(ROOT)/$(OBJ)/dma_dump.txt
+	python3 $(ROOT)/tools/check_dma.py $(ROOT)/$(OBJ)/dma_dump.txt
 
 # B3: OpenSBI + Linux + initramfs
 linux: all

@@ -129,6 +129,10 @@ int main(int argc, char** argv) {
         os << "exit_code " << std::hex << dut->exit_code_o << "\n";
     }
 
+    // let any store still resident in the write-through buffer land before the
+    // backdoor reads the result area
+    for (int i = 0; i < 256; i++) tick();
+
     for (uint32_t i = 0; i < nwords; i++) {
         dut->ram_raddr = (uint32_t)((results_addr >> 3) + i) & 0x7FFFFF;
         dut->eval();

@@ -87,15 +87,52 @@
 | `0x0004` | W | `NUM_CYCLES`（≤ 512，超出被截断） |
 | `0x0008` | R | `CYCLE_COUNT` |
 | `0x000C` | R | `ID` = `{0xCA, ISA_VER=0x01, N, N}` |
+| `0x0010` | W | `DMA_SRC`：RAM 源/目的字节地址（32 bit） |
+| `0x0014` | W | `DMA_DST`：scratchpad 起始索引（页内 `bank*32 + word`） |
+| `0x0018` | W | `DMA_LEN`：传输字数（≤ 1024，超出被截断） |
+| `0x001C` | W | `DMA_CTRL`：`[0]` start，`[1]` dir（1 = spad→RAM），`[2]` clear done |
+| `0x001C` | R | DMA 状态：`[0]` busy，`[1]` done |
+| `0x0020` | W | `BUF_PAGE`：阵列使用的 scratchpad 页（0/1） |
+| `0x0024` | W | `DMA_PAGE`：拷贝引擎写入/读出用的页（0/1） |
+| `0x0028` | W | `DMA_STRIDE`：2D 拷贝的行间 scratchpad 步长 |
+| `0x002C` | W | `DMA_ROW`：2D 拷贝每行字数（0 = 线性搬运） |
+| `0x0030` | R | `DMA_RUN_SRC`：本次传输锁存的源地址（调试） |
+| `0x0034` | R | `DMA_RUN_LEN`：锁存的长度（调试） |
+| `0x0038` | R | `DMA_RUN_STRIDE`：锁存的步长（调试） |
+| `0x003C` | R | `DMA_RUN_ROW`：锁存的每行字数（调试） |
 | `0x1000 + pe*32 + r*4` | RW | PE 寄存器 `r0..r7`（预装载 / 回读） |
 | `0x1200 + pe*4` | RW | PE 累加器 |
 | `0x2000 + idx*4` | RW | 指令存储器，`idx = cycle*NPES + pe`（8192 words，占 0x2000–0x9FFF） |
-| `0xA000 + bank*128 + word*4` | RW | 分布式 scratchpad，32 banks × 32 words × 32-bit（4 KiB） |
+| `0xA000 + idx*4` | RW | 分布式 scratchpad，64 banks × 32 words × 32-bit（8 KiB），`idx = bank*32 + word` |
 
 - PE 编号：`pe = row*N + col`（行优先，`(0,0)` 为左上）。
 - AXI 写为单 outstanding；`wr_en` 在总线握手后一拍产生脉冲。
 - 写 `CTRL.start` 前需保证 `NUM_CYCLES != 0`，且阵列空闲。
 - 运行中读 PE 窗口返回当前值（调试用）；建议仅在 idle 时预装载。
+- scratchpad 分两页：绝对 bank 0–31 = page 0，32–63 = page 1；`LD/ST` 与 `DMA_DST`
+  的索引都是**页内相对**（`{bank[4:0], word[4:0]}`），主机窗口地址是**绝对**的。
+
+### 3.1 拷贝引擎（DMA）
+
+- 一条描述符 = `{SRC, DST, LEN, PAGE, DIR, STRIDE, ROW}`，写 `DMA_CTRL[0]` 启动；
+- 启动时描述符被**锁存**到引擎内部的 run 寄存器，因此 CPU 可以在传输进行中
+  直接写下一组描述符（ping-pong 调度），不会破坏正在跑的传输；
+- 传输进行中写 `DMA_CTRL[0]` 被忽略（`busy` 为 1 时不启动）；软件在启动前读 `busy`
+  即可，`busy=1` 时写入的 start 不会排队；
+- 方向：`DIR=0` 为 RAM→scratchpad，`DIR=1` 为 scratchpad→RAM；
+- 一次传输固定 `LEN` 个字，每个字 2 个周期（`MEM_RD`/`SPAD_W`）或 3 个周期
+  （`SPAD_R`/`MEM_WR`），未做 AXI burst；
+- 2D 行走：`ROW != 0` 时，每行 `ROW` 个字，行末索引 +`STRIDE-ROW+1`；
+  例：`STRIDE=32, ROW=4, LEN=64` 把 RAM 里连续的 64 个字铺到
+  页内 bank 0–15 的 word 0–3（`bank i word k`）；
+- scratchpad 页隔离：拷贝引擎只访问 `DMA_PAGE` 页，阵列只访问 `BUF_PAGE` 页，
+  因此「阵列算 page 0、DMA 填 page 1」可以在同一拍同时进行（不同 bank 组）；
+- **软件必须在写 `DMA_CTRL.start` 之前执行 `fence`**（裸机里是 `fence iorw, iorw`，
+  已封装进 `gpcp_cgra_dma_start()`）：start 是 posted store，可能越过前面的描述符写，
+  导致锁存到旧值（例如 `ROW=0`，2D 拷贝退化成线性）；
+- CPU 与 DMA 共享 RAM 时 **CPU 优先**：DMA 只 SoC 的空闲拍搬运，CPU 的读写不会丢；
+- `0x0030–0x003C` 是只读调试窗口：`DMA_RUN_SRC / LEN / STRIDE / ROW`，
+  显示**本次传输锁存的**描述符，用于确认软件写入是否在 start 前生效。
 
 ---
 
@@ -147,9 +184,10 @@ for each (pe, reg) v = cgra_read(...);
 
 1. 无 PE 本地 scratchpad，数据只能靠寄存器 + 最近邻路由；
 2. 无跨行/跨列的 2 跳以上路由，复杂 FFT 需要多拍搬运；
-3. 无 DMA/共享存储，数据入口只有单一边界流端口；
-4. 结果归约（如 FIR 的空间求和、FFT 蝶形跨距 2/4/8）由软件多拍实现，效率低；
-5. 单发射、无谓词/无循环硬件。
+3. 结果归约（如 FIR 的空间求和、FFT 蝶形跨距 2/4/8）由软件多拍实现，效率低；
+4. 单发射、无谓词/无循环硬件；
+5. DMA 为单描述符寄存器接口：没有描述符环、没有中断、没有 AXI burst
+   （每字 2–3 周期），CPU 需要轮询或由 RTOS 定时器驱动。
 
 ---
 
@@ -161,7 +199,7 @@ for each (pe, reg) v = cgra_read(...);
 | scratchpad | 每 PE 64×32b（双口），支持 `LD/ST imm` 与邻 PE 共享 |
 | 双发射 | 64b 指令：1 算术 + 1 访存/路由 |
 | 谓词与循环 | `pred` 位 + `loop_start/loop_end` 硬件计数 |
-| DMA | 描述符环 + 双缓冲，AXI4 主口 |
+| DMA | 描述符环 + 双缓冲，AXI4 主口（**双缓冲 + 2D 拷贝已实现**，见 3.1；环/中断待做） |
 | 复数支持 | `CMAC`：一次完成 (ar·br − ai·bi, ar·bi + ai·br) |
 | FFT 专用 | 蝶形跨距路由网络（stage 可配置） |
 | 编译 | MLIR dialect（`cgra`）→ 布局布线 → 微码二进制 |

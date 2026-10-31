@@ -29,6 +29,13 @@ module cgra_axi_lite (
     output logic [1:0]  s_axil_rresp,
     output logic        s_axil_rvalid,
     input  logic        s_axil_rready,
+    // copy-engine master port (tie off when used stand-alone)
+    output logic        dma_valid,
+    output logic        dma_we,
+    output logic [31:0] dma_addr,
+    output logic [31:0] dma_wdata,
+    input  logic [31:0] dma_rdata,
+    input  logic        dma_ready,
     // streaming input / status
     input  logic [31:0] din,
     output logic        o_busy,
@@ -122,6 +129,12 @@ module cgra_axi_lite (
       .rd_addr(s_axil_araddr),
       .rd_data(host_rd_data),
       .din    (din),
+      .dma_valid(dma_valid),
+      .dma_we   (dma_we),
+      .dma_addr (dma_addr),
+      .dma_wdata(dma_wdata),
+      .dma_rdata(dma_rdata),
+      .dma_ready(dma_ready),
       .busy   (o_busy),
       .done   (o_done),
       .cycle_o(o_cycle)

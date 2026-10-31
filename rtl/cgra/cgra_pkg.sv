@@ -75,12 +75,27 @@ package cgra_pkg;
   localparam logic [15:0] REG_CYCLE_CNT  = 16'h0008;
   localparam logic [15:0] REG_ID         = 16'h000C; // R: {magic, isa_ver, n, n}
 
+  // ---------------- copy engine (DMA) ----------------
+  localparam logic [15:0] REG_DMA_SRC    = 16'h0010; // W: source byte address (SoC RAM)
+  localparam logic [15:0] REG_DMA_DST    = 16'h0014; // W: scratchpad index (page-relative, bank*32+word)
+  localparam logic [15:0] REG_DMA_LEN    = 16'h0018; // W: number of 32-bit words
+  localparam logic [15:0] REG_DMA_CTRL   = 16'h001C; // W: [0]=start [1]=dir(1=spad->mem) [2]=clr-done
+                                                     // R: [0]=busy [1]=done
+  localparam logic [15:0] REG_BUF_PAGE   = 16'h0020; // array page select (0/1)
+  localparam logic [15:0] REG_DMA_PAGE   = 16'h0024; // copy-engine page select (0/1)
+  localparam logic [15:0] REG_DMA_STRIDE = 16'h0028; // 2D copy: scratchpad stride between rows
+  localparam logic [15:0] REG_DMA_ROW    = 16'h002C; // 2D copy: words per row (0 = linear)
+
   // ---------------- scratchpad (distributed, banked) ----------------
   // 32 banks x 32 words x 32 bit.  Bank b is normally owned by PE b (data),
   // banks 16..31 are used for per-PE twiddles/coefficients in the kernels.
-  parameter int SPAD_BANKS = 32;
+  // Two pages of 32 banks (double buffering): banks 0..31 = page 0,
+  // banks 32..63 = page 1.  LD/ST addresses are page-relative; the active
+  // page comes from REG_BUF_PAGE (array) / REG_DMA_PAGE (copy engine).
+  parameter int SPAD_BANKS = 64;
   parameter int SPAD_WORDS = 32;
-  parameter int SPAD_BYTES = SPAD_BANKS * SPAD_WORDS * 4;   // 4 KiB
+  parameter int SPAD_PAGES = 2;
+  parameter int SPAD_BYTES = SPAD_BANKS * SPAD_WORDS * 4;   // 8 KiB
   localparam logic [15:0] REG_SPAD_BASE  = 16'hA000; // bank*128 + word*4
 
   localparam logic [15:0] REG_PE_BASE    = 16'h1000; // 16 PEs x 8 regs x 4B

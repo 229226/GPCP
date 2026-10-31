@@ -3,14 +3,17 @@
 > 目标：用 **RISC-V CPU + CGRA 阵列**实现 gNB 侧完整无线协议（LTE + 5G NR 双模），
 > 优先复用开源项目。当前阶段为**纯仿真原型**（科研性质）。
 
-## 当前状态：M0 / B2 完成，B3 进行中
+## 当前状态：M0 / B2 完成，L1 数据面 + DMA 双缓冲完成，B3 进行中
 
 - **M0**：4×4 CGRA 阵列 RTL（int16 MAC / int32 累加，最近邻 1 周期路由）、全局定序器、
   AXI4-Lite 从口、Verilator 模型、Python 微码汇编器 + 黄金模型比对；
   已通过 `matmul4x4`、`fir16`，以及 L1 数据面 `fft16`、`chnest16`、`mmse16`、`ldpc_cn`
   （scratchpad + `LD/ST` 扩展，见 `docs/07-l1-dataplane.md`）。
+- **L1 数据面 + DMA**：scratchpad 扩到 64 banks / 8 KiB 双页，加描述符驱动拷贝引擎
+  （RAM↔scratchpad、2D stride/row、页隔离），CVA6 可以「阵列算 page 0、DMA 填 page 1」；
+  `make -C sim/soc run-dma` 跑 3 个 slot 的流水并逐位比对黄金模型。
 - **B2**：真实 **CVA6（RV64GC）** 核在 Verilator 中启动裸机程序，通过 AXI4 驱动 CGRA，
-  回读结果与黄金模型一致（2058 周期）。
+  回读结果与黄金模型一致（2059 周期）。
 - **B3（进行中）**：SoC 升级为 Linux 可用映射（CLINT / PLIC / 16550 UART / 64 MiB RAM，
   AXI 原子 + LR/SC 独占访问）。**OpenSBI v1.9 完整启动**并跳转 Linux 6.6 内核，
   内核已进入虚拟地址空间执行；受 Verilator 速度（约 70k cycles/s）限制，
@@ -25,8 +28,12 @@ python3 tools/cgra.py test
 
 # B2：CVA6 + CGRA 端到端
 make -C sim/soc run
-# [info] exit_code=0x0000600d cycles=2058
+# [info] exit_code=0x0000600d cycles=2059
 # [ OK ] CVA6 -> CGRA matmul matches the golden model
+
+# L1：CVA6 驱动 DMA + 双缓冲（3 个 slot）
+make -C sim/soc run-dma
+# [ OK ] DMA + double buffering: 3 slots of 32 H values match the golden model
 
 # B3：构建 Linux 栈并启动（耗时较长）
 bash scripts/build_b3.sh
@@ -43,7 +50,7 @@ sim/cgra/        CGRA Verilator 模型 + CPU 总线 BFM（M0）
 sim/soc/         SoC Verilator 模型（CVA6 + CGRA，B2）
 sw/include/      CGRA 软件 ABI（裸机 / Linux 驱动共用）
 sw/examples/     裸机用例（ABI 编译检查）
-sw/soc/          B2 裸机程序（start.S / link.ld / cgra_bm.c）
+sw/soc/          B2/B4 裸机程序（start.S / link.ld / cgra_bm.c / dma_bm.c）
 tools/           汇编器 + kernel + 自动测试 + SoC 结果比对
 scripts/         fetch_cva6.py（GitHub 受限时的拉取脚本）、gen_flist.py、env.sh
 third_party/cva6/ CVA6 源码（不纳入 git）
@@ -64,6 +71,7 @@ python3 tools/cgra.py test --kernel fir16
 
 make soc                              # 编译 CVA6 + CGRA SoC 模型（约 35 s）
 make soc-run                          # 编译裸机程序 + 跑端到端联调
+make soc-run-dma                      # 编译裸机程序 + 跑 DMA 双缓冲联调
 ```
 
 手工使用 Verilator/gtkwave 时先 `source scripts/env.sh`

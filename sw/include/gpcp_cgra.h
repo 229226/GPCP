@@ -29,7 +29,26 @@
 #define GPCP_CGRA_PE_BASE      0x1000u   /* 0x1000 + pe*32 + reg*4             */
 #define GPCP_CGRA_PE_ACC       0x1200u   /* 0x1200 + pe*4                      */
 #define GPCP_CGRA_IMEM_BASE    0x2000u   /* 0x2000 + idx*4, idx=cycle*NPES+pe  */
-#define GPCP_CGRA_SPAD_BASE    0xA000u   /* 0xA000 + bank*128 + word*4 (32x32) */
+#define GPCP_CGRA_SPAD_BASE    0xA000u   /* 0xA000 + bank*128 + word*4 (64x32) */
+
+/* ----------------------------------------------------- copy engine (DMA) */
+#define GPCP_CGRA_DMA_SRC      0x0010u   /* W: source byte address (SoC RAM)   */
+#define GPCP_CGRA_DMA_DST      0x0014u   /* W: spad index (bank*32+word)       */
+#define GPCP_CGRA_DMA_LEN      0x0018u   /* W: number of 32-bit words (<=1024) */
+#define GPCP_CGRA_DMA_CTRL     0x001Cu   /* W: [0] start [1] dir(1=spad->RAM)
+                                                 [2] clear done
+                                            R: [0] busy [1] done            */
+#define GPCP_CGRA_BUF_PAGE     0x0020u   /* W: array page select (0/1)         */
+#define GPCP_CGRA_DMA_PAGE     0x0024u   /* W: copy-engine page select (0/1)   */
+#define GPCP_CGRA_DMA_STRIDE   0x0028u   /* W: 2D copy, spad stride between rows */
+#define GPCP_CGRA_DMA_ROW      0x002Cu   /* W: 2D copy, words per row (0 = linear) */
+
+#define GPCP_CGRA_DMA_START    (1u << 0)
+#define GPCP_CGRA_DMA_DIR_OUT  (1u << 1)   /* spad -> RAM */
+#define GPCP_CGRA_DMA_CLRDONE  (1u << 2)
+
+#define GPCP_CGRA_DMA_BUSY     (1u << 0)
+#define GPCP_CGRA_DMA_DONE     (1u << 1)
 
 #define GPCP_CGRA_CTRL_START   (1u << 0)
 #define GPCP_CGRA_CTRL_CLRDONE (1u << 1)
@@ -128,8 +147,33 @@ static inline uint32_t gpcp_cgra_pe_acc(uintptr_t base, uint32_t pe)
     return gpcp_cgra_read(base, GPCP_CGRA_PE_ACC + pe * 4u);
 }
 
-/* scratchpad helpers */
-#define GPCP_SPAD_IDX(bank, word)   ((((bank) & 0x1Fu) << 5) | ((word) & 0x1Fu))
+/* ------------------------------------------------------- copy engine (DMA) */
+/* Program one descriptor and start it.  The descriptor is latched on the
+ * start write, so the earlier descriptor stores must reach the CGRA first:
+ * with a posted store buffer (CVA6 WTDU) the start write can otherwise
+ * overtake them, e.g. leaving ROW at 0 and turning a 2D copy into a linear
+ * one.  The `fence` makes this explicit. */
+static inline void gpcp_cgra_dma_start(uintptr_t base, uintptr_t ram_addr,
+                                       uint32_t spad_idx, uint32_t words,
+                                       uint32_t page, uint32_t dir_out,
+                                       uint32_t stride, uint32_t row)
+{
+    gpcp_cgra_write(base, GPCP_CGRA_DMA_SRC, (uint32_t)ram_addr);
+    gpcp_cgra_write(base, GPCP_CGRA_DMA_DST, spad_idx);
+    gpcp_cgra_write(base, GPCP_CGRA_DMA_LEN, words);
+    gpcp_cgra_write(base, GPCP_CGRA_DMA_STRIDE, stride);
+    gpcp_cgra_write(base, GPCP_CGRA_DMA_ROW, row);
+    gpcp_cgra_write(base, GPCP_CGRA_DMA_PAGE, page);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    gpcp_cgra_write(base, GPCP_CGRA_DMA_CTRL,
+                    GPCP_CGRA_DMA_START | (dir_out ? GPCP_CGRA_DMA_DIR_OUT : 0u));
+}
+
+/* scratchpad helpers
+ * Banks 0..31 are page 0, banks 32..63 are page 1.  LD/ST microcode addresses
+ * are page-relative ({bank[4:0], word[4:0]}); the host window is absolute. */
+#define GPCP_SPAD_IDX(bank, word)   ((((bank) & 0x3Fu) << 5) | ((word) & 0x1Fu))
 #define GPCP_SPAD_ADDR(bank, word)  (GPCP_CGRA_SPAD_BASE + ((bank) * 128u) + ((word) * 4u))
+#define GPCP_SPAD_PAGE(bank)        (((bank) >> 5) & 1u)
 
 #endif /* GPCP_CGRA_H */

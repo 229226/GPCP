@@ -29,6 +29,7 @@
 static Vcgra_axi_lite* dut = nullptr;
 static std::vector<uint32_t> g_din;
 static bool g_stream = false;
+static std::vector<uint32_t> g_dma_mem(1024, 0);   // copy-engine backing store (standalone)
 
 static void tick() {
     dut->clk = 0;
@@ -38,6 +39,14 @@ static void tick() {
         dut->din = dut->o_busy ? g_din[(dut->o_cycle < g_din.size()) ? dut->o_cycle : (g_din.size() - 1)] : 0;
     else
         dut->din = 0;
+    // simple synchronous memory model for the copy-engine master port
+    dut->dma_ready = 0;
+    if (dut->dma_valid) {
+        uint32_t idx = (dut->dma_addr >> 2) & 0x3FF;
+        dut->dma_rdata = g_dma_mem[idx];
+        if (dut->dma_we) g_dma_mem[idx] = dut->dma_wdata;
+        dut->dma_ready = 1;
+    }
     dut->clk = 1;
     dut->eval();
 }
@@ -97,7 +106,8 @@ static std::vector<uint32_t> load_words(const std::string& path) {
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
 
-    std::string prog_path, preload_path, din_path, dump_path;
+    std::string prog_path, preload_path, din_path, dump_path, dma_mem_path, dma_dump_path, dma_ops_path;
+    int buf_page = 0;
     int cycles = 0;
     uint32_t spad_start = 0;
     int spad_count = 0;
@@ -112,6 +122,10 @@ int main(int argc, char** argv) {
         else if (a == "--preload") preload_path = next();
         else if (a == "--din") din_path = next();
         else if (a == "--dump") dump_path = next();
+        else if (a == "--dma-mem") dma_mem_path = next();
+        else if (a == "--dma-dump") dma_dump_path = next();
+        else if (a == "--dma-ops") dma_ops_path = next();
+        else if (a == "--buf-page") buf_page = std::atoi(next().c_str());
         else if (a == "--cycles") cycles = std::atoi(next().c_str());
         else if (a == "--spad-dump") {
             spad_start = (uint32_t)strtoul(next().c_str(), nullptr, 0);
@@ -152,11 +166,38 @@ int main(int argc, char** argv) {
             axil_wr(addr, val);
     }
 
+    // 2b. copy-engine backing memory
+    if (!dma_mem_path.empty()) {
+        std::vector<uint32_t> words = load_words(dma_mem_path);
+        for (size_t i = 0; i < words.size() && i < g_dma_mem.size(); i++)
+            g_dma_mem[i] = words[i];
+    }
+
     // 3. streaming input
     if (!din_path.empty()) {
         g_din = load_words(din_path);
         g_stream = true;
     }
+
+    // 3b. copy-engine descriptors (src, dst, len, page, dir)
+    if (!dma_ops_path.empty()) {
+        std::ifstream f(dma_ops_path);
+        uint32_t src, dst, len, page, dir;
+        while (f >> src >> dst >> len >> page >> dir) {
+            uint32_t stride = 1, row = 0;
+            if (!(f >> stride >> row)) { f.clear(); stride = 1; row = 0; }
+            axil_wr(0x0010, src);
+            axil_wr(0x0014, dst);
+            axil_wr(0x0018, len);
+            axil_wr(0x0024, page);
+            axil_wr(0x0028, stride);
+            axil_wr(0x002C, row);
+            axil_wr(0x001C, 0x1 | (dir << 1));
+            int guard = 0;
+            while (((axil_rd(0x001C) & 0x2) == 0) && guard++ < 100000) ;
+        }
+    }
+    axil_wr(0x0020, (uint32_t)buf_page);  // array page
 
     // 4. run
     axil_wr(0x0004, (uint32_t)cycles);  // NUM_CYCLES
@@ -189,6 +230,12 @@ int main(int argc, char** argv) {
         uint32_t addr = spad_start + (uint32_t)i * 4;
         std::snprintf(buf, sizeof(buf), "spad %04x 0x%08x\n", addr, axil_rd(addr));
         os << buf;
+    }
+
+    if (!dma_dump_path.empty()) {
+        std::ofstream f(dma_dump_path);
+        for (int i = 0; i < 256; i++)
+            f << "0x" << std::hex << g_dma_mem[i] << "\n";
     }
 
     if (!dump_path.empty()) {

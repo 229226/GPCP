@@ -13,10 +13,10 @@ MMSE 要按子载波读写、LDPC 要做多轮消息传递——**必须有片�
 
 | 扩展 | 规格 | 说明 |
 |---|---|---|
-| 分布式 scratchpad | **32 banks × 32 words × 32-bit（4 KiB）** | bank 0..15 存数据（每个 PE 一个 bank），bank 16..31 存每 PE 的系数/旋转因子 |
+| 分布式 scratchpad | **64 banks × 32 words × 32-bit（8 KiB）**，分两页 | bank 0–15 存数据（每个 PE 一个 bank），bank 16–31 存每 PE 的系数/旋转因子；bank 32–63 是第二页（见第 4 节） |
 | 每 PE 端口 | 1 读 + 1 写，可访问任意 bank/word | 读组合逻辑、写时序，1 周期完成 |
-| 新指令 | `LD dst, imm` / `ST src, imm` | `imm[9:0] = {bank[4:0], word[4:0]}` |
-| 主机窗口 | `0xA000 + bank*128 + word*4` | CPU 预装输入、回读输出 |
+| 新指令 | `LD dst, imm` / `ST src, imm` | `imm[9:0] = {bank[4:0], word[4:0]}`（页内相对） |
+| 主机窗口 | `0xA000 + bank*128 + word*4` | CPU 预装输入、回读输出（绝对 bank） |
 | 地址冲突修复 | scratchpad 从 0x3000 移到 **0xA000** | 0x3000 与 IMEM 窗口（0x2000–0x9FFF）重叠，长程序会被写进 scratchpad |
 
 调度约定：**同一周期内每个 bank 最多一次读、一次写**。本文所有 kernel 的调度都已满足，
@@ -69,7 +69,70 @@ MMSE 要按子载波读写、LDPC 要做多轮消息传递——**必须有片�
   - `min1 = min(lo1, lo2)`，`min2 = min(max(lo1,lo2), min(hi1,hi2))`，其中 `lo/hi` 是两两 min/max；
 - **52 周期**；边消息（`sign * min_other`）的展开留给下一阶段（可由 CPU 或再来一遍阵列）。
 
-## 4. 验证结果（`python3 tools/cgra.py test`）
+## 4. DMA + 双缓冲（slot 级流水）
+
+L1 的真实用法是「每 0.5 ms 一个 slot，数据自己进来」，所以阵列不能靠 CPU 逐字写
+scratchpad。这一阶段加了**描述符驱动的拷贝引擎 + 双页 scratchpad**：
+
+| 机制 | 规格 |
+|---|---|
+| scratchpad | 64 banks × 32 words × 32-bit（**8 KiB**），bank 0–31 = page 0，32–63 = page 1 |
+| `LD/ST` | `imm[9:0] = {bank[4:0], word[4:0]}`，**页内相对**；当前页由 `BUF_PAGE` 选择 |
+| 拷贝引擎 | RAM↔scratchpad，每条描述符 1–1024 个 32-bit 字，`DMA_PAGE` 指定目标页 |
+| 2D 行走 | `DMA_STRIDE` = 行间步长，`DMA_ROW` = 每行字数（0 = 线性）；行末索引 `+STRIDE-ROW+1` |
+| 描述符锁存 | 写 `DMA_CTRL.start` 时把 SRC/LEN/STRIDE/ROW 锁进 run 寄存器 |
+| 页隔离 | 引擎只碰 `DMA_PAGE`，阵列只碰 `BUF_PAGE`，所以两者可以在**同一拍**工作 |
+
+### 4.1 软件调度（`sw/soc/dma_bm.c`）
+
+```
+warm-up: in(slot0 → P0)
+loop s = 0,1,2:
+    in(slot s+1 → P^1)     ─┐ 拷贝引擎与阵列并行
+    array(P)               ─┘ 阵列读 P，引擎写 P^1
+    out(P → out[s])        ─┐ 引擎把 P 的结果搬回 RAM，同时
+    array(P^1)             ─┘ 阵列在另一页上算下一个 slot
+```
+
+对应用例：16 个子载波、每 bank 4 个字（`yr, yi, xr, xi`），阵列 14 拍算完
+`H = Y·conj(X)`，结果写回该页 bank 16–31 的 word 0/1，再由引擎按
+`stride=32, row=2, len=32` 搬回 RAM。
+
+- 入向描述符：`stride=32, row=4, len=64`（RAM 里连续的 64 个字铺到 16 个 bank 的 4 个字）；
+- 出向描述符：从页内索引 512（= bank 16 word 0）开始，`stride=32, row=2, len=32`。
+
+### 4.2 验证
+
+```bash
+python3 tools/cgra.py test --kernel dma_pingpong   # 阵列级：两个页、两次 DMA
+make -C sim/soc run-dma                            # SoC 级：CVA6 驱动 3 个 slot
+```
+
+SoC 级测试用 CVA6 真机（Verilator）跑完整个流水，把三组 H 值（96 个字）搬回 RAM，
+再由 `tools/check_dma.py` 用独立的 Python 黄金模型逐位比对；裸机侧同时做一遍
+软件自检，两者都必须为 0 才算通过：
+
+```
+[ OK ] DMA + double buffering: 3 slots of 32 H values match the golden model
+```
+
+3 个 slot 的完整流水（含 4 次入向、3 次出向拷贝、3 次阵列运行）在 **约 16.5k 周期**
+内完成；其中 64 字的一次拷贝约 190 周期（每字 2–3 周期，未做 burst）。
+
+### 4.3 集成时发现的四个真实缺陷（都已修）
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| CPU 写 CGRA 寄存器偶发丢失，阵列不启动 | SoC 的 AXI 仲裁里 DMA 分支排在 CPU 写之前，同一拍握手被丢弃但仍返回 BRESP | DMA 分支移到 CPU 读写之后（CPU 优先） |
+| DMA 搬回的 32 位数据全错 | RAM 按 64 位字存取，但引擎没看 `addr[2]`，总是取低半 | 读写按 `addr[2]` 选高低半 |
+| 阵列空闲后结果持续被改写 | PE 的 `spad_we` 由操作码组合产生，`en=0` 时仍在执行最后一拍（可能是 `ST`） | scratchpad 写口加 `en` 门控 |
+| 2D 描述符退化成线性 | 启动写是 posted store，可能越过前面的描述符写，锁存到 `ROW=0` | 启动前 `fence iorw, iorw`（已封装进 `gpcp_cgra_dma_start()`） |
+
+第四条是 ABI 层面的坑：**只要描述符在启动时锁存，软件就必须在 start 之前保证
+前面的写已到达设备**。裸机驱动已按此实现；将来做描述符环时，环本身就在 RAM 里，
+由引擎按指针读取，这个问题自然消失。
+
+## 5. 验证结果（`python3 tools/cgra.py test`）
 
 ```
 [ OK ] matmul4x4: 6 cycles, 96 microcode words
@@ -78,6 +141,7 @@ MMSE 要按子载波读写、LDPC 要做多轮消息传递——**必须有片�
 [ OK ] chnest16: 15 cycles, 240 microcode words
 [ OK ] mmse16:   20 cycles, 320 microcode words
 [ OK ] ldpc_cn:  52 cycles, 832 microcode words
+[ OK ] dma_pingpong: 15 cycles, 240 microcode words
 ALL TESTS PASSED
 ```
 
@@ -92,23 +156,27 @@ python3 tools/cgra.py test              # 全部 kernel
 python3 tools/cgra.py test --kernel fft16
 ```
 
-## 5. 已知限制 / 下一步
+## 6. 已知限制 / 下一步
 
-1. **没有 DMA**：输入仍由 CPU 逐字写 scratchpad。下一步加描述符环 + 双缓冲，
-   让 CPU 只发任务、CGRA 自取数据（对齐 DU 的 slot 级调度）。
+1. **DMA 还没有描述符环**：目前是「一条描述符 = 一组寄存器」，`busy` 期间写入的
+   start 会被忽略，CPU 必须轮询；没有完成中断，也没有 AXI burst（每字 2–3 周期）。
+   下一步做描述符环（环放 RAM、引擎自取）+ 完成中断，CPU 只需每 slot 推进一次指针。
 2. **FFT 规模**：目前 16 点（demo 用），5G NR 需要 4096 点；
    路线是「16 点 kernel + 多级分解 + 旋转因子表」，或在阵列里做多级流水。
 3. **MMSE 除法**：留给 CPU；若要完全 offload，可加倒数 LUT 或 Newton-Raphson 微码。
 4. **LDPC**：目前是校验节点核心（min1/min2/sign），边输出与迭代调度未做；
-   5G NR 的 BG1/BG2 需要更大的消息存储（当前 4 KiB scratchpad 不够，需扩到 64–128 KiB）。
-5. **实时性**：当前是「主机预装 → 启动 → 停 → 回读」的批处理模型；
-   DU 的 L1 需要 slot 级流式（每 0.5ms 一次）与中断驱动，这部分在 M5（RTOS 集成）做。
+   5G NR 的 BG1/BG2 需要更大的消息存储（当前 8 KiB scratchpad 不够，需扩到 64–128 KiB）。
+5. **实时性**：当前是两个页的 ping-pong（深度 2）；DU 的 L1 通常要 3–4 个 slot 的
+   缓冲深度，并配合中断/RTOS 定时器，这部分在 M5（RTOS 集成）做。
 
-## 6. 与「裸机/RTOS L1」路线的关系
+## 7. 与「裸机/RTOS L1」路线的关系
 
 - 这些 kernel 的输入/输出格式已经固定（bank/word 布局 + 定点约定），
   RISC-V 裸机驱动只需按同一布局写 scratchpad、启动、等 done；
-- `sw/include/gpcp_cgra.h` 已加入 `GPCP_OP_LD/ST`、`GPCP_CGRA_SPAD_BASE` 和
-  `GPCP_SPAD_IDX/ADDR` 宏，裸机侧可以直接使用；
+- `sw/include/gpcp_cgra.h` 已加入 `GPCP_OP_LD/ST`、`GPCP_CGRA_SPAD_BASE`、DMA 寄存器
+  （`GPCP_CGRA_DMA_*`）和 `gpcp_cgra_dma_start()`（内含必要的 `fence`），裸机/内核驱动
+  可以直接使用；
+- `sw/soc/dma_bm.c` 是「一个 slot 级流水」的可运行范例：CVA6 只负责发描述符、
+  轮询完成、导出结果，数据搬运全部由拷贝引擎完成；
 - 下一步（M4 第二阶段）：把 `chnest16 → mmse16 → LDPC` 串成一条接收链路，
   由裸机程序按 slot 调度，主机只负责灌数据与读结果。

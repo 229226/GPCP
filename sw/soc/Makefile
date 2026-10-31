@@ -11,18 +11,23 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-all: $(BUILD)/cgra_bm.bin
+PROGS := cgra_bm dma_bm
+
+all: $(PROGS:%=$(BUILD)/%.bin)
 
 $(BUILD):
 	mkdir -p $@
 
-$(BUILD)/cgra_bm.elf: start.S cgra_bm.c link.ld | $(BUILD)
-	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S cgra_bm.c -o $@
-	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/cgra_bm.dis
+$(BUILD)/%.elf: %.c start.S link.ld | $(BUILD)
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S $< -o $@
+	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/$*.dis
 
-$(BUILD)/cgra_bm.bin: $(BUILD)/cgra_bm.elf
+$(BUILD)/%.bin: $(BUILD)/%.elf
 	env -u LD_LIBRARY_PATH $(OBJCOPY) -O binary $< $@
 	@ls -l $@
+
+# keep the ELF listings around for disassembly-driven debugging
+.SECONDARY: $(PROGS:%=$(BUILD)/%.elf)
 
 clean:
 	rm -rf $(BUILD)
