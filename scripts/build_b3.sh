@@ -16,6 +16,15 @@ mkdir -p third_party/dl
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1"; exit 1; }; }
 for t in riscv64-linux-gnu-gcc riscv64-unknown-elf-gcc dtc cpio make git; do need "$t"; done
 
+# ---------------------------------------------------------------- CVA6 patch
+# CLINT-backed `time` CSR (otherwise every rdtime traps into M-mode)
+if [ -d third_party/cva6 ]; then
+  python3 scripts/patch_cva6.py
+else
+  echo "[b3] third_party/cva6 missing: run scripts/fetch_cva6.py first"
+  exit 1
+fi
+
 # ---------------------------------------------------------------- OpenSBI
 if [ ! -d third_party/opensbi ]; then
   git clone --depth 1 https://github.com/riscv-software-src/opensbi.git third_party/opensbi
@@ -51,6 +60,7 @@ if [ ! -f arch/riscv/boot/Image ]; then
     --disable NAMESPACES --enable CC_OPTIMIZE_FOR_SIZE --set-val HZ 100 \
     --enable BLK_DEV_INITRD --enable DEVTMPFS --enable DEVTMPFS_MOUNT \
     --disable STRICT_DEVMEM --enable SERIAL_8250 --enable SERIAL_8250_CONSOLE \
+    --enable RISCV_SBI_V01 --enable SERIAL_EARLYCON_RISCV_SBI \
     --disable RANDOMIZE_BASE --disable DEBUG_INFO
   make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig >/dev/null
   make -j"$(nproc)" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image

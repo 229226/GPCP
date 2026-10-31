@@ -33,7 +33,9 @@ module gpcp_soc #(
     output logic [63:0] ram_rdata,
     // simulation control
     output logic        exit_o,
-    output logic [31:0] exit_code_o
+    output logic [31:0] exit_code_o,
+    // last committed PC (testbench-side tracing, avoids $display in RTL)
+    output logic [63:0] dbg_pc_o
 );
 
   import ariane_pkg::*;
@@ -84,6 +86,7 @@ module gpcp_soc #(
       .irq_i       ({plic_irq, msip[0]}),
       .ipi_i       (1'b0),
       .time_irq_i  (time_irq),
+      .mtime_i     (mtime),
       .debug_req_i (1'b0),
       .rvfi_probes_o (rvfi_probes),
       .noc_req_o   (core_req),
@@ -516,16 +519,23 @@ module gpcp_soc #(
   end
 
   assign ram_rdata = ram[ram_raddr];
+  assign dbg_pc_o   = last_pc;
 
   // ---------------------------------------------------------------- debug PC trace
   logic [63:0] last_pc;
   logic [63:0] dbg_cnt;
+  // trap trace: record kernel -> OpenSBI transitions (bounded output)
+  logic [63:0] prev_pc_q;
+  logic [31:0] trap_trace_cnt;
+  logic [63:0] cur_pc;
   logic [31:0] ar_cnt, aw_cnt, atop_cnt, commit_cnt;
   logic [63:0] last_ar_a, last_aw_a;
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       last_pc <= 64'b0;
       dbg_cnt <= 64'b0;
+      prev_pc_q <= 64'b0;
+      trap_trace_cnt <= 32'b0;
       ar_cnt  <= 32'b0;
       aw_cnt  <= 32'b0;
       atop_cnt<= 32'b0;
@@ -534,8 +544,17 @@ module gpcp_soc #(
       last_aw_a <= 64'b0;
     end else begin
       dbg_cnt <= dbg_cnt + 64'd1;
-      if (rvfi_probes.instr.commit_instr_valid[0])
-        last_pc <= rvfi_probes.instr.commit_instr_pc[0];
+      cur_pc = rvfi_probes.instr.commit_instr_pc[0];
+      if (rvfi_probes.instr.commit_instr_valid[0]) begin
+        last_pc <= cur_pc;
+        // kernel (0xffffffff8...) -> OpenSBI (0x8000_xxxx): this is a trap
+        if ((prev_pc_q[63:32] == 32'hFFFF_FFFF) && (cur_pc[63:32] == 32'h0) &&
+            (cur_pc[31:24] == 8'h80) && (trap_trace_cnt < 32'd32)) begin
+          $display("[trap] from=%h to=%h", prev_pc_q, cur_pc);
+          trap_trace_cnt <= trap_trace_cnt + 32'd1;
+        end
+        prev_pc_q <= cur_pc;
+      end
       if (rvfi_probes.instr.commit_instr_valid != 0) commit_cnt <= commit_cnt + 1;
       if (ar_accept) begin ar_cnt <= ar_cnt + 1; last_ar_a <= core_req.ar.addr; end
       if (aw_accept) begin

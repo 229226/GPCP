@@ -3,10 +3,14 @@
 > 目标：在 B2 的 SoC 上补齐 Linux 所需的外设与语义，启动 **OpenSBI → Linux 6.6 → BusyBox**，
 > 并在用户态访问 CGRA。
 >
-> 状态：**OpenSBI 已完整启动**（打印 banner / 平台信息 / Domain 配置），
-> **Linux 内核已开始执行**（进入内核虚拟地址、清零 BSS、初始化、发起 SBI 调用）。
-> 实测跑到 **4200 万周期**（约 12 分钟仿真）仍在内核早期阶段，尚未打印内核日志；
-> PC 轨迹显示大部分时间在 OpenSBI 的 **CSR 模拟/陷阱处理** 中。见 §7。
+> 状态：**OpenSBI 已完整启动**；**Linux 6.6 内核已进入 earlycon 阶段并输出日志**：
+> ```
+> [    0.000000] earlycon: sbi0 at I/O port 0x0 (options '')
+> [    0.000000] printk: bootconsole [sbi0] enabled
+> [    0.000000] OF: reserved mem: ... mmode_resv0@80040000
+> ```
+> 内核正在 memblock / memmap / 页表初始化阶段推进。受仿真速度（约 55k cycles/s）
+> 限制，跑到 BusyBox 用户态需要 10^8 量级周期（约 30–60 分钟仿真）。见 §8。
 
 ## 1. SoC 更新（相对 B2）
 
@@ -43,7 +47,22 @@ OpenSBI 的 `sbi_atomic_cmpxchg` 在 RVA 下编译成 `lr.w/sc.w`，不是 AMO�
 - `aw.lock=1`：若地址匹配保留项 → B 返回 **EXOKAY**（SC 成功），否则 **OKAY**（SC 失败）；
 - 普通写同地址时清除保留。
 
-## 2. OpenSBI 的两处原型补丁
+## 2. CVA6 补丁：CLINT-backed `time` CSR
+
+CVA6 没有实现只读 CSR `time`（0xC01），每次 `rdtime` 都会陷入 M 模式，由 OpenSBI 的
+`sbi_emulate_csr_read` → `hpm_allowed` 模拟（实测 PC 轨迹长期停留在 `hpm_allowed`）。
+Linux 启动阶段频繁读时间，这会把启动变成陷阱风暴。
+
+`scripts/patch_cva6.py` 做了 4 处修改：
+
+1. `core/csr_regfile.sv`：新增 `mtime_i[63:0]` 输入，`riscv::CSR_TIME` 读取返回它；
+2. `core/cva6.sv`：新增 `mtime_i` 端口并接到 `csr_regfile`；
+3. `corev_apu/src/ariane.sv`：新增 `mtime_i` 端口并接到 `cva6`；
+4. `rtl/soc/gpcp_soc.sv`：把 CLINT 的 `mtime` 接到 `ariane.mtime_i`。
+
+补丁是幂等的，`scripts/build_b3.sh` 会自动调用。
+
+## 3. OpenSBI 的两处原型补丁
 
 见 `patches/opensbi-gpcp.patch`：
 
@@ -60,7 +79,7 @@ make -C third_party/opensbi PLATFORM=generic CROSS_COMPILE=riscv64-linux-gnu- \
      FW_JUMP_ADDR=0x80200000 FW_JUMP_FDT_ADDR=0x81F00000 -j8
 ```
 
-## 3. 镜像布局
+## 4. 镜像布局
 
 | 镜像 | 地址 | 说明 |
 |---|---|---|
@@ -71,17 +90,19 @@ make -C third_party/opensbi PLATFORM=generic CROSS_COMPILE=riscv64-linux-gnu- \
 
 启动参数：`console=ttyS0 earlycon=sbi keep_bootcon loglevel=7 rdinit=/init`。
 
-## 4. 设备树要点（`sw/linux/gpcp.dts`）
+## 5. 设备树要点（`sw/linux/gpcp.dts`）
 
 - `timebase-frequency = 10000000`（mtime 每周期 +1，因此 1 周期 = 100 ns 客机时间）；
 - CLINT / PLIC / UART 与 QEMU virt 一致，Linux 用现成驱动；
 - UART：`reg-shift = <2>`、`reg-io-width = <4>`（OpenSBI 与 Linux 8250 都按 4 字节步进）；
 - `cgra@50000000` 节点（用户态用 `/dev/mem` 访问）。
 
-## 5. 内核与用户态
+## 6. 内核与用户态
 
 内核配置（`scripts/build_b3.sh` 里已固化）：`defconfig` 基础上关闭 SMP/模块/网络/存储/
-调试，开启 initramfs、devtmpfs、8250 console，`STRICT_DEVMEM=n`，`HZ=100`。
+调试，开启 initramfs、devtmpfs、8250 console，`STRICT_DEVMEM=n`，`HZ=100`；
+另外必须开启 **`RISCV_SBI_V01` + `SERIAL_EARLYCON_RISCV_SBI`**，
+否则 `earlycon=sbi` 在 6.6 内核里没有驱动（早期日志全静默）。
 
 用户态：
 - BusyBox 1.36.1，静态链接（`riscv64-linux-gnu-gcc -static`）；
@@ -89,7 +110,7 @@ make -C third_party/opensbi PLATFORM=generic CROSS_COMPILE=riscv64-linux-gnu- \
 - `cgra_test`（`sw/linux/cgra_u.c`）用 `/dev/mem` + `mmap` 访问 `0x5000_0000`，
   跑同一个 4×4 矩阵乘，打印结果后写退出寄存器 `0x4001_0000`。
 
-## 6. 复现
+## 7. 复现
 
 ```bash
 # 一次性构建（OpenSBI + 内核 + BusyBox + DTB/initramfs）
@@ -99,7 +120,7 @@ bash scripts/build_b3.sh
 make -C sim/soc linux
 ```
 
-## 7. 已知限制与后续
+## 8. 已知限制与后续
 
 1. **仿真速度**：约 70k cycles/s（4 线程），Linux 启动周期数在 10^8 量级，
    完整到用户态需要较长时间；后续可考虑：
@@ -107,11 +128,8 @@ make -C sim/soc linux
    - 关闭周期性调试打印；
    - 用 QEMU 跑软件侧，RTL 只验证关键路径。
 2. **PLIC 是桩**：无外部中断源，UART 仅轮询输出（无输入）。
-3. **CSR 陷阱开销**：PC 轨迹显示内核启动阶段频繁进入 OpenSBI 的
-   `sbi_emulate_csr_read` / `hpm_allowed`（约 2900 万条提交指令，PC 仍在内核早期）。
-   怀疑内核在读取 `cycle/time/instret` 等 CSR 时不断陷入 M 模式模拟，
-   每次读都付出两次特权切换。下一步：检查 OpenSBI 的 `mcounteren` 设置、
-   或在 CVA6 中实现 S 模式计数器直读，避免高频陷阱。
+3. **CSR 陷阱**：已通过 CLINT-backed `time` CSR 解决（见 §2）。若仍有
+   `cycle/instret` 陷阱，可进一步在 CVA6 中实现对应 CSR 直读。
 4. **缓存一致性**：WT cache 下 AMO 走内存，若目标行同时在 dcache 中，后续普通读可能命中旧行；
    OpenSBI 的用法未触发，但 Linux 高并发场景需要补（AMO 后使行失效）。
 5. **无 SMP**：单 hart。

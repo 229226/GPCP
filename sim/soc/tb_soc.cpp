@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
     std::vector<Image> images;
     std::string dump_path;
     uint64_t max_cycles = 200000000ull;
+    uint64_t trace_every = 0;
     uint32_t results_addr = 0x80002000u;
     uint32_t nwords = 0;
 
@@ -66,6 +67,7 @@ int main(int argc, char** argv) {
         else if (a == "--max-cycles") max_cycles = std::strtoull(next().c_str(), nullptr, 0);
         else if (a == "--results") results_addr = (uint32_t)std::strtoul(next().c_str(), nullptr, 0);
         else if (a == "--nwords") nwords = (uint32_t)std::strtoul(next().c_str(), nullptr, 0);
+        else if (a == "--trace-pc") trace_every = std::strtoull(next().c_str(), nullptr, 0);
     }
     if (images.empty()) {
         std::fprintf(stderr, "no images; use --load file@addr\n");
@@ -113,6 +115,9 @@ int main(int argc, char** argv) {
         cycles++;
         if ((cycles % 10000000ull) == 0)
             std::fprintf(stderr, "[tb] %llu cycles...\n", (unsigned long long)cycles);
+        if (trace_every && (cycles % trace_every) == 0)
+            std::fprintf(stderr, "[pc] cyc=%llu pc=0x%016llx\n",
+                         (unsigned long long)cycles, (unsigned long long)dut->dbg_pc_o);
     }
 
     std::ostringstream os;
