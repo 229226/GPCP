@@ -29,6 +29,7 @@
 #define GPCP_CGRA_PE_BASE      0x1000u   /* 0x1000 + pe*32 + reg*4             */
 #define GPCP_CGRA_PE_ACC       0x1200u   /* 0x1200 + pe*4                      */
 #define GPCP_CGRA_IMEM_BASE    0x2000u   /* 0x2000 + idx*4, idx=cycle*NPES+pe  */
+#define GPCP_CGRA_SPAD_BASE    0xA000u   /* 0xA000 + bank*128 + word*4 (32x32) */
 
 #define GPCP_CGRA_CTRL_START   (1u << 0)
 #define GPCP_CGRA_CTRL_CLRDONE (1u << 1)
@@ -51,6 +52,8 @@
 #define GPCP_OP_MAX   11u
 #define GPCP_OP_MIN   12u
 #define GPCP_OP_MACL  13u
+#define GPCP_OP_LD    14u   /* dst = spad[imm[9:0]]  ({bank[4:0],word[4:0]}) */
+#define GPCP_OP_ST    15u   /* spad[imm[9:0]] = a                          */
 
 #define GPCP_SRC_R0   0u
 #define GPCP_SRC_N    8u
@@ -124,5 +127,9 @@ static inline uint32_t gpcp_cgra_pe_acc(uintptr_t base, uint32_t pe)
 {
     return gpcp_cgra_read(base, GPCP_CGRA_PE_ACC + pe * 4u);
 }
+
+/* scratchpad helpers */
+#define GPCP_SPAD_IDX(bank, word)   ((((bank) & 0x1Fu) << 5) | ((word) & 0x1Fu))
+#define GPCP_SPAD_ADDR(bank, word)  (GPCP_CGRA_SPAD_BASE + ((bank) * 128u) + ((word) * 4u))
 
 #endif /* GPCP_CGRA_H */

@@ -57,6 +57,8 @@
 | 11 | `MAX` | `dst = signed_max(a, b)` |
 | 12 | `MIN` | `dst = signed_min(a, b)` |
 | 13 | `MACL` | `acc += a*b`，且 `link = acc`（脉动链） |
+| 14 | `LD` | `dst = scratchpad[imm[9:0]]`，`imm = {bank[4:0], word[4:0]}` |
+| 15 | `ST` | `scratchpad[imm[9:0]] = a` |
 
 ### 2.2 源选择器
 
@@ -87,7 +89,8 @@
 | `0x000C` | R | `ID` = `{0xCA, ISA_VER=0x01, N, N}` |
 | `0x1000 + pe*32 + r*4` | RW | PE 寄存器 `r0..r7`（预装载 / 回读） |
 | `0x1200 + pe*4` | RW | PE 累加器 |
-| `0x2000 + idx*4` | RW | 指令存储器，`idx = cycle*NPES + pe`（8192 words） |
+| `0x2000 + idx*4` | RW | 指令存储器，`idx = cycle*NPES + pe`（8192 words，占 0x2000–0x9FFF） |
+| `0xA000 + bank*128 + word*4` | RW | 分布式 scratchpad，32 banks × 32 words × 32-bit（4 KiB） |
 
 - PE 编号：`pe = row*N + col`（行优先，`(0,0)` 为左上）。
 - AXI 写为单 outstanding；`wr_en` 在总线握手后一拍产生脉冲。

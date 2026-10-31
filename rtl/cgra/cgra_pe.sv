@@ -29,6 +29,12 @@ module cgra_pe (
     input  logic [31:0] host_wdata,
     input  logic [3:0]  host_raddr,      // 0..7 = r0..r7, 8 = acc
     output logic [31:0] host_rdata,
+    // scratchpad interface (bank/word address in imm[9:0])
+    output logic [9:0]  spad_raddr,
+    input  logic [31:0] spad_rdata,
+    output logic        spad_we,
+    output logic [9:0]  spad_waddr,
+    output logic [31:0] spad_wdata,
     // emitted value for neighbours
     output logic [31:0] link_out
 );
@@ -42,6 +48,8 @@ module cgra_pe (
   logic [31:0] val_a, val_b, prod;
   logic        wr, acc_wr, link_wr;
   logic [31:0] wval, acc_nxt, link_nxt;
+
+  assign spad_raddr = imm[9:0];
 
   // ---------------- operand selection ----------------
   always_comb begin
@@ -93,6 +101,9 @@ module cgra_pe (
     wr      = 1'b0;
     acc_wr  = 1'b0;
     link_wr = 1'b0;
+    spad_we = 1'b0;
+    spad_waddr = 10'b0;
+    spad_wdata = 32'b0;
     wval    = 32'b0;
     acc_nxt = acc;
     link_nxt = link;
@@ -121,6 +132,17 @@ module cgra_pe (
         acc_nxt  = acc + prod;
         link_wr  = 1'b1;
         link_nxt = acc + prod;
+      end
+      OP_LD: begin
+        // load from the distributed scratchpad (combinational read)
+        wr   = 1'b1;
+        wval = spad_rdata;
+      end
+      OP_ST: begin
+        // store operand A into the scratchpad
+        spad_we    = 1'b1;
+        spad_waddr = imm[9:0];
+        spad_wdata = val_a;
       end
       OP_LACC: begin
         acc_wr   = 1'b1;

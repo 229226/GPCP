@@ -99,6 +99,8 @@ int main(int argc, char** argv) {
 
     std::string prog_path, preload_path, din_path, dump_path;
     int cycles = 0;
+    uint32_t spad_start = 0;
+    int spad_count = 0;
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -111,6 +113,10 @@ int main(int argc, char** argv) {
         else if (a == "--din") din_path = next();
         else if (a == "--dump") dump_path = next();
         else if (a == "--cycles") cycles = std::atoi(next().c_str());
+        else if (a == "--spad-dump") {
+            spad_start = (uint32_t)strtoul(next().c_str(), nullptr, 0);
+            spad_count = std::atoi(next().c_str());
+        }
     }
     if (prog_path.empty() || cycles <= 0) {
         std::fprintf(stderr, "usage: %s --prog prog.hex --cycles N [--preload p.txt] [--din d.txt] [--dump out.txt]\n", argv[0]);
@@ -176,6 +182,12 @@ int main(int argc, char** argv) {
             os << buf;
         }
         std::snprintf(buf, sizeof(buf), "pe %d acc 0x%08x\n", p, axil_rd(0x1200 + p * 4));
+        os << buf;
+    }
+
+    for (int i = 0; i < spad_count; i++) {
+        uint32_t addr = spad_start + (uint32_t)i * 4;
+        std::snprintf(buf, sizeof(buf), "spad %04x 0x%08x\n", addr, axil_rd(addr));
         os << buf;
     }
 

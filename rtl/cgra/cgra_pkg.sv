@@ -46,6 +46,8 @@ package cgra_pkg;
   localparam logic [3:0] OP_MAX  = 4'd11;  // dst = max(a, b)   (signed)
   localparam logic [3:0] OP_MIN  = 4'd12;  // dst = min(a, b)   (signed)
   localparam logic [3:0] OP_MACL = 4'd13;  // acc += a*b and emit acc to the link (systolic chain)
+  localparam logic [3:0] OP_LD   = 4'd14;  // dst = scratchpad[imm[9:0]]
+  localparam logic [3:0] OP_ST   = 4'd15;  // scratchpad[imm[9:0]] = a
 
   // ---------------- operand selectors ----------------
   // 0..7  : local register file r0..r7
@@ -73,6 +75,14 @@ package cgra_pkg;
   localparam logic [15:0] REG_CYCLE_CNT  = 16'h0008;
   localparam logic [15:0] REG_ID         = 16'h000C; // R: {magic, isa_ver, n, n}
 
+  // ---------------- scratchpad (distributed, banked) ----------------
+  // 32 banks x 32 words x 32 bit.  Bank b is normally owned by PE b (data),
+  // banks 16..31 are used for per-PE twiddles/coefficients in the kernels.
+  parameter int SPAD_BANKS = 32;
+  parameter int SPAD_WORDS = 32;
+  parameter int SPAD_BYTES = SPAD_BANKS * SPAD_WORDS * 4;   // 4 KiB
+  localparam logic [15:0] REG_SPAD_BASE  = 16'hA000; // bank*128 + word*4
+
   localparam logic [15:0] REG_PE_BASE    = 16'h1000; // 16 PEs x 8 regs x 4B
   localparam logic [15:0] REG_PE_ACC     = 16'h1200; // 16 PEs x 4B
   localparam logic [15:0] REG_IMEM_BASE  = 16'h2000; // 8192 words x 4B
@@ -93,6 +103,11 @@ package cgra_pkg;
       input logic [15:0] imm
   );
     pack_inst = {1'b0, op, src_a, src_b, dst, imm};
+  endfunction
+
+  // scratchpad address: {bank[4:0], word[4:0]} in the low 10 bits of imm
+  function automatic logic [15:0] spad_addr(input logic [4:0] bank, input logic [4:0] word);
+    spad_addr = {6'b0, bank, word};
   endfunction
 
 endpackage

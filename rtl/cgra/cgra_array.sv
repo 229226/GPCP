@@ -1,9 +1,15 @@
 // -----------------------------------------------------------------------------
 // GPCP CGRA - N x N mesh of PEs with nearest-neighbour links
+//              + 32-bank distributed scratchpad (L1 data plane support)
 //
-// The west boundary of PE(0,0) is driven by the streaming input `din`, which
-// lets kernels shift a sample stream through the array along a snake path.
-// Host access is decoded here so that the top level stays simple.
+// Scratchpad: 32 banks x 32 words x 32-bit (4 KiB).
+//   - every PE has one read port (any bank/word) and one write port
+//   - bank b normally stores element b (data), banks 16..31 hold per-PE
+//     coefficients / twiddles
+//   - host window: 0x3000 + (bank*32 + word)*4
+//
+// The scheduler is responsible for avoiding multiple simultaneous accesses to
+// the same bank (the kernels in tools/cgra.py are written with that in mind).
 // -----------------------------------------------------------------------------
 `ifndef CGRA_ARRAY_SV
 `define CGRA_ARRAY_SV
@@ -26,13 +32,66 @@ module cgra_array (
 
   import cgra_pkg::*;
 
-  localparam int N    = CGRA_N;
-  localparam int NPES = CGRA_NPES;
+  localparam int N     = CGRA_N;
+  localparam int NPES  = CGRA_NPES;
+  localparam int BANKS = SPAD_BANKS;
+  localparam int SW    = SPAD_WORDS;
 
   logic [31:0] links [0:N-1][0:N-1];           // link outputs of each PE
   logic [31:0] pe_rdata [0:NPES-1];            // host readback of each PE
 
-  // ---------------- host address decode ----------------
+  // ---------------- scratchpad ----------------
+  logic [31:0] spad [0:BANKS-1][0:SW-1];
+
+  logic [9:0]  pe_raddr [0:NPES-1];
+  logic [31:0] pe_rdata_sp [0:NPES-1];
+  logic        pe_we [0:NPES-1];
+  logic [9:0]  pe_waddr [0:NPES-1];
+  logic [31:0] pe_wdata [0:NPES-1];
+
+  // host scratchpad access
+  logic        host_sp_we;
+  logic [4:0]  host_bank, host_word;
+  logic [9:0]  host_idx;
+
+  always_comb begin
+    host_sp_we = 1'b0;
+    host_bank  = 5'b0;
+    host_word  = 5'b0;
+    host_idx   = 10'b0;
+    if ((wr_addr >= REG_SPAD_BASE) &&
+        (wr_addr < (REG_SPAD_BASE + SPAD_BYTES))) begin
+      host_idx  = (wr_addr - REG_SPAD_BASE) >> 2;
+      host_bank = host_idx[9:5];
+      host_word = host_idx[4:0];
+      host_sp_we = wr_en && (wr_addr[1:0] == 2'b00);
+    end
+  end
+
+  // one clocked block owns the whole scratchpad (single driver for Verilator)
+  always_ff @(posedge clk) begin
+    for (int b = 0; b < BANKS; b++) begin
+      automatic logic        found;
+      automatic logic [9:0]  wa;
+      automatic logic [31:0] wd;
+      found = 1'b0;
+      wa    = 10'b0;
+      wd    = 32'b0;
+      for (int p = 0; p < NPES; p++) begin
+        if (!found && pe_we[p] && (pe_waddr[p][9:5] == b[4:0])) begin
+          found = 1'b1;
+          wa    = pe_waddr[p];
+          wd    = pe_wdata[p];
+        end
+      end
+      if (host_sp_we && (host_bank == b[4:0]))
+        spad[b][host_word] <= wr_data;
+      else if (found)
+        spad[b][wa[4:0]] <= wd;
+    end
+  end
+
+  // ---------------- host register decode (PE windows) ----------------
   logic [3:0] host_pe;
   logic [3:0] host_reg;       // write register index
   logic [3:0] rd_reg;         // read register index
@@ -95,8 +154,16 @@ module cgra_array (
             .host_wdata(wr_data),
             .host_raddr(rd_reg),
             .host_rdata(pe_rdata[PE_ID]),
+            .spad_raddr(pe_raddr[PE_ID]),
+            .spad_rdata(pe_rdata_sp[PE_ID]),
+            .spad_we   (pe_we[PE_ID]),
+            .spad_waddr(pe_waddr[PE_ID]),
+            .spad_wdata(pe_wdata[PE_ID]),
             .link_out  (links[gi][gj])
         );
+
+        // combinational scratchpad read (one read port per PE)
+        assign pe_rdata_sp[PE_ID] = spad[pe_raddr[PE_ID][9:5]][pe_raddr[PE_ID][4:0]];
       end
     end
   endgenerate
@@ -108,6 +175,11 @@ module cgra_array (
       rd_data = pe_rdata[rd_addr[8:5]];
     else if (rd_addr >= REG_PE_ACC && rd_addr < (REG_PE_ACC + 16'h40))
       rd_data = pe_rdata[rd_addr[5:2]];
+    else if ((rd_addr >= REG_SPAD_BASE) &&
+             (rd_addr < (REG_SPAD_BASE + SPAD_BYTES)) &&
+             (rd_addr[1:0] == 2'b00))
+      rd_data = spad[((rd_addr - REG_SPAD_BASE) >> 2) >> 5]
+                     [((rd_addr - REG_SPAD_BASE) >> 2) & 5'h1F];
   end
 
 endmodule

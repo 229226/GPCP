@@ -113,6 +113,9 @@ module cgra_top (
       endcase
     end else if (rd_addr >= REG_PE_BASE && rd_addr < (REG_PE_ACC + 16'h40)) begin
       rd_data = pe_rd;
+    end else if ((rd_addr >= REG_SPAD_BASE) &&
+                 (rd_addr < (REG_SPAD_BASE + SPAD_BYTES))) begin
+      rd_data = pe_rd;
     end else if ((rd_addr >= REG_IMEM_BASE) &&
                  (rd_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
       rd_data = imem[(rd_addr - REG_IMEM_BASE) >> 2];

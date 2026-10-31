@@ -7,7 +7,8 @@
 
 - **M0**：4×4 CGRA 阵列 RTL（int16 MAC / int32 累加，最近邻 1 周期路由）、全局定序器、
   AXI4-Lite 从口、Verilator 模型、Python 微码汇编器 + 黄金模型比对；
-  已通过 `matmul4x4`、`fir16`。
+  已通过 `matmul4x4`、`fir16`，以及 L1 数据面 `fft16`、`chnest16`、`mmse16`、`ldpc_cn`
+  （scratchpad + `LD/ST` 扩展，见 `docs/07-l1-dataplane.md`）。
 - **B2**：真实 **CVA6（RV64GC）** 核在 Verilator 中启动裸机程序，通过 AXI4 驱动 CGRA，
   回读结果与黄金模型一致（2058 周期）。
 - **B3（进行中）**：SoC 升级为 Linux 可用映射（CLINT / PLIC / 16550 UART / 64 MiB RAM，
