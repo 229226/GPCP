@@ -17,7 +17,7 @@ echo "--- memory ---"
 grep MemTotal /proc/meminfo
 
 echo "--- cgra test ---"
-/dev/cgra_test
+/bin/cgra_test
 
 echo "--- done ---"
 poweroff -f

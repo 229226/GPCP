@@ -335,17 +335,38 @@ module gpcp_soc #(
             automatic logic [63:0] old_w;
             automatic logic [63:0] new_w;
             automatic logic [2:0]  lane0;
-            automatic int          nbytes;
+            automatic logic        is64;
             old_w  = ram[core_req.aw.addr[25:3]];
             new_w  = old_w;
             lane0  = core_req.aw.addr[2:0];
-            nbytes = 1 << core_req.aw.size;
-            for (int b = 0; b < 8; b++) begin
-              if ((b >= lane0) && (b < lane0 + nbytes)) begin
-                case (core_req.aw.atop[5:4])
-                  2'b11: new_w[b*8 +: 8] = core_req.w.data[b*8 +: 8];        // swap
-                  2'b01: new_w[b*8 +: 8] = old_w[b*8 +: 8] + core_req.w.data[b*8 +: 8]; // add (bytewise fallback)
-                  default: new_w[b*8 +: 8] = core_req.w.data[b*8 +: 8];      // treat as swap
+            is64   = (core_req.aw.size == 3'b011);
+            if (core_req.aw.atop[5:4] == 2'b11) begin
+              // ATOMICSWAP: store the operand
+              for (int b = 0; b < 8; b++)
+                if ((b >= lane0) && (b < lane0 + (1 << core_req.aw.size)))
+                  new_w[b*8 +: 8] = core_req.w.data[b*8 +: 8];
+            end else begin
+              // ATOMICLOAD/STORE + op
+              if (is64) begin
+                case (core_req.aw.atop[2:0])
+                  3'b001: new_w = old_w & ~core_req.w.data;   // CLR
+                  3'b010: new_w = old_w ^ core_req.w.data;    // EOR
+                  3'b011: new_w = old_w | core_req.w.data;    // SET
+                  default: new_w = old_w + core_req.w.data;   // ADD
+                endcase
+              end else if (lane0 == 3'd0) begin
+                case (core_req.aw.atop[2:0])
+                  3'b001: new_w[31:0] = old_w[31:0] & ~core_req.w.data[31:0];
+                  3'b010: new_w[31:0] = old_w[31:0] ^ core_req.w.data[31:0];
+                  3'b011: new_w[31:0] = old_w[31:0] | core_req.w.data[31:0];
+                  default: new_w[31:0] = old_w[31:0] + core_req.w.data[31:0];
+                endcase
+              end else begin
+                case (core_req.aw.atop[2:0])
+                  3'b001: new_w[63:32] = old_w[63:32] & ~core_req.w.data[63:32];
+                  3'b010: new_w[63:32] = old_w[63:32] ^ core_req.w.data[63:32];
+                  3'b011: new_w[63:32] = old_w[63:32] | core_req.w.data[63:32];
+                  default: new_w[63:32] = old_w[63:32] + core_req.w.data[63:32];
                 endcase
               end
             end

@@ -1,4 +1,9 @@
-# Verilator model of the GPCP SoC (CVA6 + CGRA), milestone B2
+# Verilator model of the GPCP SoC (CVA6 + CGRA), milestone B2/B3
+#
+# NOTE: --threads must stay 1.  With --threads >1 this design (CVA6 + our AXI
+# slave) miscompiles under Verilator 5.035: OpenSBI/Kernel hangs at random
+# points (e.g. _start_hang / fw_platform_init fail path) even though the RTL
+# is correct.  Verified by rebuilding with --threads 1.
 #
 #   make          build sim/soc/build/Vgpcp_soc (this takes a while: CVA6 is large)
 #   make run      run the bare-metal CGRA test and compare results
@@ -24,7 +29,7 @@ SRCS := rtl/cgra/cgra_pkg.sv \
 	rtl/soc/gpcp_soc.sv \
 	sim/soc/tb_soc.cpp
 
-VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 4 \
+VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	--top-module gpcp_soc \
 	-Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-WIDTH -Wno-WIDTHTRUNC \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \

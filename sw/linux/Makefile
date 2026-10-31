@@ -26,8 +26,8 @@ $(BUILD)/initramfs.cpio: init $(BUILD)/cgra_test $(BB)
 	done
 	cp init $(INITRD)/init
 	chmod +x $(INITRD)/init
-	cp $(BUILD)/cgra_test $(INITRD)/dev/cgra_test
-	chmod +x $(INITRD)/dev/cgra_test
+	cp $(BUILD)/cgra_test $(INITRD)/bin/cgra_test
+	chmod +x $(INITRD)/bin/cgra_test
 	cd $(INITRD) && find . -print0 | cpio --null -o -H newc > ../initramfs.cpio
 	@ls -lh $(BUILD)/initramfs.cpio
 

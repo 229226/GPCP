@@ -120,7 +120,15 @@ bash scripts/build_b3.sh
 make -C sim/soc linux
 ```
 
-## 8. 已知限制与后续
+## 8. 两个必须记住的仿真坑
+
+1. **Verilator `--threads >1` 会把这个设计编译错**：现象是 OpenSBI/内核在随机位置
+   “挂死”（`_start_hang`、`fw_platform_init` 的 fail 路径等），但同一 RTL 单线程运行正常。
+   结论：`sim/soc/Makefile` 固定 `--threads 1`。
+2. **`$display` 放在时钟块里 + 多线程**会触发类似的诡异行为，因此 SoC 不再在 RTL 里打印
+   调试信息，改为把 `last_pc` 作为 `dbg_pc_o` 端口输出，由 testbench 的 `--trace-pc` 打印。
+
+## 9. 已知限制与后续
 
 1. **仿真速度**：约 70k cycles/s（4 线程），Linux 启动周期数在 10^8 量级，
    完整到用户态需要较长时间；后续可考虑：
