@@ -165,7 +165,34 @@ CPU: 填描述符 → RING_TAIL += n          （一次 fence）
 插两次阵列运行，其余全部由引擎自主完成，`RING_HEAD` 最终等于 `RING_TAIL`，
 四个描述符的状态字都是 `0xC0DE0000 | len`。
 
-### 4.5 集成时发现的缺陷（都已修）
+### 4.5 接收链：chnest → MMSE → LDPC-CN（融合微码 + 环 + 双缓冲）
+
+`sw/soc/rxchain_bm.c` 把三个既有 kernel 拼成**一段融合微码**，每个 slot 一次阵列运行
+（87 拍），数据全部通过 scratchpad 传递，不再经 CPU 搬中间结果：
+
+| 周期 | 阶段 | 读（页内 bank p） | 写 |
+|---|---|---|---|
+| 0–14 | LS 信道估计 | word 0–3（Yr,Yi,Xr,Xi） | word 4,5（Hr,Hi） |
+| 15–34 | MMSE 分子 + \|H\|² | word 4,5（H）与 2,3（Y） | word 20,21,22（Nr,Ni,\|H\|²） |
+| 35–86 | LDPC 校验节点（min-sum） | word 20,21,22 与 4（4 条消息） | word 4,5,6（min1,min2,sign） |
+
+- 除法仍在 CPU（MMSE 只算分子与 \|H\|²，与单独 kernel 一致）；LDPC 的 4 条消息取
+  `{Nr, Ni, |H|², Hr}`——这是**结构上的链路串接**（数据在片内按 slot 流动），
+  不是 PHY 意义上完整的「解调→LLR」链；
+- 输入 4 字/bank、输出 3 字/bank，都用 2D 描述符（`STRIDE=32, ROW=4/3`）；
+- 调度（CPU 只推进 `RING_TAIL`）：
+  ```
+  ring: IN0(p0) IN1(p1) | OUT0(p0) IN2(p0) | OUT1(p1) IN3(p1) | OUT2(p0) OUT3(p1)
+  数组跑 p0 时引擎在 p1 上出/入 —— 同一拍访问不同 bank 组（双缓冲）
+  ```
+- 实测：**4 个 slot 用 1923 周期（481 周期/slot）**，其中阵列等待 1082、描述符等待 548，
+  即阵列时间（87 拍）的 5.5 倍（其余是 DMA 搬运与中断/唤醒开销）；8 个描述符全部由
+  引擎自主完成，`RING_HEAD == RING_TAIL`；
+- 一个重要的软件约束（本轮踩到并修好）：**粘滞中断状态位是 W1C、且 ISR 一次清两位**，
+  所以「等待阵列完成」不能轮询该状态位（会被并发的 DMA 中断清掉而永久错过），
+  必须在 ISR 里累加**完成计数**（与 `RING_DONE` 同样的"进度"语义）。
+
+### 4.6 集成时发现的缺陷（都已修）
 
 | 现象 | 根因 | 修复 |
 |---|---|---|
@@ -179,6 +206,7 @@ CPU: 填描述符 → RING_TAIL += n          （一次 fence）
 | AXI 化之后所有数据读成 0 | `dma_baddr` 误声明成 16 位，`0x8000_0478` 被截成 `0x0478`，地址判成非 RAM | 改成 32 位 |
 | OUT 方向第二个突发写回第一突发的数据 | W 阶段把 `dma_beat` 用到 7，进下一个 `D_SPAD_R` 前没归零 | 续突发时把 beat 清零 |
 | 环模式的 OUT 描述符跑完不推进 head | AXI 重写时只给 IN 路径加了「写状态字」分支 | OUT 完成也走 `wr_status → D_AW → D_BRESP` |
+| 接收链偶发挂死（等阵列） | 轮询粘滞 IRQ 状态位，ISR 处理并发 DMA 中断时把 ARR 位一起 W1C 清掉 → 永久错过 | ISR 里累加阵列完成计数，等待改成「进度 >= 目标」 |
 
 第四条是 ABI 层面的坑：**只要寄存器窗口是 32 位、而 CPU 会合并相邻写，就必须保证
 「一次 store 就能表达一个完整动作」或中间插入 `fence`**。ABI 里 `gpcp_cgra_array_start()`
@@ -216,10 +244,15 @@ python3 tools/cgra.py test --kernel fft16
    DU 的 L1 通常要 3–4 个 slot 的缓冲深度。
 3. **FFT 规模**：目前 16 点（demo 用），5G NR 需要 4096 点；
    路线是「16 点 kernel + 多级分解 + 旋转因子表」，或在阵列里做多级流水。
-4. **MMSE 除法**：留给 CPU；若要完全 offload，可加倒数 LUT 或 Newton-Raphson 微码。
-5. **LDPC**：目前是校验节点核心（min1/min2/sign），边输出与迭代调度未做；
+4. **接收链是结构演示**：chnest → MMSE → LDPC-CN 串起来了，但 MMSE 除法仍在 CPU、
+   LDPC 的输入是 `{Nr,Ni,|H|²,Hr}` 而非真实 LLR，且只做了单次校验节点更新
+   （没有迭代/边消息存储）；真正的接收链还需要解调（QAM 软判决）+ 速率解匹配 + 分层调度。
+5. **MMSE 除法**：留给 CPU；若要完全 offload，可加倒数 LUT 或 Newton-Raphson 微码。
+6. **LDPC**：目前是校验节点核心（min1/min2/sign），边输出与迭代调度未做；
    5G NR 的 BG1/BG2 需要更大的消息存储（当前 8 KiB scratchpad 不够，需扩到 64–128 KiB）。
-6. **实时性**：中断已可用（`wfi` 唤醒），但还没有 RTOS 定时器/slot 调度框架。
+7. **实时性**：中断已可用（`wfi` 唤醒），但还没有 RTOS 定时器/slot 调度框架。
+   现在整条链 481 周期/slot（16 子载波），离真实 slot（0.5 ms ≈ 50k 周期 @100 MHz）
+   还有规模化问题。
 
 ## 7. 与「裸机/RTOS L1」路线的关系
 

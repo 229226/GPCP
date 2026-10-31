@@ -35,7 +35,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring linux clean
+.PHONY: all run run-dma run-irq run-ring run-rxchain linux clean
 
 all:
 	mkdir -p $(ROOT)/$(OBJ)
@@ -70,6 +70,14 @@ run-ring: all
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/ring_bm.bin@0x80000000 --results 0x80010000 --nwords 40 \
 		--dump $(ROOT)/$(OBJ)/ring_dump.txt
 	python3 $(ROOT)/tools/check_ring.py $(ROOT)/$(OBJ)/ring_dump.txt
+
+# L1 receive chain: chnest -> mmse -> LDPC-CN, fused microcode per slot, ring +
+# double buffering (array works one page while the engine fills/drains the other)
+run-rxchain: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/rxchain_bm.bin@0x80000000 --results 0x80010000 --nwords 101 \
+		--dump $(ROOT)/$(OBJ)/rxchain_dump.txt
+	python3 $(ROOT)/tools/check_rxchain.py $(ROOT)/$(OBJ)/rxchain_dump.txt
 
 # B3: OpenSBI + Linux + initramfs
 linux: all

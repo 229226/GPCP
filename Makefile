@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring linux
+.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain linux
 
 all: test
 
@@ -33,6 +33,10 @@ soc-run-irq:
 # L1 data plane: descriptor ring + burst copy
 soc-run-ring:
 	$(MAKE) -C sim/soc run-ring
+
+# L1 receive chain: chnest -> MMSE -> LDPC-CN over the ring + double buffering
+soc-run-rxchain:
+	$(MAKE) -C sim/soc run-rxchain
 
 # B3: OpenSBI + Linux on the SoC
 linux:
