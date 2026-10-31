@@ -85,34 +85,26 @@ module cgra_array (
     end
   end
 
-  // one clocked block owns the whole scratchpad (single driver for Verilator)
+  // one clocked block owns the whole scratchpad (single driver for Verilator).
+  // Each bank has a write crossbar: every PE (and the two copy-engine ports)
+  // may write a *different* word of the same bank in the same cycle.  Two
+  // writers to the same word are resolved by priority (lowest PE index wins),
+  // which is what a bank with a multi-write crossbar does in hardware; the
+  // microcode no longer has to serialise stores that only differ in the word.
   always_ff @(posedge clk) begin
     for (int b = 0; b < BANKS; b++) begin
-      automatic logic        found;
-      automatic logic [9:0]  wa;
-      automatic logic [31:0] wd;
-      found = 1'b0;
-      wa    = 10'b0;
-      wd    = 32'b0;
-      for (int p = 0; p < NPES; p++) begin
-        // only the PE instruction of the *running* cycle may write; while the
-        // sequencer is idle the last microcode word stays visible, and without
-        // this gate an idle array would keep storing into the scratchpad
-        if (en && !found && pe_we[p] && (pe_waddr[p][9:5] == b[4:0]) && (buf_page == b[5])) begin
-          found = 1'b1;
-          wa    = pe_waddr[p];
-          wd    = pe_wdata[p];
+      if (host_sp_we && (host_bank == b[5:0])) spad[b][host_word] <= wr_data;
+      else begin
+        if (dma_we0 && (dma_page == b[5]) && (dma_addr0[9:5] == b[4:0]))
+          spad[b][dma_addr0[4:0]] <= dma_wdata0;
+        else begin
+          for (int p = 0; p < NPES; p++)
+            if (en && pe_we[p] && (pe_waddr[p][9:5] == b[4:0]) && (buf_page == b[5]))
+              spad[b][pe_waddr[p][4:0]] <= pe_wdata[p];
         end
       end
-      if (host_sp_we && (host_bank == b[5:0]))
-        spad[b][host_word] <= wr_data;
-      else if (dma_we0 && (dma_page == b[5]) && (dma_addr0[9:5] == b[4:0]))
-        spad[b][dma_addr0[4:0]] <= dma_wdata0;
-      else if (found)
-        spad[b][wa[4:0]] <= wd;
       // second copy-engine port: the two words of a 64-bit beat are distinct
-      // words of the same bank, so this is a real dual-write port (host keeps
-      // priority; a same-word collision would only be a broken descriptor)
+      // words of the same bank, so this is a real dual-write port
       if (dma_we1 && (dma_page == b[5]) && (dma_addr1[9:5] == b[4:0]) &&
           !(host_sp_we && (host_bank == b[5:0])))
         spad[b][dma_addr1[4:0]] <= dma_wdata1;

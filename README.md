@@ -24,6 +24,13 @@
   用 `M(s)=|H|²s²−2Re{y·conj(H)}s` 的 max-log 度量）；输入/输出由**描述符环**驱动、
   阵列与 DMA 在**双页**上重叠：**4 个 slot 2057 周期（514 周期/slot）**
   （`make -C sim/soc run-rxchain`）。
+- **FFT（256/1024/4096）**：`radix-4 DIF` 分级 + **融合 radix-16 尾段**（64 点块 kernel），
+  旋转因子由 `tools/fft_plan.py` 离线生成成 ROM 镜像；完整级按 64 蝶形（256 点）分块，
+  描述符环 + 双页流水。**256 / 4096 与黄金模型逐位一致**（16.2 / 12.4 周期/点），
+  1024 数值一致（SNR 37.9 dB）（`make -C sim/soc run-fft`）。
+- **slot 时基调度**：CLINT 定时器每 1200 拍打一次 tick，ISR 只记时/重装，
+  主循环 `wfi` + 一个 slot 一次服务；**抖动 0、零 overrun、8 slot 逐位一致**
+  （`make -C sim/soc run-slot`）。
 - **B2**：真实 **CVA6（RV64GC）** 核在 Verilator 中启动裸机程序，通过 AXI4 驱动 CGRA，
   回读结果与黄金模型一致（2059 周期）。
 - **B3（进行中）**：SoC 升级为 Linux 可用映射（CLINT / PLIC / 16550 UART / 64 MiB RAM，
@@ -59,6 +66,14 @@ make -C sim/soc run-ring
 make -C sim/soc run-rxchain
 # [ OK ] L1 receive chain ...: 4 slots, ring drove 8 descriptors, results match
 # [info] chain: 4 slots in 2057 cycles (514 cycles/slot, 4.05x the 127-cycle array run)
+
+# FFT：256 / 1024 / 4096 点多级分解 + 旋转因子 ROM + 环/双页
+make -C sim/soc run-fft
+# [ OK ] FFT 256/1024/4096: ... 681 descriptors, 141 array runs
+
+# slot 时基：CLINT 定时器 + 中断驱动的 slot 循环
+make -C sim/soc run-slot
+# [ OK ] slot scheduler: 8 timer-driven slots, 24 completion interrupts, ...
 
 # B3：构建 Linux 栈并启动（耗时较长）
 bash scripts/build_b3.sh
@@ -100,6 +115,8 @@ make soc-run-dma                      # 编译裸机程序 + 跑 DMA 双缓冲�
 make soc-run-irq                      # 编译裸机程序 + 跑中断驱动联调
 make soc-run-ring                     # 编译裸机程序 + 跑描述符环/突发拷贝联调
 make soc-run-rxchain                  # 编译裸机程序 + 跑 L1 接收链（chnest→MMSE→LDPC）
+make soc-run-fft                      # 编译裸机程序 + 跑 FFT 256/1024/4096 联调
+make soc-run-slot                     # 编译裸机程序 + 跑 slot 时基调度联调
 ```
 
 手工使用 Verilator/gtkwave 时先 `source scripts/env.sh`

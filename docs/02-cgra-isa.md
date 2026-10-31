@@ -135,6 +135,13 @@ CVA6 的 write-through 单元会把**同一 8 字节字内的两次相邻 32-bit
 这类必须成组写入的寄存器，则用 `fence`（`gpcp_cgra_dma_start()` 已封装）保证顺序。
 SoC 侧对 64-bit store 也会拆成两次 32-bit 寄存器写（见 `gpcp_soc.sv` 的 `cgra_hi_*`）。
 
+### 3.0 scratchpad 写端口模型
+
+每个 bank 在 RTL 模型里带一个**写交叉开关**：同一拍内多个 PE 可以写同一 bank 的
+**不同 word**（同 word 冲突按 PE 编号优先；主机写 > 拷贝引擎 > PE）。FFT kernel
+「16 个 PE 同拍写同一 bank 的不同字」因此不需要拆成多拍；L1 的四个 kernel 仍然
+是非冲突访问。真实 bank 若只有单写口，微码就需要把这些 store 错开（`docs/07` 4.7）。
+
 ### 3.1 拷贝引擎（DMA，突发 + 描述符环）
 
 - 一条描述符 = `{SRC, DST, LEN, PAGE, DIR, STRIDE, ROW}`；两种启动方式：

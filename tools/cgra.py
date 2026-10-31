@@ -593,6 +593,195 @@ def kernel_dma_pingpong() -> Kernel:
                   dma_mem=mem, dma_ops=ops, buf_page=1)
 
 
+
+
+# ---------------------------------------------------------------- FFT stage
+# Microcode for one tiled radix-4 stage (identical to sw/soc/fft_bm.c):
+#   data      word (bi*4 + j)*2 + h   (banks 0..15)
+#   twiddles  word 512 + (m-1)*128 + bi*2 + h
+# 16 rounds of 4 butterflies, one PE = one (butterfly, output m), 28 cycles.
+FFT_TW_BASE = 512
+FFT_TW_WORDS = 384
+FFT_STAGE_CYCLES = 448
+
+
+def _emit_round(prog: Program, base: int, pe: int, m: int,
+                j0: int, jstep: int, st0: int, mstep: int, tw: int):
+    prog.set(base + 0, pe, "ld", dst=4, imm=j0 & 0xFFFF)
+    prog.set(base + 1, pe, "ld", dst=5, imm=(j0 + 1) & 0xFFFF)
+    prog.set(base + 2, pe, "mov", a=4, dst=0)
+    prog.set(base + 3, pe, "mov", a=5, dst=1)
+    for j in (1, 2, 3):
+        w = j0 + j * jstep
+        f = (j * m) & 3
+        prog.set(base + 4 * j + 0, pe, "ld", dst=4, imm=w & 0xFFFF)
+        prog.set(base + 4 * j + 1, pe, "ld", dst=5, imm=(w + 1) & 0xFFFF)
+        if f == 0:
+            prog.set(base + 4 * j + 2, pe, "add", a=0, b=4, dst=0)
+            prog.set(base + 4 * j + 3, pe, "add", a=1, b=5, dst=1)
+        elif f == 1:                       # -i*v = ( v_i, -v_r)
+            prog.set(base + 4 * j + 2, pe, "add", a=0, b=5, dst=0)
+            prog.set(base + 4 * j + 3, pe, "sub", a=1, b=4, dst=1)
+        elif f == 2:
+            prog.set(base + 4 * j + 2, pe, "sub", a=0, b=4, dst=0)
+            prog.set(base + 4 * j + 3, pe, "sub", a=1, b=5, dst=1)
+        else:                              # +i*v = (-v_i,  v_r)
+            prog.set(base + 4 * j + 2, pe, "sub", a=0, b=5, dst=0)
+            prog.set(base + 4 * j + 3, pe, "add", a=1, b=4, dst=1)
+    out = st0 + m * mstep
+    if tw >= 0:
+        prog.set(base + 16, pe, "ld", dst=6, imm=tw & 0xFFFF)
+        prog.set(base + 17, pe, "ld", dst=7, imm=(tw + 1) & 0xFFFF)
+        prog.set(base + 18, pe, "mul", a=0, b=6, dst=2)
+        prog.set(base + 19, pe, "mul", a=1, b=7, dst=3)
+        prog.set(base + 20, pe, "sub", a=2, b=3, dst=2)
+        prog.set(base + 21, pe, "mul", a=0, b=7, dst=3)
+        prog.set(base + 22, pe, "mul", a=1, b=6, dst=4)
+        prog.set(base + 23, pe, "add", a=3, b=4, dst=3)
+        sh = 17
+    else:
+        prog.set(base + 22, pe, "mov", a=0, dst=2)
+        prog.set(base + 23, pe, "mov", a=1, dst=3)
+        sh = 2
+    prog.set(base + 24, pe, "shr", a=2, dst=2, imm=sh)
+    prog.set(base + 25, pe, "shr", a=3, dst=3, imm=sh)
+    prog.set(base + 26, pe, "st", a=2, imm=out & 0xFFFF)
+    prog.set(base + 27, pe, "st", a=3, imm=(out + 1) & 0xFFFF)
+
+
+def kernel_fft_stage(xr, xi, n=256, s=0, q=0):
+    """One tiled radix-4 stage of the FFT, scratchpad-resident (no DMA)."""
+    import fft_plan as fp
+    prog = Program()
+    for r in range(16):
+        for pe in range(16):
+            b, m = pe >> 2, pe & 3
+            bi = 4 * r + b
+            j0 = 2 * bi                     # word = 128*j + 2*bi + h
+            tw = (FFT_TW_BASE + (m - 1) * 128 + bi * 2) if m else -1
+            _emit_round(prog, r * 28, pe, m, j0, 128, j0, 128, tw)
+
+    L = fp.stage_L(n, s)
+    sp = [0] * 1024
+    for (ram_w, sp_w, words, row, stride) in fp.tile_transfers(n, L, q):
+        for i, dst in enumerate(fp.walk(sp_w, words, row, stride)):
+            g = (ram_w + i) // 2
+            h = (ram_w + i) % 2
+            sp[dst] = (xr[g] if h == 0 else xi[g])
+    sp[FFT_TW_BASE:FFT_TW_BASE + FFT_TW_WORDS] = fp.twiddle_words(n, L, q)
+
+    preload = []
+    for w in range(1024):
+        preload.append((spad_addr(w >> 5, w & 31), sp[w] & 0xFFFFFFFF))
+
+    exp = list(sp)
+    for bi in range(64):
+        vr = [exp[j * 128 + 2 * bi] for j in range(4)]
+        vi = [exp[j * 128 + 2 * bi + 1] for j in range(4)]
+        for m in range(4):
+            ar, ai = fp.dft4([fp.wrap32(v) for v in vr], [fp.wrap32(v) for v in vi], m)
+            if m == 0:
+                ar, ai = ar >> 2, ai >> 2
+            else:
+                ar, ai = fp.twiddled(ar, ai,
+                                     fp.wrap32(sp[FFT_TW_BASE + (m - 1) * 128 + bi * 2]),
+                                     fp.wrap32(sp[FFT_TW_BASE + (m - 1) * 128 + bi * 2 + 1]))
+            exp[m * 128 + 2 * bi] = ar
+            exp[m * 128 + 2 * bi + 1] = ai
+
+    def check(st):
+        errs = []
+        for w in range(512):
+            got = st.get(("spad", spad_addr(w >> 5, w & 31)))
+            if got != (exp[w] & 0xFFFFFFFF):
+                if len(errs) < 8:
+                    errs.append(f"spad word {w} (bank {w >> 5} w{w & 31}): got "
+                                f"0x{got:08x} expected 0x{exp[w] & 0xFFFFFFFF:08x}")
+        return errs
+
+    return Kernel("fft_stage", FFT_STAGE_CYCLES, prog.build(FFT_STAGE_CYCLES),
+                  preload, [], check, spad_dump=(spad_addr(0, 0), 32 * 32))
+
+
+
+
+FFT_BLOCK_CYCLES = 336
+
+
+def kernel_fft_block(xr, xi):
+    """Fused 64-point block kernel: the radix-16 tail (L = 64, 16, 4)."""
+    import fft_plan as fp
+    prog = Program()
+    # pass A: L = 64, M = 16, twiddles at 512 + (m-1)*32 + t*2
+    for r in range(4):
+        for pe in range(16):
+            b, m = pe >> 2, pe & 3
+            t = 4 * r + b
+            site = t * 2
+            tw = (FFT_TW_BASE + (m - 1) * 32 + t * 2) if m else -1
+            _emit_round(prog, r * 28, pe, m, site, 32, site, 32, tw)
+    # pass B: L = 16, M = 4, twiddles at 512 + 96 + (m-1)*8 + t2*2
+    for r in range(4):
+        for pe in range(16):
+            b, m = pe >> 2, pe & 3
+            beta = 4 * r + b
+            sb, t2 = beta >> 2, beta & 3
+            site = (sb * 16 + t2) * 2
+            tw = (FFT_TW_BASE + 96 + (m - 1) * 8 + t2 * 2) if m else -1
+            _emit_round(prog, 112 + r * 28, pe, m, site, 8, site, 8, tw)
+    # pass C: L = 4, M = 1, no twiddles
+    for r in range(4):
+        for pe in range(16):
+            b, m = pe >> 2, pe & 3
+            sbn = 4 * r + b
+            site = sbn * 4 * 2
+            _emit_round(prog, 224 + r * 28, pe, m, site, 2, site, 2, -1)
+
+    tw = fp.tail_twiddle_words()
+    preload = [(spad_addr(i >> 5, i & 31), xr[i] & 0xFFFFFFFF) for i in range(64)]
+    preload += [(spad_addr(i >> 5, i & 31), xi[i] & 0xFFFFFFFF) for i in range(0)]
+    preload = []
+    for i in range(64):
+        preload.append((spad_addr((2 * i) >> 5, (2 * i) & 31), xr[i] & 0xFFFFFFFF))
+        preload.append((spad_addr((2 * i + 1) >> 5, (2 * i + 1) & 31), xi[i] & 0xFFFFFFFF))
+    for i in range(len(tw)):
+        w = FFT_TW_BASE + i
+        preload.append((spad_addr(w >> 5, w & 31), tw[i]))
+
+    gr, gi = fp.reference_fft(xr, xi, 64)
+
+    def check(st):
+        errs = []
+        for i in range(64):
+            got_r = st.get(("spad", spad_addr((2 * i) >> 5, (2 * i) & 31)))
+            got_i = st.get(("spad", spad_addr((2 * i + 1) >> 5, (2 * i + 1) & 31)))
+            if got_r != (gr[i] & 0xFFFFFFFF):
+                if len(errs) < 8:
+                    errs.append(f"block X[{i}].re: got 0x{got_r:08x} "
+                                f"expected 0x{gr[i] & 0xFFFFFFFF:08x}")
+            if got_i != (gi[i] & 0xFFFFFFFF):
+                if len(errs) < 8:
+                    errs.append(f"block X[{i}].im: got 0x{got_i:08x} "
+                                f"expected 0x{gi[i] & 0xFFFFFFFF:08x}")
+        return errs
+
+    return Kernel("fft_block", FFT_BLOCK_CYCLES, prog.build(FFT_BLOCK_CYCLES),
+                  preload, [], check, spad_dump=(spad_addr(0, 0), 32 * 32))
+
+
+def build_fft_block_kernel() -> Kernel:
+    rnd = random.Random(52)
+    xr = [rnd.randint(-3000, 3000) for _ in range(64)]
+    xi = [rnd.randint(-3000, 3000) for _ in range(64)]
+    return kernel_fft_block(xr, xi)
+
+def build_fft_stage_kernel() -> Kernel:
+    rnd = random.Random(51)
+    xr = [rnd.randint(-3000, 3000) for _ in range(256)]
+    xi = [rnd.randint(-3000, 3000) for _ in range(256)]
+    return kernel_fft_stage(xr, xi, 256, 0, 0)
+
+
 def build_fft_kernel() -> Kernel:
     rnd = random.Random(11)
     xr = [rnd.randint(-3000, 3000) for _ in range(16)]
@@ -734,7 +923,9 @@ def build_fir_kernel() -> Kernel:
 
 
 KERNELS = {"matmul": build_matmul_kernel, "fir16": build_fir_kernel,
-           "fft16": build_fft_kernel, "chnest16": build_chnest_kernel,
+           "fft16": build_fft_kernel, "fft_stage": build_fft_stage_kernel,
+           "fft_block": build_fft_block_kernel,
+           "chnest16": build_chnest_kernel,
            "mmse16": build_mmse_kernel, "ldpc_cn": build_ldpc_kernel,
            "dma_pingpong": kernel_dma_pingpong}
 

@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain linux
+.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-slot linux
 
 all: test
 
@@ -37,6 +37,14 @@ soc-run-ring:
 # L1 receive chain: chnest -> MMSE -> LDPC-CN over the ring + double buffering
 soc-run-rxchain:
 	$(MAKE) -C sim/soc run-rxchain
+
+# FFT: tiled radix-4 stages + fused radix-16 tail over the descriptor ring
+soc-run-fft:
+	$(MAKE) -C sim/soc run-fft
+
+# Slot time base: CLINT timer drives a slot loop (PLIC + wfi)
+soc-run-slot:
+	$(MAKE) -C sim/soc run-slot
 
 # B3: OpenSBI + Linux on the SoC
 linux:
