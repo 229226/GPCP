@@ -35,7 +35,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma linux clean
+.PHONY: all run run-dma run-irq linux clean
 
 all:
 	mkdir -p $(ROOT)/$(OBJ)
@@ -55,6 +55,14 @@ run-dma: all
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/dma_bm.bin@0x80000000 --results 0x80010000 --nwords 50 \
 		--dump $(ROOT)/$(OBJ)/dma_dump.txt
 	python3 $(ROOT)/tools/check_dma.py $(ROOT)/$(OBJ)/dma_dump.txt
+
+# Interrupt-driven variant: the CPU waits in wfi and the CGRA raises a level
+# interrupt through the PLIC on every copy-engine / array completion
+run-irq: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/irq_bm.bin@0x80000000 --results 0x80010000 --nwords 35 \
+		--dump $(ROOT)/$(OBJ)/irq_dump.txt
+	python3 $(ROOT)/tools/check_irq.py $(ROOT)/$(OBJ)/irq_dump.txt
 
 # B3: OpenSBI + Linux + initramfs
 linux: all

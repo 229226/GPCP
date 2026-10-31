@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm
+PROGS := cgra_bm dma_bm irq_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -21,6 +21,11 @@ $(BUILD):
 $(BUILD)/%.elf: %.c start.S link.ld | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S $< -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/$*.dis
+
+# interrupt test: needs the trap-vector startup instead of the plain one
+$(BUILD)/irq_bm.elf: irq_bm.c start_irq.S link.ld | $(BUILD)
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start_irq.S $< -o $@
+	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/irq_bm.dis
 
 $(BUILD)/%.bin: $(BUILD)/%.elf
 	env -u LD_LIBRARY_PATH $(OBJCOPY) -O binary $< $@

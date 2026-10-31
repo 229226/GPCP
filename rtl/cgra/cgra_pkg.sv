@@ -71,7 +71,9 @@ package cgra_pkg;
   // ---------------- host register map (byte addresses) ----------------
   localparam logic [15:0] REG_CTRL       = 16'h0000; // W: [0] start, [1] clear done
   localparam logic [15:0] REG_STATUS     = 16'h0000; // R: [0] busy, [1] done, [2] idle
-  localparam logic [15:0] REG_NUM_CYCLES = 16'h0004;
+  localparam logic [15:0] REG_NUM_CYCLES = 16'h0004; // W: [15:0] cycles, [16] buffer page,
+                                                     //    [31] start in this write (atomic
+                                                     //    "run" register, see docs/02)
   localparam logic [15:0] REG_CYCLE_CNT  = 16'h0008;
   localparam logic [15:0] REG_ID         = 16'h000C; // R: {magic, isa_ver, n, n}
 
@@ -85,6 +87,13 @@ package cgra_pkg;
   localparam logic [15:0] REG_DMA_PAGE   = 16'h0024; // copy-engine page select (0/1)
   localparam logic [15:0] REG_DMA_STRIDE = 16'h0028; // 2D copy: scratchpad stride between rows
   localparam logic [15:0] REG_DMA_ROW    = 16'h002C; // 2D copy: words per row (0 = linear)
+
+  // ---------------- interrupt (level, sticky until W1C) ----------------
+  localparam logic [15:0] REG_IRQ_STATUS = 16'h0040; // R: [0]=array done [1]=dma done
+                                                     // W: write 1 to clear
+  localparam logic [15:0] REG_IRQ_ENABLE = 16'h0044; // R/W: [0]=array done [1]=dma done
+  localparam int IRQ_ARR = 0;
+  localparam int IRQ_DMA = 1;
 
   // ---------------- scratchpad (distributed, banked) ----------------
   // 32 banks x 32 words x 32 bit.  Bank b is normally owned by PE b (data),

@@ -131,12 +131,14 @@ static void dma_out(int s, uint32_t page, uint32_t *spins)
 }
 
 /* --------------------------------------------------------------- array */
+static void array_start(uint32_t page)
+{
+    gpcp_cgra_array_start(CGRA_BASE, page, CYCLES);
+}
+
 static void array_run(uint32_t page, uint32_t *spins)
 {
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_BUF_PAGE, page);
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_CTRL, GPCP_CGRA_CTRL_CLRDONE);
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_NUM_CYCLES, CYCLES);
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_CTRL, GPCP_CGRA_CTRL_START);
+    array_start(page);
 
     uint32_t guard = 0;
     while (!(gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_DONE)) {

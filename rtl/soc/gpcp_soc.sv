@@ -60,9 +60,9 @@ module gpcp_soc #(
   logic [31:0] msip;
   logic        time_irq;
   logic        plic_irq;
+  logic        cgra_irq;
 
   assign time_irq = (mtime >= mtimecmp);
-  assign plic_irq = 1'b0;
 
   // UART register file (16550A subset)
   logic [7:0] uart_ier, uart_lcr, uart_mcr, uart_scr;
@@ -83,8 +83,9 @@ module gpcp_soc #(
       .rst_ni      (rst_ni),
       .boot_addr_i (64'h8000_0000),
       .hart_id_i   (64'h0),
-      .irq_i       ({plic_irq, msip[0]}),
-      .ipi_i       (1'b0),
+      // CVA6: irq_i[0] = machine external (PLIC), irq_i[1] = supervisor external
+      .irq_i       ({1'b0, plic_irq}),
+      .ipi_i       (msip[0]),
       .time_irq_i  (time_irq),
       .mtime_i     (mtime),
       .debug_req_i (1'b0),
@@ -117,7 +118,7 @@ module gpcp_soc #(
   logic [31:0] dma_rdata_q;
   logic        dma_ready_q;
 
-  cgra_top u_cgra (
+  cgra_top #(.DBG(GPCP_DBG)) u_cgra (
       .clk    (clk_i),
       .rst_n  (rst_ni),
       .wr_en  (cgra_wr_en),
@@ -134,7 +135,8 @@ module gpcp_soc #(
       .dma_ready(dma_ready_q),
       .busy   (cgra_busy),
       .done   (cgra_done),
-      .cycle_o(cgra_cycle)
+      .cycle_o(cgra_cycle),
+      .irq_o  (cgra_irq)
   );
 
   // ---------------------------------------------------------------- AXI slave FSM
@@ -178,7 +180,7 @@ module gpcp_soc #(
     if (addr[63:32] != 32'h0)                    decode_region = R_ERR;
     else if (addr[31:26] == 6'b100000)           decode_region = R_RAM;   // 64 MiB
     else if (addr[31:16] == 16'h0200)            decode_region = R_CLINT;
-    else if (addr[31:20] == 12'h0C0)             decode_region = R_PLIC;
+    else if (addr[31:22] == 10'h030)              decode_region = R_PLIC;  // 4 MiB (claim at 0x0C20_0000)
     else if (addr[31:16] == 16'h1000)            decode_region = R_UART;
     else if (addr[31:16] == 16'h4001)            decode_region = R_SIM;
     else if (addr[31:16] == 16'h5000)            decode_region = R_CGRA;
@@ -216,6 +218,75 @@ module gpcp_soc #(
     endcase
   endfunction
 
+  // ---------------------------------------------------------------- PLIC
+  // Minimal RISC-V PLIC: one source (ID 1 = CGRA interrupt), one context
+  // (hart 0 M-mode), register layout following the QEMU "virt" map:
+  //   0x0C00_0004  priority of source 1
+  //   0x0C00_1000  enable bitmap of context 0
+  //   0x0C00_2000  priority threshold of context 0
+  //   0x0C20_0000  claim (read) / complete (write)
+  localparam logic [21:0] PLIC_CLAIM_OFF = 22'h20_0000;
+
+  logic [31:0] plic_prio, plic_en, plic_thresh;
+  logic        plic_pending, plic_insvc;
+  logic [31:0] plic_claim_rdata_q;
+  logic        plic_claim_rd, plic_claim_hit, plic_complete_hit;
+
+  assign plic_irq = plic_pending && plic_en[1] && (plic_prio > plic_thresh);
+
+  assign plic_claim_rd = ar_accept && (decode_region(core_req.ar.addr) == R_PLIC) &&
+                         (core_req.ar.addr[21:0] == PLIC_CLAIM_OFF);
+  assign plic_claim_hit    = plic_claim_rd && plic_pending && plic_en[1] &&
+                             (plic_prio > plic_thresh);
+  assign plic_complete_hit = aw_accept && (decode_region(core_req.aw.addr) == R_PLIC) &&
+                             (core_req.aw.addr[21:0] == PLIC_CLAIM_OFF);
+
+  function automatic logic [31:0] plic_read(input logic [21:0] off);
+    case (off)
+      22'h00_0004: plic_read = plic_prio;
+      22'h00_1000: plic_read = plic_en;
+      22'h00_2000: plic_read = plic_thresh;
+      PLIC_CLAIM_OFF: plic_read = plic_claim_rdata_q;
+      default:        plic_read = 32'b0;
+    endcase
+  endfunction
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      plic_prio          <= 32'b0;
+      plic_en            <= 32'b0;
+      plic_thresh        <= 32'b0;
+      plic_pending       <= 1'b0;
+      plic_insvc         <= 1'b0;
+      plic_claim_rdata_q <= 32'b0;
+    end else begin
+      // source state: pending follows the level unless the source is in service
+      if (plic_claim_hit) begin
+        plic_claim_rdata_q <= 32'd1;
+        plic_pending       <= 1'b0;
+        plic_insvc         <= 1'b1;
+      end else if (plic_claim_rd) begin
+        plic_claim_rdata_q <= 32'd0;
+      end else if (!plic_insvc) begin
+        plic_pending <= cgra_irq;
+      end
+
+      if (plic_complete_hit) begin
+        plic_insvc   <= 1'b0;
+        plic_pending <= cgra_irq;
+      end
+
+      if (aw_accept && (decode_region(core_req.aw.addr) == R_PLIC)) begin
+        case (core_req.aw.addr[21:0])
+          22'h00_0004: plic_prio   <= core_req.w.data[31:0];
+          22'h00_1000: plic_en     <= core_req.w.data[31:0];
+          22'h00_2000: plic_thresh <= core_req.w.data[31:0];
+          default: ;
+        endcase
+      end
+    end
+  end
+
   // ---------------------------------------------------------------- read data
   logic [63:0] rd_data_c;
   logic [2:0]  rd_off;
@@ -242,7 +313,10 @@ module gpcp_soc #(
       // 32-bit peripherals: replicate on both halves so that a 4-byte access
       // at offset 4 still returns the register value on the addressed lanes
       R_CLINT: periph64 = clint_read(rd_addr_q[15:0]);
-      R_PLIC:  periph64 = 64'b0;
+      R_PLIC:  begin
+        periph32 = plic_read(rd_addr_q[21:0]);
+        periph64 = {periph32, periph32};
+      end
       R_UART:  begin
         periph32 = uart_read(rd_addr_q[15:0]);
         periph64 = {periph32, periph32};
@@ -261,6 +335,11 @@ module gpcp_soc #(
 
   assign cgra_rd_addr = rd_addr_q[15:0];
 
+  // CGRA window: a 64-bit store is split into two 32-bit register writes
+  logic        cgra_hi_pending;
+  logic [15:0] cgra_hi_addr;
+  logic [31:0] cgra_hi_data;
+
   // ---------------------------------------------------------------- CGRA write port
   logic [31:0] cgra_wdata_lane;
   assign cgra_wdata_lane = (core_req.aw.addr[2:0] == 3'd0) ? core_req.w.data[31:0]
@@ -269,8 +348,19 @@ module gpcp_soc #(
     cgra_wr_en   = 1'b0;
     cgra_wr_addr = core_req.aw.addr[15:0];
     cgra_wr_data = cgra_wdata_lane;
-    if (aw_accept && (decode_region(core_req.aw.addr) == R_CGRA))
+    if (aw_accept && (decode_region(core_req.aw.addr) == R_CGRA)) begin
       cgra_wr_en = 1'b1;
+      if (GPCP_DBG)
+        $display("[cgra-wr] addr=%h size=%0d strb=%b data=%h", core_req.aw.addr,
+                 core_req.aw.size, core_req.w.strb, core_req.w.data);
+    end else if (cgra_hi_pending) begin
+      // upper half of a 64-bit store (CVA6 merges adjacent 32-bit stores),
+      // replayed as a second pulse because the CGRA register file is 32 bits wide
+      cgra_wr_en   = 1'b1;
+      cgra_wr_addr = cgra_hi_addr;
+      cgra_wr_data = cgra_hi_data;
+      if (GPCP_DBG) $display("[cgra-wr] hi addr=%h data=%h", cgra_hi_addr, cgra_hi_data);
+    end
   end
 
   // ---------------------------------------------------------------- exit
@@ -326,8 +416,20 @@ module gpcp_soc #(
       uart_dlm    <= 8'b0;
       dma_ready_q <= 1'b0;
       dma_rdata_q <= 32'b0;
+      cgra_hi_pending <= 1'b0;
+      cgra_hi_addr    <= 16'b0;
+      cgra_hi_data    <= 32'b0;
     end else begin
       dma_ready_q <= 1'b0;
+
+      if (aw_accept && (decode_region(core_req.aw.addr) == R_CGRA) &&
+          (core_req.aw.size == 3'b011)) begin
+        cgra_hi_pending <= 1'b1;
+        cgra_hi_addr    <= core_req.aw.addr[15:0] + 16'd4;
+        cgra_hi_data    <= core_req.w.data[63:32];
+      end else begin
+        cgra_hi_pending <= 1'b0;
+      end
       unique case (state)
         S_IDLE: begin
           if (ar_accept) begin

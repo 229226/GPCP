@@ -119,18 +119,39 @@ SoC 级测试用 CVA6 真机（Verilator）跑完整个流水，把三组 H 值�
 3 个 slot 的完整流水（含 4 次入向、3 次出向拷贝、3 次阵列运行）在 **约 16.5k 周期**
 内完成；其中 64 字的一次拷贝约 190 周期（每字 2–3 周期，未做 burst）。
 
-### 4.3 集成时发现的四个真实缺陷（都已修）
+### 4.3 中断驱动（PLIC + `wfi`）
+
+`sw/soc/irq_bm.c` 用同一套流水，但**完全不轮询 CGRA**：
+
+- CGRA 在阵列完成 / 拷贝完成时置粘滞状态位，使能后把 `irq_o` 拉高；
+- SoC 的最小 PLIC（源 1）把这条电平线变成 CVA6 的**机器外部中断**（cause 11）；
+- `trap_handler` 依次做 `claim → 读 IRQ_STATUS → W1C → complete`，把事件位发布给主循环；
+- 主循环用 `wfi` 休眠（`mie.MEIE` 打开），只在检查标志与 `wfi` 之间短暂关中断，
+  避免「检查后、睡前」漏掉中断：
+  ```c
+  while (!(irq_flags & need)) {
+      csrci mstatus, 8;            /* 关中断检查 */
+      if (!(irq_flags & need)) wfi;/* 线还高会立刻返回，不会死等 */
+      csrsi mstatus, 8;
+  }
+  ```
+
+验证：`make -C sim/soc run-irq` 跑 2 个 slot，5 次完成中断（3 次拷贝 + 2 次阵列，
+部分合并），结果与黄金模型逐位一致，且 `bad_traps = 0`。
+
+### 4.4 集成时发现的缺陷（都已修）
 
 | 现象 | 根因 | 修复 |
 |---|---|---|
 | CPU 写 CGRA 寄存器偶发丢失，阵列不启动 | SoC 的 AXI 仲裁里 DMA 分支排在 CPU 写之前，同一拍握手被丢弃但仍返回 BRESP | DMA 分支移到 CPU 读写之后（CPU 优先） |
 | DMA 搬回的 32 位数据全错 | RAM 按 64 位字存取，但引擎没看 `addr[2]`，总是取低半 | 读写按 `addr[2]` 选高低半 |
 | 阵列空闲后结果持续被改写 | PE 的 `spad_we` 由操作码组合产生，`en=0` 时仍在执行最后一拍（可能是 `ST`） | scratchpad 写口加 `en` 门控 |
-| 2D 描述符退化成线性 | 启动写是 posted store，可能越过前面的描述符写，锁存到 `ROW=0` | 启动前 `fence iorw, iorw`（已封装进 `gpcp_cgra_dma_start()`） |
+| 2D 描述符退化成线性 / 首次运行 `cycles=0` 却已 start | **CVA6 把同一 8 字节字内的相邻 32-bit store 合并成一次 64-bit AXI 写**，同一寄存器写两次时前一次直接消失 | 新增 `RUN` 寄存器（cycles+page+start 一次写入）；SoC 把 64-bit store 拆成两次寄存器写；成组描述符写用 `fence` |
+| 中断永远不陷入（`wfi` 却立刻返回） | CVA6 的 `irq_i[0]`=机器外部、`irq_i[1]`=S 模式外部，SoC 接反了 | 改成 `irq_i = {1'b0, plic_irq}`，`ipi_i = msip[0]` |
 
-第四条是 ABI 层面的坑：**只要描述符在启动时锁存，软件就必须在 start 之前保证
-前面的写已到达设备**。裸机驱动已按此实现；将来做描述符环时，环本身就在 RAM 里，
-由引擎按指针读取，这个问题自然消失。
+第四条是 ABI 层面的坑：**只要寄存器窗口是 32 位、而 CPU 会合并相邻写，就必须保证
+「一次 store 就能表达一个完整动作」或中间插入 `fence`**。ABI 里 `gpcp_cgra_array_start()`
+与 `gpcp_cgra_dma_start()` 已经按这个规则实现。
 
 ## 5. 验证结果（`python3 tools/cgra.py test`）
 
@@ -159,8 +180,9 @@ python3 tools/cgra.py test --kernel fft16
 ## 6. 已知限制 / 下一步
 
 1. **DMA 还没有描述符环**：目前是「一条描述符 = 一组寄存器」，`busy` 期间写入的
-   start 会被忽略，CPU 必须轮询；没有完成中断，也没有 AXI burst（每字 2–3 周期）。
-   下一步做描述符环（环放 RAM、引擎自取）+ 完成中断，CPU 只需每 slot 推进一次指针。
+   start 会被忽略，也没有 AXI burst（每字 2–3 周期）。完成通知已经可以用中断了
+   （CGRA `irq_o` → PLIC 源 1 → CVA6 机器外部中断）。下一步做描述符环（环放 RAM、
+   引擎自取），CPU 每 slot 只需推进一次指针。
 2. **FFT 规模**：目前 16 点（demo 用），5G NR 需要 4096 点；
    路线是「16 点 kernel + 多级分解 + 旋转因子表」，或在阵列里做多级流水。
 3. **MMSE 除法**：留给 CPU；若要完全 offload，可加倒数 LUT 或 Newton-Raphson 微码。

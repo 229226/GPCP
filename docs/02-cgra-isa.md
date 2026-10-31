@@ -84,7 +84,7 @@
 |---|---|---|
 | `0x0000` | W | `CTRL`：`[0]` start，`[1]` clear done |
 | `0x0000` | R | `STATUS`：`[0]` busy，`[1]` done，`[31:16]` cycle_cnt |
-| `0x0004` | W | `NUM_CYCLES`（≤ 512，超出被截断） |
+| `0x0004` | W | **`RUN`**：`[15:0]` cycles，`[16]` buffer page，`[31]` start（推荐一次写入启动） |
 | `0x0008` | R | `CYCLE_COUNT` |
 | `0x000C` | R | `ID` = `{0xCA, ISA_VER=0x01, N, N}` |
 | `0x0010` | W | `DMA_SRC`：RAM 源/目的字节地址（32 bit） |
@@ -100,6 +100,8 @@
 | `0x0034` | R | `DMA_RUN_LEN`：锁存的长度（调试） |
 | `0x0038` | R | `DMA_RUN_STRIDE`：锁存的步长（调试） |
 | `0x003C` | R | `DMA_RUN_ROW`：锁存的每行字数（调试） |
+| `0x0040` | R/W | `IRQ_STATUS`：`[0]` 阵列完成、`[1]` 拷贝完成；写 1 清零（W1C） |
+| `0x0044` | R/W | `IRQ_ENABLE`：同上位定义，使能后汇总为 `irq_o` 电平 |
 | `0x1000 + pe*32 + r*4` | RW | PE 寄存器 `r0..r7`（预装载 / 回读） |
 | `0x1200 + pe*4` | RW | PE 累加器 |
 | `0x2000 + idx*4` | RW | 指令存储器，`idx = cycle*NPES + pe`（8192 words，占 0x2000–0x9FFF） |
@@ -107,10 +109,25 @@
 
 - PE 编号：`pe = row*N + col`（行优先，`(0,0)` 为左上）。
 - AXI 写为单 outstanding；`wr_en` 在总线握手后一拍产生脉冲。
-- 写 `CTRL.start` 前需保证 `NUM_CYCLES != 0`，且阵列空闲。
+- **启动一律用 `RUN`（0x0004）一次写**：`cycles | page<<16 | start<<31`；写 `CTRL.start`
+  仍然可用，但必须先单独写 `NUM_CYCLES` 并插入 `fence`（原因见下）。
 - 运行中读 PE 窗口返回当前值（调试用）；建议仅在 idle 时预装载。
 - scratchpad 分两页：绝对 bank 0–31 = page 0，32–63 = page 1；`LD/ST` 与 `DMA_DST`
   的索引都是**页内相对**（`{bank[4:0], word[4:0]}`），主机窗口地址是**绝对**的。
+
+### 3.0 为什么有 `RUN` 寄存器（CVA6 的写合并坑）
+
+CVA6 的 write-through 单元会把**同一 8 字节字内的两次相邻 32-bit store 合并成一次
+64-bit AXI 写**（实测 `aw.size=3, wstrb=FF`）。对 CGRA 这种 32 位寄存器窗口：
+
+- 合并后只有“每字节最后写入的值”保留 → 同一寄存器写两次（例如先 `CTRL=clear_done`、
+  再 `CTRL=start`）时，前一次**直接消失**；
+- 依次写 `NUM_CYCLES(0x04)` 再 `CTRL(0x00)` 也会被合并成一个 64-bit 写，两个寄存器
+  的“先后顺序”丢失（首次运行会看到 cycles=0 却已经 start）。
+
+因此把「周期数 + 页 + 启动」压进**一次 store**（`RUN`），从根上避开合并；DMA 描述符
+这类必须成组写入的寄存器，则用 `fence`（`gpcp_cgra_dma_start()` 已封装）保证顺序。
+SoC 侧对 64-bit store 也会拆成两次 32-bit 寄存器写（见 `gpcp_soc.sv` 的 `cgra_hi_*`）。
 
 ### 3.1 拷贝引擎（DMA）
 
@@ -133,6 +150,16 @@
 - CPU 与 DMA 共享 RAM 时 **CPU 优先**：DMA 只 SoC 的空闲拍搬运，CPU 的读写不会丢；
 - `0x0030–0x003C` 是只读调试窗口：`DMA_RUN_SRC / LEN / STRIDE / ROW`，
   显示**本次传输锁存的**描述符，用于确认软件写入是否在 start 前生效。
+
+### 3.2 中断
+
+- `IRQ_STATUS(0x0040)` 是**粘滞**状态位：阵列完成置 `[0]`、拷贝完成置 `[1]`；
+- `IRQ_ENABLE(0x0044)` 使能后，`irq_o = |(IRQ_STATUS & IRQ_ENABLE)`（电平，直到软件清掉）；
+- 清除用 **W1C**（写 1 到对应位）；同一拍新到的事件不会被清除吞掉（硬件按
+  `(status & ~mask) | events` 处理）；
+- 软中断处理顺序必须是 **claim（PLIC）→ 读状态 → W1C → complete**：先 claim 再清状态，
+  否则电平可能在 claim 之前掉下去，claim 会返回 0（变成伪中断）；
+- SoC 里这条线接 CVA6 的机器外部中断（`irq_i[0]`，cause 11），详见 `docs/06-linux-b3.md` 1.3。
 
 ---
 

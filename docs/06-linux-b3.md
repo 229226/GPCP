@@ -19,7 +19,7 @@
 | RAM | 512 KiB | **64 MiB**（0x8000_0000–0x83FF_FFFF） |
 | 地址映射 | 自定 | **对齐 QEMU `virt`**，直接复用标准 Linux 驱动 |
 | CLINT | 无 | 0x0200_0000（msip / mtimecmp / mtime，mtime 每周期 +1） |
-| PLIC | 无 | 0x0C00_0000（最小寄存器桩，claim 返回 0） |
+| PLIC | 无 | 0x0C00_0000（4 MiB，1 个源 = CGRA 中断，1 个上下文） |
 | UART | 无 | 0x1000_0000，16550A，**4 字节寄存器步进**（reg-shift=2），TX 走 `$write` |
 | 退出 | 0x4001_xxxx | 不变（仿真专用） |
 | CGRA | 0x4000_0000 | **0x5000_0000**（避开 virt 的 PCIe 区域） |
@@ -46,6 +46,24 @@ OpenSBI 的 `sbi_atomic_cmpxchg` 在 RVA 下编译成 `lr.w/sc.w`，不是 AMO�
 - `ar.lock=1`：记录保留地址，并在 R 通道返回 **EXOKAY**；
 - `aw.lock=1`：若地址匹配保留项 → B 返回 **EXOKAY**（SC 成功），否则 **OKAY**（SC 失败）；
 - 普通写同地址时清除保留。
+
+### 1.3 PLIC（最小实现，1 源 1 上下文）
+
+`0x0C00_0000` 起 4 MiB（claim 在 `0x0C20_0000`，与 QEMU virt 一致），源 1 = CGRA 中断：
+
+| 偏移 | 内容 |
+|---|---|
+| `0x0004` | 源 1 的优先级（0 = 关闭） |
+| `0x1000` | context 0（hart0 M 模式）使能位图 |
+| `0x2000` | context 0 阈值 |
+| `0x200000` | claim（读）/ complete（写） |
+
+- 电平触发：源电平（CGRA `irq_o`）在未被服务时置 pending；
+- claim 返回源 ID（1）并进入 in-service，complete 后按当前电平重新 pending；
+- 到核的连线是 CVA6 的 `irq_i[0]`（**机器外部中断**，cause 11）。注意 CVA6 的
+  `irq_i[1]` 是 **S 模式外部中断**，接反会导致 M 模式下永远不陷入；
+- `wfi` 唤醒：CVA6 在 `|(mip & mie)` 或 `irq_i[1]` 时解除停顿，所以 M 模式用的
+  `irq_i[0]` 需要同时把 `mie.MEIE` 打开才能靠 `wfi` 醒来。
 
 ## 2. CVA6 补丁：CLINT-backed `time` CSR
 

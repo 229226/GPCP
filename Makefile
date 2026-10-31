@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean sw-check soc soc-run soc-run-dma linux
+.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq linux
 
 all: test
 
@@ -25,6 +25,10 @@ soc-run:
 # L1 data plane: CVA6 drives the copy engine (DMA + double buffering)
 soc-run-dma:
 	$(MAKE) -C sim/soc run-dma
+
+# L1 data plane: interrupt-driven variant (CGRA -> PLIC -> CVA6 + wfi)
+soc-run-irq:
+	$(MAKE) -C sim/soc run-irq
 
 # B3: OpenSBI + Linux on the SoC
 linux:

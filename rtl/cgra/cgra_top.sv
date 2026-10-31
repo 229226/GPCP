@@ -39,7 +39,9 @@ function automatic logic [31:0] dma_next(
   dma_next = {next_cur, next_cnt};
 endfunction
 
-module cgra_top (
+module cgra_top #(
+    parameter bit DBG = 1'b0
+) (
     input  logic        clk,
     input  logic        rst_n,
     // host write port (single-cycle pulse)
@@ -60,7 +62,9 @@ module cgra_top (
     input  logic        dma_ready,
     output logic        busy,
     output logic        done,
-    output logic [15:0] cycle_o
+    output logic [15:0] cycle_o,
+    // level interrupt: array done and/or copy-engine done (masked by ENABLE)
+    output logic        irq_o
 );
 
   import cgra_pkg::*;
@@ -102,6 +106,32 @@ module cgra_top (
   logic        dma_busy, dma_done, dma_dir;
   logic [31:0] dma_rdata_q;
   logic        buf_page, dma_page;
+
+  // ---------------- interrupt status / enable ----------------
+  // sticky status bits, cleared by writing 1 to REG_IRQ_STATUS; the line is
+  // level sensitive so the PLIC sees it until software acknowledges
+  logic [1:0]  irq_status, irq_enable;
+  logic        done_q, dma_done_q;
+  logic [1:0]  irq_evts;
+
+  assign irq_o  = |(irq_status & irq_enable);
+  assign irq_evts = {dma_done & ~dma_done_q, done & ~done_q};
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      irq_status  <= 2'b0;
+      irq_enable  <= 2'b0;
+      done_q      <= 1'b0;
+      dma_done_q  <= 1'b0;
+    end else begin
+      done_q     <= done;
+      dma_done_q <= dma_done;
+      if (wr_en && (wr_addr == REG_IRQ_ENABLE)) irq_enable <= wr_data[1:0];
+      // W1C clear must not swallow an event raised in the same cycle
+      irq_status <= ((wr_en && (wr_addr == REG_IRQ_STATUS)) ? (irq_status & ~wr_data[1:0])
+                                                            : irq_status) | irq_evts;
+    end
+  end
 
   typedef enum logic [2:0] {
     D_IDLE   = 3'd0,
@@ -184,7 +214,7 @@ module cgra_top (
               dma_run_row    <= dma_row;
             end
           end
-          REG_BUF_PAGE: buf_page <= wr_data[0];
+          REG_BUF_PAGE: ;   // handled by the sequencer block (single driver)
           REG_DMA_PAGE: dma_page <= wr_data[0];
           REG_DMA_STRIDE: dma_stride <= wr_data[15:0];
           REG_DMA_ROW:    dma_row    <= wr_data[15:0];
@@ -247,7 +277,23 @@ module cgra_top (
             cycle_cnt <= 16'd0;
           end
         end else if (wr_addr == REG_NUM_CYCLES) begin
-          num_cycles <= (wr_data[15:0] > MAXCYC) ? 16'(MAXCYC) : wr_data[15:0];
+          // "run" register: NUM_CYCLES | page<<16 | start<<31.  Doing all three
+          // in one store keeps the ABI safe against the CPU merging adjacent
+          // 32-bit stores into a single 64-bit AXI write (see docs/02).
+          automatic logic [15:0] cyc;
+          cyc = (wr_data[15:0] > MAXCYC) ? 16'(MAXCYC) : wr_data[15:0];
+          if (DBG)
+            $display("[cgra-run] data=%h start=%b busy=%b cyc=%0d", wr_data,
+                     wr_data[31], busy, cyc);
+          num_cycles <= cyc;
+          if (wr_data[31] && !busy && (cyc != 16'd0)) begin
+            busy      <= 1'b1;
+            done      <= 1'b0;
+            cycle_cnt <= 16'd0;
+            buf_page  <= wr_data[16];   // page travels with the start
+          end
+        end else if (wr_addr == REG_BUF_PAGE) begin
+          buf_page <= wr_data[0];
         end else if ((wr_addr >= REG_IMEM_BASE) &&
                      (wr_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
           imem[(wr_addr - REG_IMEM_BASE) >> 2] <= wr_data;
@@ -289,8 +335,8 @@ module cgra_top (
   // ---------------- host read mux ----------------
   always_comb begin
     rd_data = 32'b0;
-    if (rd_addr < 16'h0040) begin
-      case (rd_addr[5:0])
+    if (rd_addr < 16'h0048) begin
+      case (rd_addr[6:0])
         6'h00: rd_data = {cycle_cnt, 13'b0, 1'b0, done, busy};
         6'h04: rd_data = {16'b0, num_cycles};
         6'h08: rd_data = {16'b0, cycle_cnt};
@@ -307,6 +353,8 @@ module cgra_top (
         6'h34: rd_data = {16'b0, dma_run_len};
         6'h38: rd_data = {16'b0, dma_run_stride};
         6'h3C: rd_data = {16'b0, dma_run_row};
+        7'h40: rd_data = {30'b0, irq_status};
+        7'h44: rd_data = {30'b0, irq_enable};
         default: rd_data = 32'b0;
       endcase
     end else if (rd_addr >= REG_PE_BASE && rd_addr < (REG_PE_ACC + 16'h40)) begin

@@ -68,8 +68,9 @@ int main(void)
             mmio_w(base + REG_PE + pe * 32 + (4 + k) * 4, (u32)(B[k][col] & 0xFFFF));
     }
 
-    mmio_w(base + REG_NUM, 4);
-    mmio_w(base + REG_CTRL, 1);
+    /* run register: {start[31], page[16], cycles[15:0]} in a single store
+     * (two stores to CTRL/NUM_CYCLES could be folded by the CPU write buffer) */
+    mmio_w(base + REG_NUM, 4u | (1u << 31));
 
     /* poll done (bounded to keep a broken run from hanging forever) */
     u32 guard = 0;

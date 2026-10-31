@@ -40,7 +40,8 @@ module cgra_axi_lite (
     input  logic [31:0] din,
     output logic        o_busy,
     output logic        o_done,
-    output logic [15:0] o_cycle
+    output logic [15:0] o_cycle,
+    output logic        o_irq
 );
 
   // ---------------- write channel ----------------
@@ -137,7 +138,8 @@ module cgra_axi_lite (
       .dma_ready(dma_ready),
       .busy   (o_busy),
       .done   (o_done),
-      .cycle_o(o_cycle)
+      .cycle_o(o_cycle),
+      .irq_o  (o_irq)
   );
 
 endmodule

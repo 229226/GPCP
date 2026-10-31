@@ -50,6 +50,23 @@
 #define GPCP_CGRA_DMA_BUSY     (1u << 0)
 #define GPCP_CGRA_DMA_DONE     (1u << 1)
 
+/* ------------------------------------------------------ array run (one store) */
+/* A run needs the cycle count, the scratchpad page and the start pulse.  All
+ * three travel in a single 32-bit store to NUM_CYCLES: [31] start, [16] page,
+ * [15:0] cycles.  This is deliberate - the CPU's write buffer (CVA6 WTDU)
+ * folds two 32-bit stores inside the same 8-byte word into one 64-bit AXI
+ * write, which silently drops one of them; writing CTRL twice (clear-done then
+ * start) or NUM_CYCLES-then-CTRL is therefore unsafe without a fence. */
+#define GPCP_CGRA_RUN_START  (1u << 31)
+#define GPCP_CGRA_RUN_PAGE1  (1u << 16)
+
+/* ------------------------------------------------------- completion interrupt */
+#define GPCP_CGRA_IRQ_STATUS   0x0040u   /* R: [0] array done [1] dma done  */
+                                         /* W: write 1 to clear (W1C)       */
+#define GPCP_CGRA_IRQ_ENABLE   0x0044u   /* R/W: same bit layout            */
+#define GPCP_CGRA_IRQ_ARR      (1u << 0)
+#define GPCP_CGRA_IRQ_DMA      (1u << 1)
+
 #define GPCP_CGRA_CTRL_START   (1u << 0)
 #define GPCP_CGRA_CTRL_CLRDONE (1u << 1)
 
@@ -105,6 +122,13 @@ static inline void gpcp_cgra_write(uintptr_t base, uint32_t off, uint32_t val)
 static inline uint32_t gpcp_cgra_read(uintptr_t base, uint32_t off)
 {
     return *(volatile uint32_t *)(base + off);
+}
+
+static inline void gpcp_cgra_array_start(uintptr_t base, uint32_t page, uint32_t cycles)
+{
+    gpcp_cgra_write(base, GPCP_CGRA_NUM_CYCLES,
+                    (cycles & 0xFFFFu) | GPCP_CGRA_RUN_START |
+                    (page ? GPCP_CGRA_RUN_PAGE1 : 0u));
 }
 
 /* ------------------------------------------------------------ task descriptor */
@@ -167,6 +191,25 @@ static inline void gpcp_cgra_dma_start(uintptr_t base, uintptr_t ram_addr,
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     gpcp_cgra_write(base, GPCP_CGRA_DMA_CTRL,
                     GPCP_CGRA_DMA_START | (dir_out ? GPCP_CGRA_DMA_DIR_OUT : 0u));
+}
+
+/* -------------------------------------------------- completion interrupt (CGRA) */
+/* The CGRA raises a level interrupt while STATUS has an enabled bit set; clear
+ * it with a W1C write after claiming the source at the PLIC (claim first, then
+ * clear, otherwise the level may drop before the claim sees it). */
+static inline void gpcp_cgra_irq_enable(uintptr_t base, uint32_t mask)
+{
+    gpcp_cgra_write(base, GPCP_CGRA_IRQ_ENABLE, mask);
+}
+
+static inline uint32_t gpcp_cgra_irq_status(uintptr_t base)
+{
+    return gpcp_cgra_read(base, GPCP_CGRA_IRQ_STATUS);
+}
+
+static inline void gpcp_cgra_irq_clear(uintptr_t base, uint32_t mask)
+{
+    gpcp_cgra_write(base, GPCP_CGRA_IRQ_STATUS, mask);
 }
 
 /* scratchpad helpers
