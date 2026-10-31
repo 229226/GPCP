@@ -40,7 +40,10 @@ function automatic logic [31:0] dma_next(
 endfunction
 
 module cgra_top #(
-    parameter bit DBG = 1'b0
+    parameter bit DBG = 1'b0,
+    // max AXI beats per burst (1..=128): data beats are streamed, so a burst of
+    // N beats costs N cycles and one address handshake
+    parameter int DMA_BEATS = 32
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -135,10 +138,13 @@ module cgra_top #(
   logic        ring_en, ring_mode, desc_irq, rd_desc, wr_status;
   logic [31:0] desc_addr;
 
-  // burst buffer: 8 beats x 64 bit = 16 scratchpad words per burst
-  localparam int DMA_BEATS = 8;
-  logic [63:0] dma_buf [0:DMA_BEATS-1];
-  logic [3:0]  dma_beat;
+  // descriptor buffer: 4 beats = 32 bytes (the only buffering in the engine -
+  // data beats are streamed straight into / out of the scratchpad)
+  localparam int DESC_BEATS = 4;
+  logic [63:0] desc_buf [0:DESC_BEATS-1];
+  logic [1:0]  dma_beat;      // descriptor beat during the fetch
+  logic [7:0]  dma_nb;        // beats in the current data burst
+  logic [7:0]  dma_bcnt;      // beat counter inside a data burst
 
   // 2D walk: two scratchpad indices per beat (low / high word of the beat)
   logic [15:0] dma_nxt_cur, dma_nxt_cnt, dma_nxt2_cur, dma_nxt2_cnt;
@@ -148,22 +154,24 @@ module cgra_top #(
   end
 
   // burst sizing for the words that are left (clamped to the 4 KiB page so the
-  // INCR burst never crosses an AXI 4 KiB boundary)
-  logic [3:0]  dma_nb_raw, dma_nb;
+  // INCR burst never crosses an AXI 4 KiB boundary, and to DMA_BEATS)
+  logic [7:0]  dma_nb_raw;
   logic [15:0] dma_wleft, dma_bw, dma_nidx, dma_4k;
   logic [31:0] dma_baddr;
   logic        dma_odd, dma_odd_full, dma_last_odd;
   assign dma_wleft     = dma_run_len - dma_idx;
-  assign dma_nb_raw    = (dma_wleft >= 16'd16) ? 4'd8
-                                                : (dma_wleft[7:1] + {7'b0, dma_wleft[0]});
-  assign dma_odd_full  = (dma_wleft >= 16'd16) ? 1'b0 : dma_wleft[0];
+  assign dma_nb_raw    = (dma_wleft >= 16'(2 * DMA_BEATS))
+                         ? 8'(DMA_BEATS)
+                         : ((dma_wleft + 16'd1) >> 1);
+  assign dma_odd_full  = (dma_wleft < 16'(2 * DMA_BEATS)) ? dma_wleft[0] : 1'b0;
   assign dma_baddr     = dma_run_src + {16'b0, dma_idx} * 4;
   assign dma_4k        = (16'd4096 - {4'b0, dma_baddr[11:0]}) >> 3;   // beats to the 4 KiB edge
-  assign dma_nb        = (dma_4k >= 16'd8) ? dma_nb_raw : 4'(dma_4k);
+  assign dma_nb        = (dma_4k >= 16'(DMA_BEATS)) ? dma_nb_raw
+                                                    : ((dma_4k >= 16'd1) ? 8'(dma_4k) : 8'd1);
   assign dma_odd       = (dma_nb == dma_nb_raw) ? dma_odd_full : 1'b0;
-  assign dma_bw        = {dma_nb, 1'b0} - {15'b0, dma_odd};
+  assign dma_bw        = {8'b0, dma_nb} * 16'd2 - {15'b0, dma_odd};
   assign dma_nidx      = dma_idx + dma_bw;
-  assign dma_last_odd  = dma_odd && (dma_beat == dma_nb - 4'd1);
+  assign dma_last_odd  = dma_odd && (dma_bcnt == dma_nb - 8'd1);
 
   // ---------------- interrupt status / enable ----------------
   // sticky status bits, cleared by writing 1 to REG_IRQ_STATUS; the line is
@@ -194,57 +202,56 @@ module cgra_top #(
   typedef enum logic [3:0] {
     D_IDLE     = 4'd0,
     D_AR       = 4'd1,   // issue the read address (AR) for a burst
-    D_RDATA    = 4'd2,   // collect R beats into the burst buffer
-    D_SPAD_W   = 4'd3,   // burst buffer -> scratchpad (2 words per beat)
-    D_SPAD_R   = 4'd4,   // scratchpad -> burst buffer (2 words per beat)
+    D_RDESC    = 4'd2,   // collect the 4-beat descriptor
+    D_DESC_SET = 4'd3,   // ring: latch the fetched descriptor
+    D_SIN      = 4'd4,   // streaming in: each R beat goes straight into the spad
     D_AW       = 4'd5,   // issue the write address (AW)
-    D_WDATA    = 4'd6,   // stream W beats
-    D_BRESP    = 4'd7,   // wait for the write response
-    D_DESC_SET = 4'd8    // ring: latch the fetched descriptor
+    D_SOUT     = 4'd6,   // streaming out: each W beat comes straight from the spad
+    D_BRESP    = 4'd7    // wait for the write response
   } dstate_e;
   dstate_e dstate;
 
-  // scratchpad side of the copy engine: two write ports (low/high word of a
-  // 64-bit beat live in different words of a bank) and two read ports
+  // scratchpad side of the copy engine: a beat carries two words, so one write
+  // port per word (they are different words of the same bank) and two read ports
   logic        spad_dma_we0, spad_dma_we1;
   logic [9:0]  spad_dma_addr0, spad_dma_addr1;
   logic [31:0] spad_dma_wdata0, spad_dma_wdata1;
   logic [9:0]  spad_rd_addr0, spad_rd_addr1;
   logic [31:0] spad_rd_data0, spad_rd_data1;
 
-  assign spad_dma_we0    = (dstate == D_SPAD_W);
+  assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid;
   assign spad_dma_addr0  = dma_cur[9:0];
-  assign spad_dma_wdata0 = dma_buf[dma_beat][31:0];
-  assign spad_dma_we1    = (dstate == D_SPAD_W) && !dma_last_odd;
+  assign spad_dma_wdata0 = m_axi_rdata[31:0];
+  assign spad_dma_we1    = (dstate == D_SIN) && m_axi_rvalid && !dma_last_odd;
   assign spad_dma_addr1  = dma_nxt_cur[9:0];
-  assign spad_dma_wdata1 = dma_buf[dma_beat][63:32];
+  assign spad_dma_wdata1 = m_axi_rdata[63:32];
   assign spad_rd_addr0   = dma_cur[9:0];
   assign spad_rd_addr1   = dma_nxt_cur[9:0];
 
   // ---------------- AXI4 master ----------------
   always_comb begin
-    // read channel: one INCR burst per buffer fill
+    // read channel: one INCR burst per descriptor chunk (data beats are streamed)
     m_axi_arvalid = (dstate == D_AR);
     m_axi_arid    = 4'd0;
     m_axi_araddr  = rd_desc ? (ring_base + {ring_head, 5'b0}) : dma_baddr;
-    m_axi_arlen   = rd_desc ? 8'd3 : (8'(dma_nb) - 8'd1);
+    m_axi_arlen   = rd_desc ? 8'd3 : (dma_nb - 8'd1);
     m_axi_arsize  = 3'b011;      // 8 bytes per beat
     m_axi_arburst = 2'b01;       // INCR
-    m_axi_rready  = (dstate == D_RDATA);
+    m_axi_rready  = (dstate == D_RDESC) || (dstate == D_SIN);
 
     // write channel
     m_axi_awvalid = (dstate == D_AW);
     m_axi_awid    = 4'd0;
     m_axi_awaddr  = wr_status ? (desc_addr + 32'd16) : dma_baddr;
-    m_axi_awlen   = wr_status ? 8'd0 : (8'(dma_nb) - 8'd1);
+    m_axi_awlen   = wr_status ? 8'd0 : (dma_nb - 8'd1);
     m_axi_awsize  = 3'b011;
     m_axi_awburst = 2'b01;
 
-    m_axi_wvalid  = (dstate == D_WDATA);
+    m_axi_wvalid  = (dstate == D_SOUT);
     m_axi_wdata   = wr_status ? {32'b0, DESC_STATUS_MAGIC[31:16], dma_run_len}
-                              : dma_buf[dma_beat];
+                              : {spad_rd_data1, spad_rd_data0};
     m_axi_wstrb   = (wr_status || dma_last_odd) ? 8'h0F : 8'hFF;
-    m_axi_wlast   = wr_status ? 1'b1 : (dma_beat == dma_nb - 4'd1);
+    m_axi_wlast   = wr_status ? 1'b1 : (dma_bcnt == dma_nb - 8'd1);
     m_axi_bready  = (dstate == D_BRESP);
   end
 
@@ -267,7 +274,8 @@ module cgra_top #(
       dma_run_stride <= 16'd1;
       dma_run_row    <= 16'd0;
       dma_dir     <= 1'b0;
-      dma_beat    <= 4'd0;
+      dma_beat    <= 2'd0;
+      dma_bcnt    <= 8'd0;
       buf_page    <= 1'b0;
       dma_page    <= 1'b0;
       ring_base   <= 32'b0;
@@ -281,7 +289,7 @@ module cgra_top #(
       desc_addr   <= 32'b0;
       rd_desc     <= 1'b0;
       wr_status   <= 1'b0;
-      for (int i = 0; i < DMA_BEATS; i++) dma_buf[i] <= 64'b0;
+      for (int i = 0; i < DESC_BEATS; i++) desc_buf[i] <= 64'b0;
     end else begin
       dma_irq_evt <= 1'b0;
 
@@ -312,7 +320,8 @@ module cgra_top #(
               dma_idx    <= 16'd0;
               dma_cur    <= dma_dst;
               dma_row_cnt<= 16'd0;
-              dma_beat   <= 4'd0;
+              dma_beat   <= 2'd0;
+              dma_bcnt   <= 8'd0;
               dma_dir    <= wr_data[1];
               ring_mode  <= 1'b0;
               rd_desc    <= 1'b0;
@@ -322,7 +331,7 @@ module cgra_top #(
               dma_run_len    <= dma_len;
               dma_run_stride <= dma_stride;
               dma_run_row    <= dma_row;
-              dstate <= wr_data[1] ? D_SPAD_R : D_AR;
+              dstate <= wr_data[1] ? D_AW : D_AR;
             end
           end
           default: ;
@@ -334,89 +343,83 @@ module cgra_top #(
             if (ring_en && !dma_busy && (ring_size != 16'd0) && (ring_head != ring_tail)) begin
               dma_busy  <= 1'b1;
               dma_done  <= 1'b0;
-              dma_beat  <= 4'd0;
+              dma_beat  <= 2'd0;
+              dma_bcnt  <= 8'd0;
               ring_mode <= 1'b1;
               rd_desc   <= 1'b1;
               dstate    <= D_AR;
             end
           end
           D_AR: begin
-            // AR handshake, then collect the R beats
             if (m_axi_arready) begin
-              dma_beat <= 4'd0;
-              dstate   <= D_RDATA;
+              dma_beat <= 2'd0;
+              dma_bcnt <= 8'd0;
+              dstate   <= rd_desc ? D_RDESC : D_SIN;
             end
           end
-          D_RDATA: begin
+          D_RDESC: begin
             if (m_axi_rvalid) begin
-              dma_buf[dma_beat] <= m_axi_rdata;
-              if (m_axi_rlast) begin
-                dma_beat <= 4'd0;
-                dstate   <= rd_desc ? D_DESC_SET : D_SPAD_W;
-              end else begin
-                dma_beat <= dma_beat + 4'd1;
-              end
+              desc_buf[dma_beat] <= m_axi_rdata;
+              if (m_axi_rlast) dstate <= D_DESC_SET;
+              else             dma_beat <= dma_beat + 2'd1;
             end
           end
           D_DESC_SET: begin
-            dma_run_src    <= dma_buf[0][31:0];
-            dma_run_len    <= (dma_buf[1][15:0] > 16'd1024) ? 16'd1024 : dma_buf[1][15:0];
-            dma_run_stride <= dma_buf[1][47:32];
-            dma_run_row    <= dma_buf[1][63:48];
-            dma_cur        <= dma_buf[0][47:32];
-            dma_page       <= dma_buf[0][48];
-            dma_dir        <= dma_buf[0][49];
-            desc_irq       <= dma_buf[0][50];
+            dma_run_src    <= desc_buf[0][31:0];
+            dma_run_len    <= (desc_buf[1][15:0] > 16'd1024) ? 16'd1024 : desc_buf[1][15:0];
+            dma_run_stride <= desc_buf[1][47:32];
+            dma_run_row    <= desc_buf[1][63:48];
+            dma_cur        <= desc_buf[0][47:32];
+            dma_page       <= desc_buf[0][48];
+            dma_dir        <= desc_buf[0][49];
+            desc_irq       <= desc_buf[0][50];
             desc_addr      <= ring_base + {ring_head, 5'b0};
             dma_idx        <= 16'd0;
             dma_row_cnt    <= 16'd0;
-            dma_beat       <= 4'd0;
+            dma_bcnt       <= 8'd0;
             rd_desc        <= 1'b0;
-            dstate         <= dma_buf[0][49] ? D_SPAD_R : D_AR;
+            dstate         <= desc_buf[0][49] ? D_AW : D_AR;
           end
-          D_SPAD_W: begin
-            if (dma_beat == dma_nb - 4'd1) begin
-              dma_beat <= 4'd0;
-              dma_idx  <= dma_nidx;
-              if (dma_nidx >= dma_run_len) begin
-                if (ring_mode) begin
-                  wr_status <= 1'b1;
-                  dstate    <= D_AW;
+          D_SIN: begin
+            // streaming in: the beat that arrives is written to the scratchpad
+            // in the same cycle (two words per beat)
+            if (m_axi_rvalid) begin
+              if (m_axi_rlast) begin
+                dma_bcnt <= 8'd0;
+                dma_idx  <= dma_nidx;
+                if (dma_nidx >= dma_run_len) begin
+                  if (ring_mode) begin
+                    wr_status <= 1'b1;
+                    dstate    <= D_AW;
+                  end else begin
+                    dma_busy    <= 1'b0;
+                    dma_done    <= 1'b1;
+                    dstate      <= D_IDLE;
+                    dma_irq_evt <= 1'b1;
+                  end
                 end else begin
-                  dma_busy <= 1'b0;
-                  dma_done <= 1'b1;
-                  dstate      <= D_IDLE;
-                  dma_irq_evt <= 1'b1;
+                  dstate <= D_AR;
                 end
               end else begin
-                dstate <= D_AR;
+                dma_bcnt <= dma_bcnt + 8'd1;
               end
-            end else begin
-              dma_beat <= dma_beat + 4'd1;
+              if (dma_last_odd) {dma_cur, dma_row_cnt} <= {dma_nxt_cur,  dma_nxt_cnt};
+              else              {dma_cur, dma_row_cnt} <= {dma_nxt2_cur, dma_nxt2_cnt};
             end
-            // 2D walk runs two words per beat (one for the odd tail beat)
-            if (dma_last_odd) {dma_cur, dma_row_cnt} <= {dma_nxt_cur,  dma_nxt_cnt};
-            else              {dma_cur, dma_row_cnt} <= {dma_nxt2_cur, dma_nxt2_cnt};
-          end
-          D_SPAD_R: begin
-            dma_buf[dma_beat] <= {spad_rd_data1, spad_rd_data0};
-            if (dma_beat == dma_nb - 4'd1) begin
-              dma_beat <= 4'd0;
-              dstate   <= D_AW;
-            end else dma_beat <= dma_beat + 4'd1;
-            if (dma_last_odd) {dma_cur, dma_row_cnt} <= {dma_nxt_cur,  dma_nxt_cnt};
-            else              {dma_cur, dma_row_cnt} <= {dma_nxt2_cur, dma_nxt2_cnt};
           end
           D_AW: begin
             if (m_axi_awready) begin
-              dma_beat <= 4'd0;
-              dstate   <= D_WDATA;
+              dma_bcnt <= 8'd0;
+              dstate   <= D_SOUT;
             end
           end
-          D_WDATA: begin
+          D_SOUT: begin
+            // streaming out: each accepted W beat is read from the scratchpad
             if (m_axi_wready) begin
+              dma_bcnt <= dma_bcnt + 8'd1;
+              if (dma_last_odd) {dma_cur, dma_row_cnt} <= {dma_nxt_cur,  dma_nxt_cnt};
+              else              {dma_cur, dma_row_cnt} <= {dma_nxt2_cur, dma_nxt2_cnt};
               if (m_axi_wlast) dstate <= D_BRESP;
-              else             dma_beat <= dma_beat + 4'd1;
             end
           end
           D_BRESP: begin
@@ -429,7 +432,7 @@ module cgra_top #(
                 ring_head <= (ring_head + 16'd1 >= ring_size) ? 16'd0 : ring_head + 16'd1;
                 if (ring_en && (((ring_head + 16'd1 >= ring_size) ? 16'd0
                                                                : ring_head + 16'd1) != ring_tail)) begin
-                  dma_beat <= 4'd0;
+                  dma_beat <= 2'd0;
                   rd_desc  <= 1'b1;
                   dstate   <= D_AR;
                 end else begin
@@ -440,17 +443,16 @@ module cgra_top #(
                 dma_idx <= dma_nidx;
                 if (dma_nidx >= dma_run_len) begin
                   if (ring_mode) begin
-                    wr_status <= 1'b1;      // ring: report completion, then next
+                    wr_status <= 1'b1;
                     dstate    <= D_AW;
                   end else begin
-                    dma_busy <= 1'b0;
-                    dma_done <= 1'b1;
+                    dma_busy    <= 1'b0;
+                    dma_done    <= 1'b1;
+                    dstate      <= D_IDLE;
                     dma_irq_evt <= 1'b1;
-                    dstate   <= D_IDLE;
                   end
                 end else begin
-                  dma_beat <= 4'd0;   // the W phase left it at the last beat
-                  dstate   <= D_SPAD_R;
+                  dstate <= D_AW;
                 end
               end
             end

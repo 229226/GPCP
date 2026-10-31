@@ -15,9 +15,10 @@
 - **完成中断 + PLIC**：CGRA 的阵列/拷贝完成事件经最小 PLIC（源 1）接到 CVA6 机器外部
   中断，CPU 用 `wfi` 等 slot 完成（`make -C sim/soc run-irq`）。
 - **突发拷贝 + 描述符环**：拷贝引擎是**完整 AXI4 主口**（INCR 突发、`WLAST/RLAST`、B 响应，
-  SoC 侧加了第 2 个 AXI 从机、CPU 优先仲裁）；**1024 字线性拷贝 1.24 周期/字**
-  （约 2.4 倍于逐字版）。描述符放 RAM，引擎自取、自写状态字、自推进 head
-  （`make -C sim/soc run-ring`）。
+  SoC 侧第 2 个 AXI 从机 + CPU 优先逐拍仲裁）；数据**流式**进出 scratchpad
+  （一拍 2 字），突发长度 `DMA_BEATS`（默认 32 拍、4 KiB 裁剪，即写合并）：
+  **1024 字线性拷贝 0.70 周期/字**（约 4 倍于逐字版）。描述符放 RAM，引擎自取、
+  自写状态字、自推进 head（`make -C sim/soc run-ring`）。
 - **B2**：真实 **CVA6（RV64GC）** 核在 Verilator 中启动裸机程序，通过 AXI4 驱动 CGRA，
   回读结果与黄金模型一致（2059 周期）。
 - **B3（进行中）**：SoC 升级为 Linux 可用映射（CLINT / PLIC / 16550 UART / 64 MiB RAM，
