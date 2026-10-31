@@ -67,6 +67,29 @@
 #define GPCP_CGRA_IRQ_ARR      (1u << 0)
 #define GPCP_CGRA_IRQ_DMA      (1u << 1)
 
+/* ------------------------------------------------------------ descriptor ring */
+#define GPCP_CGRA_RING_BASE    0x0048u   /* W/R: byte address of descriptor 0 */
+#define GPCP_CGRA_RING_SIZE    0x004Cu   /* W/R: ring depth (power of two)    */
+#define GPCP_CGRA_RING_HEAD    0x0050u   /* R: next descriptor the engine fetches */
+#define GPCP_CGRA_RING_TAIL    0x0054u   /* R/W: one past the last valid entry */
+#define GPCP_CGRA_RING_CTRL    0x0058u   /* W: [0] enable                     */
+                                         /* R: [0] enabled [1] idle [2] busy  */
+#define GPCP_CGRA_RING_DONE    0x005Cu   /* R: descriptors completed so far   */
+#define GPCP_CGRA_RING_EN      (1u << 0)
+#define GPCP_CGRA_RING_IDLE    (1u << 1)
+#define GPCP_CGRA_RING_BUSY    (1u << 2)
+
+/* 32-byte descriptor (8-byte aligned, engine fetches 4 beats):
+ *   +0x00 src (u32, 8-byte aligned)      +0x04 dst | page<<16 | dir<<17 |
+ *   +0x08 len (u16 words)                       irq<<18
+ *   +0x0C stride (u16) | row<<16         +0x10 status (engine writes 0xC0DE0000|len)
+ *   +0x14..+0x1F reserved                                                */
+#define GPCP_DMA_DESC_BYTES   32u
+#define GPCP_DMA_DESC_PAGE1   (1u << 16)
+#define GPCP_DMA_DESC_OUT     (1u << 17)   /* scratchpad -> RAM */
+#define GPCP_DMA_DESC_IRQ     (1u << 18)   /* raise the completion interrupt */
+#define GPCP_DMA_DESC_MAGIC   0xC0DE0000u
+
 #define GPCP_CGRA_CTRL_START   (1u << 0)
 #define GPCP_CGRA_CTRL_CLRDONE (1u << 1)
 
@@ -129,6 +152,25 @@ static inline void gpcp_cgra_array_start(uintptr_t base, uint32_t page, uint32_t
     gpcp_cgra_write(base, GPCP_CGRA_NUM_CYCLES,
                     (cycles & 0xFFFFu) | GPCP_CGRA_RUN_START |
                     (page ? GPCP_CGRA_RUN_PAGE1 : 0u));
+}
+
+/* ---------------------------------------------------------- descriptor ring */
+static inline void gpcp_cgra_ring_start(uintptr_t base, uintptr_t ring_addr,
+                                        uint32_t depth, uint32_t tail)
+{
+    gpcp_cgra_write(base, GPCP_CGRA_RING_BASE, (uint32_t)ring_addr);
+    gpcp_cgra_write(base, GPCP_CGRA_RING_SIZE, depth);
+    gpcp_cgra_write(base, GPCP_CGRA_RING_HEAD, 0);
+    gpcp_cgra_write(base, GPCP_CGRA_RING_TAIL, tail);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");   /* tail before enable */
+    gpcp_cgra_write(base, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
+}
+
+/* push more work: the engine picks it up as soon as it runs out of descriptors */
+static inline void gpcp_cgra_ring_push(uintptr_t base, uint32_t tail)
+{
+    gpcp_cgra_write(base, GPCP_CGRA_RING_TAIL, tail);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
 }
 
 /* ------------------------------------------------------------ task descriptor */

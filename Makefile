@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq linux
+.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring linux
 
 all: test
 
@@ -29,6 +29,10 @@ soc-run-dma:
 # L1 data plane: interrupt-driven variant (CGRA -> PLIC -> CVA6 + wfi)
 soc-run-irq:
 	$(MAKE) -C sim/soc run-irq
+
+# L1 data plane: descriptor ring + burst copy
+soc-run-ring:
+	$(MAKE) -C sim/soc run-ring
 
 # B3: OpenSBI + Linux on the SoC
 linux:

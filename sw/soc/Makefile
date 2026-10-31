@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -26,6 +26,10 @@ $(BUILD)/%.elf: %.c start.S link.ld | $(BUILD)
 $(BUILD)/irq_bm.elf: irq_bm.c start_irq.S link.ld | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start_irq.S $< -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/irq_bm.dis
+
+$(BUILD)/ring_bm.elf: ring_bm.c start_irq.S link.ld | $(BUILD)
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start_irq.S $< -o $@
+	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/ring_bm.dis
 
 $(BUILD)/%.bin: $(BUILD)/%.elf
 	env -u LD_LIBRARY_PATH $(OBJCOPY) -O binary $< $@

@@ -45,8 +45,9 @@
 #define MIE_MEIE    0x800u     /* machine external */
 #define MIE_MTIE    0x80u
 
-static int32_t slots[SLOTS][64];
-static int32_t out[SLOTS][32];
+/* The copy engine moves 64-bit beats, so both ends must be 8-byte aligned */
+static int32_t slots[SLOTS][64] __attribute__((aligned(8)));
+static int32_t out[SLOTS][32] __attribute__((aligned(8)));
 
 static volatile uint32_t irq_flags;      /* bits published by the handler */
 static volatile uint32_t irq_count;
@@ -259,18 +260,6 @@ int main(void)
     res[67] = errs + self_check();
     res[68] = (uint32_t)SLOTS;
     res[69] = 0x600Du;
-
-    /* diagnostics for the test harness while the interrupt path is new */
-    res[70] = gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_CYCLE_CNT);
-    res[71] = gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_NUM_CYCLES);
-    res[72] = gpcp_cgra_read(CGRA_BASE, GPCP_SPAD_ADDR(0, 0));
-    res[73] = gpcp_cgra_read(CGRA_BASE, GPCP_SPAD_ADDR(16, 0));
-    res[74] = gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_IRQ_STATUS);
-    res[75] = gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_IRQ_ENABLE);
-    res[76] = gpcp_cgra_read(CGRA_BASE, GPCP_SPAD_ADDR(48, 0));   /* page1 bank16 w0 */
-    res[77] = gpcp_cgra_read(CGRA_BASE, GPCP_SPAD_ADDR(32, 0));   /* page1 bank0  w0 */
-    res[78] = gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_IMEM_BASE);
-    res[79] = gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_BUF_PAGE);
 
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     *(volatile uint32_t *)EXIT_ADDR = 0x600Du;

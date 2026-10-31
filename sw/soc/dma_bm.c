@@ -40,8 +40,9 @@
 #define SLOTS   3
 #define CYCLES  14
 
-static int32_t slots[SLOTS][64];
-static int32_t out[SLOTS][32];
+/* The copy engine moves 64-bit beats, so both ends must be 8-byte aligned */
+static int32_t slots[SLOTS][64] __attribute__((aligned(8)));
+static int32_t out[SLOTS][32] __attribute__((aligned(8)));
 
 static uint32_t errs;
 

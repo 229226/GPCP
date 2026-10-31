@@ -14,6 +14,9 @@
   `make -C sim/soc run-dma` 跑 3 个 slot 的流水并逐位比对黄金模型。
 - **完成中断 + PLIC**：CGRA 的阵列/拷贝完成事件经最小 PLIC（源 1）接到 CVA6 机器外部
   中断，CPU 用 `wfi` 等 slot 完成（`make -C sim/soc run-irq`）。
+- **突发拷贝 + 描述符环**：内存侧 64-bit beat、一次描述符内最多 8 拍背靠背
+  （**1024 字线性拷贝 1.18 周期/字**，约 2.5 倍于逐字版）；描述符放 RAM，引擎自取、
+  自写状态字、自推进 head（`make -C sim/soc run-ring`）。
 - **B2**：真实 **CVA6（RV64GC）** 核在 Verilator 中启动裸机程序，通过 AXI4 驱动 CGRA，
   回读结果与黄金模型一致（2059 周期）。
 - **B3（进行中）**：SoC 升级为 Linux 可用映射（CLINT / PLIC / 16550 UART / 64 MiB RAM，
@@ -41,6 +44,10 @@ make -C sim/soc run-dma
 make -C sim/soc run-irq
 # [ OK ] interrupt-driven DMA + double buffering: 2 slots, 5 completion interrupt(s) ...
 
+# L1：描述符环 + 突发拷贝
+make -C sim/soc run-ring
+# [ OK ] descriptor ring + burst copy: 4 descriptors consumed, ... 1.18 cycles/word
+
 # B3：构建 Linux 栈并启动（耗时较长）
 bash scripts/build_b3.sh
 make -C sim/soc linux
@@ -56,7 +63,7 @@ sim/cgra/        CGRA Verilator 模型 + CPU 总线 BFM（M0）
 sim/soc/         SoC Verilator 模型（CVA6 + CGRA，B2）
 sw/include/      CGRA 软件 ABI（裸机 / Linux 驱动共用）
 sw/examples/     裸机用例（ABI 编译检查）
-sw/soc/          B2/B4 裸机程序（start.S / link.ld / cgra_bm.c / dma_bm.c）
+sw/soc/          B2/B4 裸机程序（start.S / start_irq.S / link.ld / cgra_bm / dma_bm / irq_bm / ring_bm）
 tools/           汇编器 + kernel + 自动测试 + SoC 结果比对
 scripts/         fetch_cva6.py（GitHub 受限时的拉取脚本）、gen_flist.py、env.sh
 third_party/cva6/ CVA6 源码（不纳入 git）
@@ -79,6 +86,7 @@ make soc                              # 编译 CVA6 + CGRA SoC 模型（约 35 s
 make soc-run                          # 编译裸机程序 + 跑端到端联调
 make soc-run-dma                      # 编译裸机程序 + 跑 DMA 双缓冲联调
 make soc-run-irq                      # 编译裸机程序 + 跑中断驱动联调
+make soc-run-ring                     # 编译裸机程序 + 跑描述符环/突发拷贝联调
 ```
 
 手工使用 Verilator/gtkwave 时先 `source scripts/env.sh`

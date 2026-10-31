@@ -31,13 +31,19 @@ module cgra_array (
     // double buffering: array page / copy-engine page
     input  logic                                 buf_page,
     input  logic                                 dma_page,
-    // copy-engine write port into the scratchpad (page-relative index)
-    input  logic                                 dma_we,
-    input  logic [9:0]                           dma_addr,
-    input  logic [31:0]                          dma_wdata,
-    // copy-engine read port (spad -> memory direction)
-    input  logic [9:0]                           dma_rd_addr,
-    output logic [31:0]                          dma_rd_data
+    // copy-engine write ports (page-relative indices): a 64-bit beat carries
+    // two words, so two ports let the engine store 2 words per cycle
+    input  logic                                 dma_we0,
+    input  logic [9:0]                           dma_addr0,
+    input  logic [31:0]                          dma_wdata0,
+    input  logic                                 dma_we1,
+    input  logic [9:0]                           dma_addr1,
+    input  logic [31:0]                          dma_wdata1,
+    // copy-engine read ports (spad -> memory direction)
+    input  logic [9:0]                           dma_rd_addr0,
+    output logic [31:0]                          dma_rd_data0,
+    input  logic [9:0]                           dma_rd_addr1,
+    output logic [31:0]                          dma_rd_data1
 );
 
   import cgra_pkg::*;
@@ -100,14 +106,21 @@ module cgra_array (
       end
       if (host_sp_we && (host_bank == b[5:0]))
         spad[b][host_word] <= wr_data;
-      else if (dma_we && (dma_page == b[5]) && (dma_addr[9:5] == b[4:0]))
-        spad[b][dma_addr[4:0]] <= dma_wdata;
+      else if (dma_we0 && (dma_page == b[5]) && (dma_addr0[9:5] == b[4:0]))
+        spad[b][dma_addr0[4:0]] <= dma_wdata0;
       else if (found)
         spad[b][wa[4:0]] <= wd;
+      // second copy-engine port: the two words of a 64-bit beat are distinct
+      // words of the same bank, so this is a real dual-write port (host keeps
+      // priority; a same-word collision would only be a broken descriptor)
+      if (dma_we1 && (dma_page == b[5]) && (dma_addr1[9:5] == b[4:0]) &&
+          !(host_sp_we && (host_bank == b[5:0])))
+        spad[b][dma_addr1[4:0]] <= dma_wdata1;
     end
   end
 
-  assign dma_rd_data = spad[{dma_page, dma_rd_addr[9:5]}][dma_rd_addr[4:0]];
+  assign dma_rd_data0 = spad[{dma_page, dma_rd_addr0[9:5]}][dma_rd_addr0[4:0]];
+  assign dma_rd_data1 = spad[{dma_page, dma_rd_addr1[9:5]}][dma_rd_addr1[4:0]];
 
   // ---------------- host register decode (PE windows) ----------------
   logic [3:0] host_pe;

@@ -29,7 +29,7 @@
 static Vcgra_axi_lite* dut = nullptr;
 static std::vector<uint32_t> g_din;
 static bool g_stream = false;
-static std::vector<uint32_t> g_dma_mem(1024, 0);   // copy-engine backing store (standalone)
+static std::vector<uint32_t> g_dma_mem(1024, 0);   // copy-engine backing store (standalone, 32-bit words)
 
 static void tick() {
     dut->clk = 0;
@@ -40,11 +40,23 @@ static void tick() {
     else
         dut->din = 0;
     // simple synchronous memory model for the copy-engine master port
+    // (64-bit beats, 8-byte aligned; two 32-bit words per beat)
     dut->dma_ready = 0;
     if (dut->dma_valid) {
-        uint32_t idx = (dut->dma_addr >> 2) & 0x3FF;
-        dut->dma_rdata = g_dma_mem[idx];
-        if (dut->dma_we) g_dma_mem[idx] = dut->dma_wdata;
+        uint64_t w = 0;
+        // 2*(idx) and 2*(idx)+1 hold the two words of the beat; the model uses the
+        // address itself so weird (unaligned) descriptors still land somewhere
+        auto load = [&](uint32_t a) -> uint32_t {
+            uint32_t i = (a >> 2) & 0x3FF;
+            return g_dma_mem[i];
+        };
+        w = (uint64_t)load(dut->dma_addr) | ((uint64_t)load(dut->dma_addr + 4) << 32);
+        dut->dma_rdata = w;
+        if (dut->dma_we) {
+            uint8_t st = dut->dma_wstrb;
+            if (st & 0x0F) g_dma_mem[(dut->dma_addr >> 2) & 0x3FF] = (uint32_t)dut->dma_wdata;
+            if (st & 0xF0) g_dma_mem[((dut->dma_addr + 4) >> 2) & 0x3FF] = (uint32_t)(dut->dma_wdata >> 32);
+        }
         dut->dma_ready = 1;
     }
     dut->clk = 1;

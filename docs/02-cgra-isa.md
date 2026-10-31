@@ -102,6 +102,12 @@
 | `0x003C` | R | `DMA_RUN_ROW`：锁存的每行字数（调试） |
 | `0x0040` | R/W | `IRQ_STATUS`：`[0]` 阵列完成、`[1]` 拷贝完成；写 1 清零（W1C） |
 | `0x0044` | R/W | `IRQ_ENABLE`：同上位定义，使能后汇总为 `irq_o` 电平 |
+| `0x0048` | R/W | `RING_BASE`：描述符环在 RAM 的起始地址（见 3.3） |
+| `0x004C` | R/W | `RING_SIZE`：环深度（2 的幂） |
+| `0x0050` | R/W | `RING_HEAD`：引擎下一个要取的描述符 |
+| `0x0054` | R/W | `RING_TAIL`：软件推进它来提交描述符 |
+| `0x0058` | R/W | `RING_CTRL`：`[0]` 使能；读 `[1]` idle、`[2]` busy |
+| `0x005C` | R | `RING_DONE`：已完成描述符计数（进度） |
 | `0x1000 + pe*32 + r*4` | RW | PE 寄存器 `r0..r7`（预装载 / 回读） |
 | `0x1200 + pe*4` | RW | PE 累加器 |
 | `0x2000 + idx*4` | RW | 指令存储器，`idx = cycle*NPES + pe`（8192 words，占 0x2000–0x9FFF） |
@@ -129,27 +135,36 @@ CVA6 的 write-through 单元会把**同一 8 字节字内的两次相邻 32-bit
 这类必须成组写入的寄存器，则用 `fence`（`gpcp_cgra_dma_start()` 已封装）保证顺序。
 SoC 侧对 64-bit store 也会拆成两次 32-bit 寄存器写（见 `gpcp_soc.sv` 的 `cgra_hi_*`）。
 
-### 3.1 拷贝引擎（DMA）
+### 3.1 拷贝引擎（DMA，突发 + 描述符环）
 
-- 一条描述符 = `{SRC, DST, LEN, PAGE, DIR, STRIDE, ROW}`，写 `DMA_CTRL[0]` 启动；
+- 一条描述符 = `{SRC, DST, LEN, PAGE, DIR, STRIDE, ROW}`；两种启动方式：
+  - **单发**：写寄存器后写 `DMA_CTRL[0]`；
+  - **环模式**：描述符放 RAM，引擎自己取（见 3.3）；
 - 启动时描述符被**锁存**到引擎内部的 run 寄存器，因此 CPU 可以在传输进行中
   直接写下一组描述符（ping-pong 调度），不会破坏正在跑的传输；
-- 传输进行中写 `DMA_CTRL[0]` 被忽略（`busy` 为 1 时不启动）；软件在启动前读 `busy`
-  即可，`busy=1` 时写入的 start 不会排队；
+- 传输进行中写 `DMA_CTRL[0]` 被忽略（`busy` 为 1 时不启动）；
 - 方向：`DIR=0` 为 RAM→scratchpad，`DIR=1` 为 scratchpad→RAM；
-- 一次传输固定 `LEN` 个字，每个字 2 个周期（`MEM_RD`/`SPAD_W`）或 3 个周期
-  （`SPAD_R`/`MEM_WR`），未做 AXI burst；
+- **突发**：内存侧按 **64-bit beat** 传输，每次突发最多 8 拍（16 个字），
+  同一突发的拍背靠背、每拍 1 周期（地址 +8）；不足 16 个字时按剩余字数缩突发，
+  末尾单字用 `wstrb=0x0F` 只写低 32 位；
+- **scratchpad 侧**：一拍内的两个 32 位字用**两个写端口**写同一 bank 的不同 word
+  （读出方向也有两个读端口），所以入向是「8 拍读 + 8 拍写」16 个字 / 16 周期；
+- 实测吞吐：**1024 个字的线性拷贝 1208 周期（1.18 周期/字）**，比逐字版本（约 3 周期/字）
+  快约 2.5 倍；
+- 对齐要求：**SRC（以及出向的 RAM 目的地址）必须 8 字节对齐**（beat 是 64 位，
+  RAM 按 64 位字取数）；裸机侧用 `__attribute__((aligned(8)))`；
 - 2D 行走：`ROW != 0` 时，每行 `ROW` 个字，行末索引 +`STRIDE-ROW+1`；
   例：`STRIDE=32, ROW=4, LEN=64` 把 RAM 里连续的 64 个字铺到
-  页内 bank 0–15 的 word 0–3（`bank i word k`）；
+  页内 bank 0–15 的 word 0–3（`bank i word k`）。一拍内两个关键字必须落在
+  不同的 `{bank, word}`（正常布局天然满足）；
 - scratchpad 页隔离：拷贝引擎只访问 `DMA_PAGE` 页，阵列只访问 `BUF_PAGE` 页，
   因此「阵列算 page 0、DMA 填 page 1」可以在同一拍同时进行（不同 bank 组）；
 - **软件必须在写 `DMA_CTRL.start` 之前执行 `fence`**（裸机里是 `fence iorw, iorw`，
-  已封装进 `gpcp_cgra_dma_start()`）：start 是 posted store，可能越过前面的描述符写，
+  已封装进 `gpcp_cgra_dma_start()`）:start 是 posted store，可能越过前面的描述符写，
   导致锁存到旧值（例如 `ROW=0`，2D 拷贝退化成线性）；
-- CPU 与 DMA 共享 RAM 时 **CPU 优先**：DMA 只 SoC 的空闲拍搬运，CPU 的读写不会丢；
-- `0x0030–0x003C` 是只读调试窗口：`DMA_RUN_SRC / LEN / STRIDE / ROW`，
-  显示**本次传输锁存的**描述符，用于确认软件写入是否在 start 前生效。
+- CPU 与 DMA 共享 RAM 时 **CPU 优先**：引擎的每一拍只在 CPU 不使用总线的周期授予，
+  CPU 的读写不会丢；SoC 侧的应答是**组合**的（同拍给 `ready` 与读数据），
+  所以引擎不会因为「读数据晚一拍」而重复读到上一拍的数据。
 
 ### 3.2 中断
 
@@ -159,7 +174,38 @@ SoC 侧对 64-bit store 也会拆成两次 32-bit 寄存器写（见 `gpcp_soc.s
   `(status & ~mask) | events` 处理）；
 - 软中断处理顺序必须是 **claim（PLIC）→ 读状态 → W1C → complete**：先 claim 再清状态，
   否则电平可能在 claim 之前掉下去，claim 会返回 0（变成伪中断）；
+- **两个事件挨得很近时，W1C 会合并两次完成**（第一次 ISR 清状态时第二次事件已置位，
+  一次清除把两个都清掉）。所以“完成数”不要数中断，要读**进度计数器**
+  `RING_DONE`（环模式）或 `DMA_CTRL.done`（单发）；中断只当唤醒用；
 - SoC 里这条线接 CVA6 的机器外部中断（`irq_i[0]`，cause 11），详见 `docs/06-linux-b3.md` 1.3。
+
+### 3.3 描述符环
+
+描述符放在 SoC RAM（**32 字节 / 8 字节对齐**），引擎自取、自写状态、自推进 head：
+
+| 偏移 | 内容 |
+|---|---|
+| `+0x00` | `src`（u32，8 字节对齐） |
+| `+0x04` | `dst`（spad 页内索引）`\|` `page<<16` `\|` `dir<<17` `\|` `irq<<18` |
+| `+0x08` | `len`（字数，≤1024） |
+| `+0x0C` | `stride`（低 16）`\|` `row<<16` |
+| `+0x10` | 状态：引擎完成时写 `0xCAFE0000 \| len`（只写低 32 位） |
+| `+0x14..1F` | 保留 |
+
+寄存器（`0x0048` 起）：
+
+| 地址 | 内容 |
+|---|---|
+| `0x0048` | `RING_BASE`：描述符 0 的 RAM 地址 |
+| `0x004C` | `RING_SIZE`：环深度（2 的幂） |
+| `0x0050` | `RING_HEAD`：引擎下一个要取的描述符（只读，可用写复位） |
+| `0x0054` | `RING_TAIL`：最后一个有效描述符的下一个（软件推进它来提交任务） |
+| `0x0058` | `RING_CTRL`：`[0]` 使能；读 `[1]` 空闲（head==tail）、`[2]` busy |
+| `0x005C` | `RING_DONE`：已完成描述符计数（**进度**，避免数中断） |
+
+行为：使能且 `head != tail` 时引擎自动开始；每个描述符完成后写状态字、`RING_DONE++`、
+`head` 前进（到 `size` 回绕），描述符的 `irq` 位置 1 时发完成中断；
+`head == tail` 时回到空闲，`RING_CTRL.idle` 置位。
 
 ---
 
@@ -213,8 +259,8 @@ for each (pe, reg) v = cgra_read(...);
 2. 无跨行/跨列的 2 跳以上路由，复杂 FFT 需要多拍搬运；
 3. 结果归约（如 FIR 的空间求和、FFT 蝶形跨距 2/4/8）由软件多拍实现，效率低；
 4. 单发射、无谓词/无循环硬件；
-5. DMA 为单描述符寄存器接口：没有描述符环、没有中断、没有 AXI burst
-   （每字 2–3 周期），CPU 需要轮询或由 RTOS 定时器驱动。
+5. 拷贝引擎是内部 64-bit beat 主口（不是 AXI INCR 突发），每次突发最多 8 拍；
+   没有跨描述符的预取/流水，也没有 out-of-order 完成。
 
 ---
 
@@ -226,7 +272,7 @@ for each (pe, reg) v = cgra_read(...);
 | scratchpad | 每 PE 64×32b（双口），支持 `LD/ST imm` 与邻 PE 共享 |
 | 双发射 | 64b 指令：1 算术 + 1 访存/路由 |
 | 谓词与循环 | `pred` 位 + `loop_start/loop_end` 硬件计数 |
-| DMA | 描述符环 + 双缓冲，AXI4 主口（**双缓冲 + 2D 拷贝已实现**，见 3.1；环/中断待做） |
+| DMA | 描述符环 + 双缓冲，AXI4 主口（**双缓冲、2D 拷贝、突发、环、中断已实现**，见 3.1/3.3；真 AXI 突发待做） |
 | 复数支持 | `CMAC`：一次完成 (ar·br − ai·bi, ar·bi + ai·br) |
 | FFT 专用 | 蝶形跨距路由网络（stage 可配置） |
 | 编译 | MLIR dialect（`cgra`）→ 布局布线 → 微码二进制 |

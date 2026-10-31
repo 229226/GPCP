@@ -95,6 +95,24 @@ package cgra_pkg;
   localparam int IRQ_ARR = 0;
   localparam int IRQ_DMA = 1;
 
+  // ---------------- descriptor ring (descriptors live in SoC RAM) ----------------
+  // 32-byte descriptor, must be 8-byte aligned:
+  //   +0x00  src (u32, 8-byte aligned)
+  //   +0x04  dst spad index (u16) | page<<16 | dir(spad->ram)<<17 |
+  //          irq<<18 | last<<19
+  //   +0x08  len (u16, words, <= 1024)
+  //   +0x0C  stride (u16) | row<<16
+  //   +0x10  status written by the engine: 0xC0DE_0000 | len
+  //   +0x14 .. +0x1F reserved
+  localparam logic [15:0] REG_RING_BASE = 16'h0048; // W/R: byte address of descriptor 0
+  localparam logic [15:0] REG_RING_SIZE = 16'h004C; // W/R: ring depth (power of two)
+  localparam logic [15:0] REG_RING_HEAD = 16'h0050; // R: next descriptor / W: set
+  localparam logic [15:0] REG_RING_TAIL = 16'h0054; // R/W: one past the last valid entry
+  localparam logic [15:0] REG_RING_CTRL = 16'h0058; // W: [0] enable
+                                                    // R: [0] enabled [1] idle [2] busy
+  localparam logic [15:0] REG_RING_DONE = 16'h005C; // R: descriptors completed so far
+  localparam logic [31:0] DESC_STATUS_MAGIC = 32'hC0DE_0000;
+
   // ---------------- scratchpad (distributed, banked) ----------------
   // 32 banks x 32 words x 32 bit.  Bank b is normally owned by PE b (data),
   // banks 16..31 are used for per-PE twiddles/coefficients in the kernels.

@@ -112,11 +112,15 @@ module gpcp_soc #(
   logic [15:0] cgra_wr_addr;
   logic [31:0] cgra_wr_data;
   logic [15:0] cgra_rd_addr;
-  // copy-engine master (DMA) into the SoC RAM
+  // copy-engine master (DMA) into the SoC RAM: 64-bit beats, 8-byte aligned.
+  // The response is combinational (ready + data in the same cycle), so the
+  // engine can advance one beat per cycle and never re-reads the old address.
   logic        cgra_dma_valid, cgra_dma_we;
-  logic [31:0] cgra_dma_addr, cgra_dma_wdata;
-  logic [31:0] dma_rdata_q;
-  logic        dma_ready_q;
+  logic [31:0] cgra_dma_addr;
+  logic [63:0] cgra_dma_wdata;
+  logic [7:0]  cgra_dma_wstrb;
+  logic [63:0] cgra_dma_rdata;
+  logic        cgra_dma_ready;
 
   cgra_top #(.DBG(GPCP_DBG)) u_cgra (
       .clk    (clk_i),
@@ -131,8 +135,9 @@ module gpcp_soc #(
       .dma_we   (cgra_dma_we),
       .dma_addr (cgra_dma_addr),
       .dma_wdata(cgra_dma_wdata),
-      .dma_rdata(dma_rdata_q),
-      .dma_ready(dma_ready_q),
+      .dma_wstrb(cgra_dma_wstrb),
+      .dma_rdata(cgra_dma_rdata),
+      .dma_ready(cgra_dma_ready),
       .busy   (cgra_busy),
       .done   (cgra_done),
       .cycle_o(cgra_cycle),
@@ -192,6 +197,15 @@ module gpcp_soc #(
   assign ar_accept = (state == S_IDLE) & core_req.ar_valid;
 
   assign rd_bpb = 8'b1 << rd_size_q;
+
+  // ---------------------------------------------------------------- DMA grant
+  // The copy engine gets a beat only in a cycle where the CPU accepts nothing,
+  // and the response (ready + read data) is combinational: the engine sees its
+  // data in the same cycle it presents the address, so it advances one beat per
+  // cycle and can never latch a stale beat.
+  assign cgra_dma_ready = cgra_dma_valid && (state == S_IDLE) && !ar_accept && !aw_accept;
+  assign cgra_dma_rdata = (decode_region({32'b0, cgra_dma_addr}) == R_RAM)
+                          ? ram[cgra_dma_addr[25:3]] : 64'b0;
 
   // ---------------------------------------------------------------- peripheral read helpers
   function automatic logic [63:0] clint_read(input logic [15:0] off);
@@ -414,13 +428,10 @@ module gpcp_soc #(
       uart_scr    <= 8'b0;
       uart_dll    <= 8'b0;
       uart_dlm    <= 8'b0;
-      dma_ready_q <= 1'b0;
-      dma_rdata_q <= 32'b0;
       cgra_hi_pending <= 1'b0;
       cgra_hi_addr    <= 16'b0;
       cgra_hi_data    <= 32'b0;
     end else begin
-      dma_ready_q <= 1'b0;
 
       if (aw_accept && (decode_region(core_req.aw.addr) == R_CGRA) &&
           (core_req.aw.size == 3'b011)) begin
@@ -581,24 +592,13 @@ module gpcp_soc #(
             if (core_req.w.last) state <= S_B;
             else                 state <= S_WR;
           end else if (cgra_dma_valid) begin
-            // Copy engine: one 32-bit word per handshake.  The CPU always has
-            // priority: this branch is only reached when no AXI transaction is
-            // being accepted, so CPU writes can never be dropped by the DMA.
-            if (decode_region({32'b0, cgra_dma_addr}) == R_RAM) begin
-              if (cgra_dma_we) begin
-                // 32-bit word moves: honour addr[2] for the RAM half
-                if (cgra_dma_addr[2])
-                  ram[cgra_dma_addr[25:3]][63:32] <= cgra_dma_wdata;
-                else
-                  ram[cgra_dma_addr[25:3]][31:0]  <= cgra_dma_wdata;
-              end else begin
-                dma_rdata_q <= cgra_dma_addr[2] ? ram[cgra_dma_addr[25:3]][63:32]
-                                                : ram[cgra_dma_addr[25:3]][31:0];
-              end
-            end else begin
-              dma_rdata_q <= 32'b0;
+            // Copy engine: 64-bit beat, write side only (reads are served
+            // combinationally above).  The CPU always has priority.
+            if (cgra_dma_we && (decode_region({32'b0, cgra_dma_addr}) == R_RAM)) begin
+              for (int b = 0; b < 8; b++)
+                if (cgra_dma_wstrb[b])
+                  ram[cgra_dma_addr[25:3]][b*8 +: 8] <= cgra_dma_wdata[b*8 +: 8];
             end
-            dma_ready_q <= 1'b1;
           end
         end
 
