@@ -35,7 +35,8 @@
   序列按 38.211/38.212 生成（`tools/nr_seq.py`），四个 kernel 与黄金模型**逐位一致**；
   **SoC 级小区搜索已闭环**：PSS 检测（3 候选、2688 周期）与 SSS 336 假设搜索
   （218,894 周期）都检出正确的小区 ID，partial 逐位一致
-  （`make -C sim/soc run-sync` / `run-sss`）。
+  （`make -C sim/soc run-sync` / `run-sss`）；**Polar SC 译码**走 CGRA 树遍历
+  （N=64/K=32，79,025 周期，64/64 位正确，`make -C sim/soc run-polar`）。
 - **slot 时基调度**：CLINT 定时器每 1200 拍打一次 tick，ISR 只记时/重装，
   主循环 `wfi` + 一个 slot 一次服务；**抖动 0、零 overrun、8 slot 逐位一致**
   （`make -C sim/soc run-slot`）。
