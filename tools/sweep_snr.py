@@ -104,20 +104,29 @@ def main():
     ap.add_argument("--hw", action="store_true")
     ap.add_argument("--snr", type=float, nargs="+", default=[-4, -2, 0, 2, 4, 6, 8])
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--seeds", type=int, default=1,
+                    help="average over seeds 1..N (noise realisations)")
     ap.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     a = ap.parse_args()
     if not (a.model or a.hw):
         ap.error("choose --model and/or --hw")
 
     root = os.path.abspath(a.root)
-    print(f"{'SNR dB':>7} | {'mode':>5} | {'N_ID2':>5} | {'N_ID1':>5} | {'MIB err':>7} | cycles")
+    print(f"{'SNR dB':>7} | {'mode':>5} | {'NID2 ok':>7} | {'NID1 ok':>7} | {'MIB err':>7} | cycles")
     print("-" * 58)
     for snr in a.snr:
+        seeds = range(a.seed, a.seed + a.seeds)
         if a.model:
-            n2, n1, err = model_point(snr, a.seed)
-            ok_n1 = n1 == sp.TRUE_NID1
-            print(f"{snr:7.1f} | model | {'ok' if n2 == sp.TRUE_NID2 else 'WRONG':>5} | "
-                  f"{'ok' if ok_n1 else ('nid=%d' % n1):>5} | {err:7d} | -")
+            e2 = e1 = 0
+            errs = []
+            for sd in seeds:
+                n2, n1, err = model_point(snr, sd)
+                e2 += n2 != sp.TRUE_NID2
+                e1 += n1 != sp.TRUE_NID1
+                errs.append(err)
+            avg = sum(errs) / len(errs)
+            print(f"{snr:7.1f} | model | {len(errs) - e2:3d}/{len(errs):<2d} | "
+                  f"{len(errs) - e1:3d}/{len(errs):<2d} | {avg:7.2f} | -")
         if a.hw:
             bin_path = os.path.join(root, "sim/soc/build/Vgpcp_soc")
             if not os.path.exists(bin_path):
