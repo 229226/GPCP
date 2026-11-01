@@ -309,13 +309,13 @@ def subcarriers():
 TD_SCALE = 256                   # pre-scale the samples so the fixed-point FFT keeps precision
 
 
-def _dump_bin(path):
+def _dump_bin(path, snr_db=None, seed=1):
     import struct
-    td, grid, payload = build_td()
+    td, grid, payload = build_td(snr_db=snr_db, seed=seed)
     with open(path, "wb") as f:
         for s in range(NSYM):
             for c in td[s]:
-                for v in (int(c.real) * TD_SCALE, int(c.imag) * TD_SCALE):
+                for v in (int(round(c.real * TD_SCALE)), int(round(c.imag * TD_SCALE))):
                     f.write(struct.pack("<I", v & 0xFFFFFFFF))
 
 
@@ -328,8 +328,31 @@ def dump_td(path, nid1=TRUE_NID1, nid2=TRUE_NID2):
     return payload
 
 
-def build_td(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None, amp=2000):
-    """OFDM time-domain samples of the 4 SSB symbols (IFFT of the grid)."""
+def add_awgn(td, snr_db, seed=1):
+    """Add complex AWGN to the four time-domain symbols.
+
+    The SNR is defined over the *whole* 4-symbol block (signal power divided by
+    noise power), which is what a receiver sees before it knows where the SSB
+    starts.  Samples stay float here; _dump_bin quantises once, after scaling.
+    """
+    import math
+    import random
+    rnd = random.Random(seed)
+    n = sum(len(s) for s in td)
+    p_sig = sum(c.real * c.real + c.imag * c.imag for s in td for c in s) / n
+    p_noise = p_sig / (10.0 ** (snr_db / 10.0))
+    sigma = math.sqrt(p_noise / 2.0)
+    return [[complex(c.real + rnd.gauss(0.0, sigma), c.imag + rnd.gauss(0.0, sigma))
+             for c in s] for s in td]
+
+
+def build_td(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None, amp=2000, snr_db=None,
+             seed=1):
+    """OFDM time-domain samples of the 4 SSB symbols (IFFT of the grid).
+
+    snr_db adds AWGN (see add_awgn) so the same program can be swept over SNR;
+    with snr_db = None the samples stay integer-valued exactly as before.
+    """
     grid, payload, bits = build_grid(nid1, nid2, payload)
     sc = subcarriers()
     td = []
@@ -340,13 +363,24 @@ def build_td(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None, amp=2000):
                 freq[sc[r]] = grid[s][r]
         td.append([int(round(c.real)) + 1j * int(round(c.imag))
                    for c in _fft(freq, inverse=True)])
+    if snr_db is not None:
+        td = add_awgn(td, snr_db, seed)
     return td, grid, payload
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) >= 3 and sys.argv[1] == "dump":
-        _dump_bin(sys.argv[2])
-        print(f"[info] wrote {sys.argv[2]}")
+    import argparse
+    ap = argparse.ArgumentParser(description="NR SSB golden model / sample dumper")
+    sub = ap.add_subparsers(dest="cmd")
+    d = sub.add_parser("dump", help="write the 4-symbol time-domain samples")
+    d.add_argument("file", nargs="?", default="td.bin")
+    d.add_argument("--snr", type=float, default=None,
+                   help="add AWGN at this SNR (dB over the whole 4-symbol block)")
+    d.add_argument("--seed", type=int, default=1)
+    a = ap.parse_args()
+    if a.cmd == "dump":
+        _dump_bin(a.file, snr_db=a.snr, seed=a.seed)
+        print(f"[info] wrote {a.file}"
+              + (f" (SNR {a.snr} dB, seed {a.seed})" if a.snr is not None else ""))
     else:
-        print("usage: ssb_plan.py dump <file>")
+        ap.print_help()

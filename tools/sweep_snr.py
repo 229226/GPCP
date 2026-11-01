@@ -1,105 +1,135 @@
 #!/usr/bin/env python3
-"""AWGN + SNR->BER sweep for the P1 real-mapping SSB PBCH chain.
+"""SNR sweep for the sample-level SSB receiver (tools/ssb_plan.py models it).
 
-Runs the Python golden reference receiver (tools/ssb_plan_p1.py) over a flat
-channel + per-subcarrier AWGN at a grid of SNRs and reports the block-error /
-bit-error rate of the decoded MIB.  This is the *model* curve: it exercises the
-exact same 38.211/38.212 blocks the C benchmark mirrors, so it is the reference
-the silicon result must sit on.
+Two modes, same geometry, both starting from tools/ssb_plan.build_td(snr_db=...):
 
-Optional: with --hw-dir, also dump one noisy time-domain sample file per SNR
-(same generator the C benchmark loads) so the hardware can be anchored at the
-model points via `make run-ssb-fid SNR=<db>`.
+  --model   pure Python: noisy samples -> FFT -> PSS (3) -> SSS (336) ->
+            DMRS/equalise/descramble -> polar SC.  Fast sanity baseline.
+  --hw      the same noisy samples through the CGRA: the SoC model runs
+            sw/soc/ssb_fft_bm.c on the dumped samples and the result words are
+            decoded exactly like tools/check_ssb_fft.py does.
 
-Usage:
-    python3 tools/sweep_snr.py                       # print table + write csv
-    python3 tools/sweep_snr.py --hw-dir build/soc/hw
-    python3 tools/sweep_snr.py --snr-min -5 --snr-max 25 --snr-step 1 --trials 40
+Reported per point: N_ID2 ok, N_ID1 ok, MIB bit errors (of 32) and, for --hw,
+the simulated cycles.  This is the first *quantitative* PHY metric of the
+project (the rest of the suite is bit-exactness at one operating point).
+
+    tools/sweep_snr.py --model --snr -6 -4 -2 0 2 4 6
+    tools/sweep_snr.py --hw --snr 0 2 4 6 --seed 1
 """
-import os
-import sys
 import argparse
+import os
+import subprocess
+import sys
+import tempfile
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-import ssb_plan_p1 as P   # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ssb_plan as sp
 
 
-def ber_at(snr_db, trials):
-    """Average MIB BER over `trials` noisy draws (each a fresh payload/seed)."""
-    errs = 0
-    tot = 0
-    for i in range(trials):
-        seed = (0x50B0A5 + i * 2654435761) & 0xFFFFFFFF
-        rx, payload = P.run_one(snr_db=snr_db, seed=seed)
-        errs += sum(1 for a, b in zip(rx, payload) if a != b)
-        tot += len(payload)
-    return errs, tot
+def model_point(snr, seed):
+    td, grid, payload = sp.build_td(snr_db=snr, seed=seed)
+    y = [[sp._fft(td[s])[r] for r in range(sp.NRE)] for s in range(sp.NSYM)]
+
+    # PSS: three candidates on the symbol that carries it
+    ref = [sp.nr_seq.pss_seq(c) for c in range(3)]
+    cor = []
+    for c in range(3):
+        re = sum(y[1][sp.PSS_RE0 + t].real * ref[c][t] for t in range(sp.NPSS))
+        im = sum(y[1][sp.PSS_RE0 + t].imag * ref[c][t] for t in range(sp.NPSS))
+        cor.append(abs(re) + abs(im))
+    nid2 = max(range(3), key=lambda c: cor[c])
+
+    # SSS: all 336 hypotheses on the other symbol
+    seqs = [sp.nr_seq.sss_seq(h, nid2) for h in range(336)]
+
+    def sss_metric(h):
+        re = sum(y[3][sp.PSS_RE0 + t].real * seqs[h][t] for t in range(sp.NPSS))
+        im = sum(y[3][sp.PSS_RE0 + t].imag * seqs[h][t] for t in range(sp.NPSS))
+        return (re * re + im * im) ** 0.5
+
+    best = max(range(336), key=sss_metric)
+    h, llr = sp.receiver(y, best, nid2)
+    bits = sp.sc_decode(llr)
+    info = sp.info_indices()
+    dec = [bits[i] for i in info]
+    want = sp.payload_bits()
+    mib_err = sum(1 for k in range(32) if dec[k] != want[k])
+    return nid2, best, mib_err
+
+
+def hw_point(snr, seed, bin_path, root):
+    td_path = os.path.join(root, "build/ssb/td_snr.bin")
+    os.makedirs(os.path.dirname(td_path), exist_ok=True)
+    sub = subprocess.run([sys.executable, os.path.join(root, "tools/ssb_plan.py"),
+                          "dump", td_path, "--snr", str(snr), "--seed", str(seed)],
+                         capture_output=True, text=True, env={k: v for k, v in os.environ.items()
+                                                             if k != "LD_LIBRARY_PATH"})
+    if sub.returncode != 0:
+        print(sub.stdout, sub.stderr)
+        raise SystemExit("dump failed")
+    dump = tempfile.mktemp(suffix=".txt")
+    env = {k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"}
+    cmd = [bin_path,
+           "--load", os.path.join(root, "build/sw/ssb_fft_bm.bin") + "@0x80000000",
+           "--load", td_path + "@0x80400000",
+           "--load", os.path.join(root, "build/fft/twiddle.bin") + "@0x80100000",
+           "--results", "0x80010000", "--nwords", "992",
+           "--dump", dump, "--max-cycles", "40000000"]
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    vals = []
+    try:
+        for line in open(dump):
+            parts = line.split()
+            if len(parts) >= 3 and parts[0] == "word" and parts[2].startswith("0x"):
+                w = int(parts[2], 16)
+                vals.append(w & 0xFFFFFFFF)
+                vals.append((w >> 32) & 0xFFFFFFFF)
+    except OSError:
+        raise SystemExit(f"no dump from {bin_path}; tail:\n{r.stdout[-500:]}{r.stderr[-500:]}")
+    os.unlink(dump)
+    if len(vals) < 992:
+        raise SystemExit(f"short dump ({len(vals)} words); expected the program to finish:\n"
+                         f"{r.stdout[-400:]}")
+    nid2, true2 = vals[6], vals[7]
+    nid1, true1 = vals[942], vals[943]
+    mib = vals[954:986]
+    want = sp.payload_bits()
+    mib_err = sum(1 for k in range(32) if mib[k] != want[k])
+    return nid2 == true2, nid1 == true1, mib_err, vals[9]
 
 
 def main():
-    ap = argparse.ArgumentParser(description="P1 SSB PBCH AWGN SNR-BER sweep")
-    ap.add_argument("--snr-min", type=float, default=-6.0)
-    ap.add_argument("--snr-max", type=float, default=26.0)
-    ap.add_argument("--snr-step", type=float, default=1.0)
-    ap.add_argument("--trials", type=int, default=30)
-    ap.add_argument("--out", default="build/soc/ssb_fid_snr.csv")
-    ap.add_argument("--hw-dir", default=None,
-                    help="if set, dump one noisy TD per SNR for HW anchoring")
-    args = ap.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", action="store_true")
+    ap.add_argument("--hw", action="store_true")
+    ap.add_argument("--snr", type=float, nargs="+", default=[-4, -2, 0, 2, 4, 6, 8])
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    a = ap.parse_args()
+    if not (a.model or a.hw):
+        ap.error("choose --model and/or --hw")
 
-    snrs = []
-    s = args.snr_min
-    while s <= args.snr_max + 1e-9:
-        snrs.append(round(s, 3))
-        s += args.snr_step
-
-    print("# P1 SSB PBCH: AWGN SNR -> MIB BER (model, 38.211/38.212 chain)")
-    print("# snr_db  ber        errors  bits")
-    rows = []
-    for snr in snrs:
-        e, t = ber_at(snr, args.trials)
-        ber = e / t if t else 0.0
-        rows.append((snr, ber, e, t))
-        print("%7.2f  %.4e  %7d  %7d" % (snr, ber, e, t))
-
-    out = args.out
-    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-    with open(out, "w") as f:
-        f.write("snr_db,ber,errors,bits\n")
-        for snr, ber, e, t in rows:
-            f.write("%.3f,%.6e,%d,%d\n" % (snr, ber, e, t))
-    print("# wrote %s" % out)
-
-    if args.hw_dir:
-        os.makedirs(args.hw_dir, exist_ok=True)
-        for snr in snrs:
-            fn = os.path.join(args.hw_dir, "ssb_fid_%d.td" % int(round(snr)))
-            P.dump_td_bin(fn, snr_db=snr, lcg_seed=0x50B0A5)
-        print("# wrote %d noisy TD anchors to %s" % (len(snrs), args.hw_dir))
-        print("# anchor the HW:  make -C sim/soc run-ssb-fid SNR=<db>")
-
-    # optional matplotlib plot (best-effort)
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        xs = [r[0] for r in rows]
-        ys = [max(r[1], 1e-6) for r in rows]
-        plt.figure(figsize=(7, 4.5))
-        plt.semilogy(xs, ys, "o-", color="#c0392b")
-        plt.grid(True, which="both")
-        plt.xlabel("SNR (dB)")
-        plt.ylabel("MIB BER")
-        plt.title("P1 SSB PBCH (Polar 512,32) AWGN curve")
-        plot = os.path.splitext(out)[0] + ".png"
-        plt.savefig(plot)
-        print("# wrote %s" % plot)
-    except Exception as ex:
-        print("# (matplotlib not available, skipped plot: %s)" % ex)
+    root = os.path.abspath(a.root)
+    print(f"{'SNR dB':>7} | {'mode':>5} | {'N_ID2':>5} | {'N_ID1':>5} | {'MIB err':>7} | cycles")
+    print("-" * 58)
+    for snr in a.snr:
+        if a.model:
+            n2, n1, err = model_point(snr, a.seed)
+            ok_n1 = n1 == sp.TRUE_NID1
+            print(f"{snr:7.1f} | model | {'ok' if n2 == sp.TRUE_NID2 else 'WRONG':>5} | "
+                  f"{'ok' if ok_n1 else ('nid=%d' % n1):>5} | {err:7d} | -")
+        if a.hw:
+            bin_path = os.path.join(root, "sim/soc/build/Vgpcp_soc")
+            if not os.path.exists(bin_path):
+                raise SystemExit(f"missing {bin_path}: run make -C sim/soc all")
+            if not os.path.exists(os.path.join(root, "build/sw/ssb_fft_bm.bin")):
+                raise SystemExit("missing build/sw/ssb_fft_bm.bin: make -C sw/soc")
+            os.environ.pop("LD_LIBRARY_PATH", None)
+            ok2, ok1, err, cyc = hw_point(snr, a.seed, bin_path, root)
+            print(f"{snr:7.1f} |    hw | {'ok' if ok2 else 'WRONG':>5} | "
+                  f"{'ok' if ok1 else 'WRONG':>5} | {err:7d} | {cyc}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

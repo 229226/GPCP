@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-full sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux
+.PHONY: all test build clean verify verify-full snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux
 
 all: test
 
@@ -11,6 +11,13 @@ verify:
 # Full SoC benchmark matrix
 verify-full:
 	bash tools/verify.sh full
+
+# SNR waterfall of the sample-level SSB receiver (first quantitative PHY metric)
+snr-sweep: all sw-check
+	python3 tools/sweep_snr.py --model --snr -16 -12 -8 -4 0 4 8
+
+snr-sweep-hw: all sw-check
+	python3 tools/sweep_snr.py --hw --snr -8 -4 0 4 8
 
 # Build the Verilator model (if needed) and run all CGRA kernel tests
 test:
