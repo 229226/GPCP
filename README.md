@@ -26,8 +26,9 @@
   （`make -C sim/soc run-rxchain`）。
 - **FFT（256/1024/4096）**：`radix-4 DIF` 分级 + **融合 radix-16 尾段**（64 点块 kernel），
   旋转因子由 `tools/fft_plan.py` 离线生成成 ROM 镜像；完整级按 64 蝶形（256 点）分块，
-  描述符环 + 双页流水。**256 / 4096 与黄金模型逐位一致**（16.2 / 12.4 周期/点），
-  1024 数值一致（SNR 37.9 dB）（`make -C sim/soc run-fft`）。
+  描述符环上每块一个连续窗口（in 组 → 阵列 → out 组 → drain），双页只隔离相邻块。
+  **256 / 1024 / 4096 与黄金模型逐位一致**（17.2 / 22.4 / 28.5 周期/点）
+  （`make -C sim/soc run-fft`）。
 - **slot 时基调度**：CLINT 定时器每 1200 拍打一次 tick，ISR 只记时/重装，
   主循环 `wfi` + 一个 slot 一次服务；**抖动 0、零 overrun、8 slot 逐位一致**
   （`make -C sim/soc run-slot`）。

@@ -88,18 +88,16 @@ def main():
         re, im, gr, gi, fr, fi = golden(n)
         base = OFFSET[n]
         bad = 0
-        # 256 and 4096 are bit-exact; the 1024 case is still numerically only
-        exact_required = n in (256, 4096)
         for i in range(n):
             got_r = word(base + 2 * i)
             got_i = word(base + 2 * i + 1)
             if got_r != (gr[i] & 0xFFFFFFFF):
-                if exact_required and bad < 3:
+                if bad < 3:
                     errs.append(f"N={n} X[{i}].re: got 0x{got_r:08x} "
                                 f"expected 0x{gr[i] & 0xFFFFFFFF:08x}")
                 bad += 1
             if got_i != (gi[i] & 0xFFFFFFFF):
-                if exact_required and bad < 3:
+                if bad < 3:
                     errs.append(f"N={n} X[{i}].im: got 0x{got_i:08x} "
                                 f"expected 0x{gi[i] & 0xFFFFFFFF:08x}")
                 bad += 1
@@ -137,8 +135,8 @@ def main():
         for e in errs[:10]:
             print("       " + e)
         return 1
-    print(f"[ OK ] FFT 256/1024/4096: 256/4096 match the golden model bit-exactly, "
-          f"1024 numerically (SNR >= 30 dB); {word(META + 5)} descriptors, "
+    print(f"[ OK ] FFT 256/1024/4096: digit-reversed spectra match the golden "
+          f"model bit-exactly, {word(META + 5)} descriptors, "
           f"{word(META + 4)} array runs")
     return 0
 

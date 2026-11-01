@@ -257,40 +257,8 @@ static void tile_end(uint32_t in, uint32_t out)
 {
     t_in[n_tiles] = in;
     t_out[n_tiles] = out;
-    t_in_end[n_tiles] = n_desc;      /* in group of this tile ends here */
+    t_out_end[n_tiles] = n_desc;     /* out group of this tile ends here */
     n_tiles++;
-}
-
-/* The ring order is [in_0][in_1][out_0][in_2][out_1] ... so that the input of
- * tile i+1 can be loaded while the array runs tile i, while the output of tile
- * i is only published (and therefore only copied) after that run.  Out
- * descriptors are therefore parked here and emitted with the next tile. */
-#define MAX_PEND 8
-static uint32_t pend_ram[MAX_PEND], pend_spad[MAX_PEND], pend_len[MAX_PEND];
-static uint32_t pend_page[MAX_PEND], pend_stride[MAX_PEND], pend_row[MAX_PEND];
-static uint32_t n_pend, pend_owner;
-
-static void pend_add(uintptr_t ram, uint32_t spad, uint32_t len, uint32_t page,
-                     uint32_t stride, uint32_t row)
-{
-    uint32_t i = n_pend++;
-    pend_ram[i] = (uint32_t)ram;
-    pend_spad[i] = spad;
-    pend_len[i] = len;
-    pend_page[i] = page;
-    pend_stride[i] = stride;
-    pend_row[i] = row;
-}
-
-static void pend_flush(void)
-{
-    if (n_pend == 0u)
-        return;                 /* nothing parked: leave t_out_end alone */
-    for (uint32_t i = 0; i < n_pend; i++)
-        dsc(pend_ram[i], pend_spad[i], pend_len[i], pend_page[i], 1u,
-            pend_stride[i], pend_row[i]);
-    t_out_end[pend_owner] = n_desc;
-    n_pend = 0;
 }
 
 /* phase 1 descriptors: full stages of one size, ring order [in, tw, out] */
@@ -316,16 +284,14 @@ static void desc_full_stages(uint32_t n, int32_t *data, uint32_t lut_ofs,
             }
             dsc(LUT_RAM + 4u * (lut_ofs + (s * tiles + q) * TW_WORDS),
                 TW_BASE, TW_WORDS, page & 1u, 0, 0, 0);
-            pend_flush();
+            t_in_end[n_tiles] = n_desc;              /* in group ends here */
             for (uint32_t j = 0; j < 4; j++) {
                 uint32_t g0 = blk * L + j * M + t0;
-                pend_add((uintptr_t)&data[2 * g0], j * 128, 128, page & 1u, 0, 0);
+                dsc((uintptr_t)&data[2 * g0], j * 128, 128, page & 1u, 1, 0, 0);
             }
-            pend_owner = n_tiles;
             tile_end(5, 4);
         }
     }
-    pend_flush();     /* last tile of this size */
 }
 
 /* phase 2 descriptors: fused 64-point tail, one block per run (linear copies) */
@@ -335,12 +301,10 @@ static void desc_tail(uint32_t n, int32_t *data, uint32_t *page_toggle)
         uint32_t page = (*page_toggle)++;
         tile_begin(page & 1u, CYCLES_BLOCK);
         dsc((uintptr_t)&data[b * TAIL_BLOCK * 2], 0, TAIL_BLOCK_WORDS, page & 1u, 0, 0, 0);
-        pend_flush();
-        pend_add((uintptr_t)&data[b * TAIL_BLOCK * 2], 0, TAIL_BLOCK_WORDS, page & 1u, 0, 0);
-        pend_owner = n_tiles;
+        t_in_end[n_tiles] = n_desc;
+        dsc((uintptr_t)&data[b * TAIL_BLOCK * 2], 0, TAIL_BLOCK_WORDS, page & 1u, 1, 0, 0);
         tile_end(1, 1);
     }
-    pend_flush();     /* last block of this size */
 }
 
 /* ------------------------------------------------------------- scheduling */
@@ -352,42 +316,47 @@ static void wait_desc(uint32_t want)
     }
 }
 
-static void wait_array(void)
+/* Start the array and wait for it.  The fence keeps the status poll from
+ * overtaking the posted start write (CVA6 keeps stores in a write-through
+ * buffer), so "busy" is never read as 0 just because the start is still in
+ * flight. */
+static void array_run(uint32_t page, uint32_t cycles)
 {
+    gpcp_cgra_array_start(CGRA_BASE, page, cycles);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     uint32_t spins = 0;
     while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_BUSY) {
         if (++spins > 2000000u) { errs++; break; }
     }
 }
 
-/* Run the tiles [first, last) of the descriptor list with the array image that
- * is currently loaded, double buffering the pages: the engine fills tile i+1
- * while the array computes tile i. */
+/* Run the tiles [first, last) with the image that is currently loaded.  Each
+ * tile gets one contiguous ring window [in group][out group]: the engine fills
+ * it, the array runs, then the window is extended to the out group and drained
+ * before the next tile starts.  An out copy can therefore never read a page
+ * before the array has written it (= the bug that hit the 1024-point run). */
 static void exec_tiles(uint32_t first, uint32_t last)
 {
     uint32_t done = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
-    uint32_t d = t_dstart[first];
     uint32_t i;
 
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, (uint32_t)(uintptr_t)&desc[0][0]);
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_SIZE, RING_DEPTH);
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_HEAD, d);
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, t_in_end[first]);
-    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
-
     for (i = first; i < last; i++) {
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, (uint32_t)(uintptr_t)&desc[0][0]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_SIZE, RING_DEPTH);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_HEAD, t_dstart[i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, t_in_end[i]);
+        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
+
         done += t_in[i];
-        wait_desc(done);
-        gpcp_cgra_array_start(CGRA_BASE, t_page[i], t_cyc[i]);
-        wait_array();
+        wait_desc(done);                       /* tile inputs are in place */
+        array_run(t_page[i], t_cyc[i]);
         runs++;
-        d = t_out_end[i];
+        gpcp_cgra_ring_push(CGRA_BASE, t_out_end[i]);
         done += t_out[i];
-        gpcp_cgra_ring_push(CGRA_BASE, d);
+        wait_desc(done);                       /* result drained to RAM */
+        mmio_w(CGRA_BASE + GPCP_CGRA_RING_CTRL, 0);
     }
-    wait_desc(done);
-    mmio_w(CGRA_BASE + GPCP_CGRA_RING_CTRL, 0);
 }
 
 /* preload the stage-constant tail twiddles into both scratchpad pages */
