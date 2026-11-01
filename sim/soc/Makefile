@@ -35,7 +35,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-slot linux clean
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-slot linux clean
 
 all:
 	mkdir -p $(ROOT)/$(OBJ)
@@ -102,6 +102,15 @@ run-sync: all
 		--dump $(ROOT)/$(OBJ)/sync_dump.txt \
 		--max-cycles 2000000
 	python3 $(ROOT)/tools/check_sync.py $(ROOT)/$(OBJ)/sync_dump.txt
+
+run-sss: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/sss_bm.bin@0x80000000 \
+		--results 0x80010000 --nwords 41 \
+		--dump $(ROOT)/$(OBJ)/sss_dump.txt \
+		--max-cycles 4000000
+	python3 $(ROOT)/tools/check_sss.py $(ROOT)/$(OBJ)/sss_dump.txt
 
 run-slot: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc

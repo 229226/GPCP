@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-slot linux
+.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-slot linux
 
 all: test
 
@@ -44,6 +44,8 @@ soc-run-fft:
 
 # Slot time base: CLINT timer drives a slot loop (PLIC + wfi)
 soc-run-sync: ; $(MAKE) -C sim/soc run-sync
+
+soc-run-sss: ; $(MAKE) -C sim/soc run-sss
 
 soc-run-slot:
 	$(MAKE) -C sim/soc run-slot

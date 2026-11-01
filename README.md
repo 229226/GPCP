@@ -33,8 +33,9 @@
   16 PE × 8 抽头，**52 拍**）、`polar_enc`（512 bit 蝶形编码，**43 拍**）、
   `polar_node`（min-sum f/g 节点更新，**22 拍**，`g` 不用 32 位乘法）；
   序列按 38.211/38.212 生成（`tools/nr_seq.py`），四个 kernel 与黄金模型**逐位一致**；
-  **SoC 级 PSS 检测已闭环**：三个候选各跑一次 52 拍相关、CPU 做 argmax，
-  3 次阵列运行 2688 周期，检出 `N_ID2` 与真值一致（`make -C sim/soc run-sync`）。
+  **SoC 级小区搜索已闭环**：PSS 检测（3 候选、2688 周期）与 SSS 336 假设搜索
+  （218,894 周期）都检出正确的小区 ID，partial 逐位一致
+  （`make -C sim/soc run-sync` / `run-sss`）。
 - **slot 时基调度**：CLINT 定时器每 1200 拍打一次 tick，ISR 只记时/重装，
   主循环 `wfi` + 一个 slot 一次服务；**抖动 0、零 overrun、8 slot 逐位一致**
   （`make -C sim/soc run-slot`）。
