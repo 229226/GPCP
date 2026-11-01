@@ -9,6 +9,7 @@
 #   make run      run the bare-metal CGRA test and compare results
 #   make clean
 
+SHELL     := /bin/bash          # recipes use bash (set -o pipefail in `linux`)
 ROOT      := ../..
 OBJ       := sim/soc/build
 BIN       := $(ROOT)/$(OBJ)/Vgpcp_soc
@@ -35,7 +36,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -196,14 +197,48 @@ run-slot: all
 	python3 $(ROOT)/tools/check_slot.py $(ROOT)/$(OBJ)/slot_dump.txt
 
 # B3: OpenSBI + Linux + initramfs
+# Linux boot (B3).  The model runs at ~32 k cycles/s here, so a full boot is a
+# long background job; the log is kept so tools/check_linux.py can grade (and
+# re-grade) it without re-running anything.
+#
+#   make linux                       # default budget, then grade stage 7
+#   make linux LINUX_MAX_CYCLES=1e8 LINUX_REQUIRE=3   # probe: "did init run?"
+#   make linux-status                # re-grade the existing log only
+LINUX_MAX_CYCLES ?= 200000000
+LINUX_LOG        ?= $(ROOT)/build/linux_boot.log
+LINUX_REQUIRE    ?= 7
+LINUX_IMAGES      = --load $(ROOT)/third_party/opensbi/build/platform/generic/firmware/fw_jump.bin@0x80000000 \
+                    --load $(ROOT)/third_party/linux-6.6.52/arch/riscv/boot/Image@0x80200000 \
+                    --load $(ROOT)/build/linux/gpcp.dtb@0x81F00000 \
+                    --load $(ROOT)/build/linux/initramfs.cpio@0x82000000
+
 linux: all
 	$(MAKE) -C $(ROOT)/sw/linux
-	env -u LD_LIBRARY_PATH $(BIN) \
-		--load $(ROOT)/third_party/opensbi/build/platform/generic/firmware/fw_jump.bin@0x80000000 \
-		--load $(ROOT)/third_party/linux-6.6.52/arch/riscv/boot/Image@0x80200000 \
-		--load $(ROOT)/build/linux/gpcp.dtb@0x81F00000 \
-		--load $(ROOT)/build/linux/initramfs.cpio@0x82000000 \
-		--max-cycles 500000000
+	set -o pipefail; env -u LD_LIBRARY_PATH $(BIN) $(LINUX_IMAGES) \
+		--max-cycles $(LINUX_MAX_CYCLES) 2>&1 | tee $(LINUX_LOG)
+	python3 $(ROOT)/tools/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
+
+linux-status:
+	python3 $(ROOT)/tools/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
 
 clean:
 	rm -rf $(ROOT)/$(OBJ)
+
+# ---- P1 real-mapping SSB benchmark (38.211/38.212 chain on the SoC) ----
+SSBFID_TD = $(ROOT)/build/soc/ssb_fid.td
+
+$(SSBFID_TD):
+	@mkdir -p $(dir $(SSBFID_TD))
+	python3 $(ROOT)/tools/ssb_plan_p1.py dump $@ $(if $(SNR),--snr $(SNR),)
+
+run-ssb-fid: all $(SSBFID_TD)
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/ssb_fid_bm.bin@0x80000000 \
+		--load $(SSBFID_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80010000 --nwords 32 \
+		--dump $(ROOT)/$(OBJ)/ssb_fid_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_ssb_fid.py $(ROOT)/$(OBJ)/ssb_fid_dump.txt

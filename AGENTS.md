@@ -38,6 +38,10 @@ bash tools/verify.sh full             # 实测 ~230 s：全部 13 个 SoC 基准
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 make verify / make verify-full        # 同上两个的 make 包装
 
+# 3) B3 Linux（长任务；日志可反复评分，不必重跑）
+make -C sim/soc linux LINUX_MAX_CYCLES=1e8 LINUX_REQUIRE=3   # 探针：看 init 是否跑起来
+make -C sim/soc linux-status                                  # 只重新评分已有日志
+
 # 2) 只跑某个基准
 env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 ```
@@ -58,6 +62,7 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
+| `make -C sim/soc linux-status` | 分级评分：stage 0..8（OpenSBI→kernel→initramfs→/init→uname→/proc→CGRA 用户态→干净退出），并要求 16 个累加器值正确 |
 
 ---
 
@@ -128,8 +133,11 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 ## 6. 当前缺口与下一步（按性价比，详见 `docs/03`）
 
 **P0（最近）**
-1. **B3 Linux 收尾**：`--max-cycles` 提到 1e8 级后台跑；`tools/check_linux.py` 解析串口日志
-   （判 `=== GPCP Linux (CVA6 + CGRA) ===`、`uname -a`、`/bin/cgra_test`）；UART 输入 + 真 PLIC 中断。
+1. **B3 Linux 收尾**（检查器与目标已就绪，缺的是"跑到 stage 7"的长跑与调优）：
+   `tools/check_linux.py` 已把串口日志分成 stage 0..8 并校验 16 个 CGRA 累加器；
+   `make -C sim/soc linux[-status]` 已可传 `LINUX_MAX_CYCLES/LINUX_REQUIRE`。
+   剩余：用 1e8–2e8 预算跑到 stage 7（实测 ~32 k cycles/s，属后台任务）、
+   UART 输入、真 PLIC 中断，并把 stage 7 纳入 `verify.sh --linux`。
 2. **采样级链接入 slot 时基**：4 个符号按 tick 流水（复用 `slot_rtos.c`），SSS 假设按批分摊，
    使"每 SSB"落在 20 ms 预算内（当前 4.34 M 周期 @100 MHz ≈ 43 ms，差 ~2.2×）。
 
