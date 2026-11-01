@@ -35,7 +35,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-slot linux clean
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-slot linux clean
 
 all:
 	mkdir -p $(ROOT)/$(OBJ)
@@ -120,6 +120,15 @@ run-polar: all
 		--dump $(ROOT)/$(OBJ)/polar_dump.txt \
 		--max-cycles 4000000
 	python3 $(ROOT)/tools/check_sc.py $(ROOT)/$(OBJ)/polar_dump.txt
+
+run-ssb: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/ssb_bm.bin@0x80000000 \
+		--results 0x80010000 --nwords 45 \
+		--dump $(ROOT)/$(OBJ)/ssb_dump.txt \
+		--max-cycles 20000000
+	python3 $(ROOT)/tools/check_ssb.py $(ROOT)/$(OBJ)/ssb_dump.txt
 
 run-slot: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
