@@ -922,12 +922,6 @@ def build_fir_kernel() -> Kernel:
     return kernel_fir16(h, x)
 
 
-KERNELS = {"matmul": build_matmul_kernel, "fir16": build_fir_kernel,
-           "fft16": build_fft_kernel, "fft_stage": build_fft_stage_kernel,
-           "fft_block": build_fft_block_kernel,
-           "chnest16": build_chnest_kernel,
-           "mmse16": build_mmse_kernel, "ldpc_cn": build_ldpc_kernel,
-           "dma_pingpong": kernel_dma_pingpong}
 
 
 def main() -> int:
@@ -936,7 +930,7 @@ def main() -> int:
     p_build = sub.add_parser("build")
     p_build.add_argument("--force", action="store_true")
     p_test = sub.add_parser("test")
-    p_test.add_argument("--kernel", default="all", choices=["all"] + list(KERNELS))
+    p_test.add_argument("--kernel", default="all", choices=["all"] + list(kernel_registry()))
     p_test.add_argument("--rebuild", action="store_true")
     args = ap.parse_args()
 
@@ -945,12 +939,231 @@ def main() -> int:
         return 0
 
     build_sim(force=getattr(args, "rebuild", False))
-    names = list(KERNELS) if args.kernel == "all" else [args.kernel]
+    kreg = kernel_registry()
+    names = list(kreg) if args.kernel == "all" else [args.kernel]
     ok = True
     for n in names:
-        ok &= run_kernel(KERNELS[n]())
+        ok &= run_kernel(kreg[n]())
     print("ALL TESTS PASSED" if ok else "SOME TESTS FAILED")
     return 0 if ok else 1
+
+
+
+
+
+def kernel_registry():
+    return {"matmul": build_matmul_kernel, "fir16": build_fir_kernel,
+           "pss_corr": build_pss_kernel, "sss_corr": build_sss_kernel,
+           "polar_enc": build_polar_enc_kernel, "polar_node": build_polar_node_kernel,
+           "fft16": build_fft_kernel, "fft_stage": build_fft_stage_kernel,
+           "fft_block": build_fft_block_kernel,
+           "chnest16": build_chnest_kernel,
+           "mmse16": build_mmse_kernel, "ldpc_cn": build_ldpc_kernel,
+           "dma_pingpong": kernel_dma_pingpong}
+
+
+# ------------------------------------------------------- NR5G sync + polar
+# PSS/SSS detection: 16 PEs, 8 BPSK taps each (127 of 128 used). Per PE the
+# real part accumulates in `acc` (MAC) and the imaginary part in a register.
+#   rx point t : bank t>>4, word 2*(t&15) (re), +1 (im)   banks 0..7
+#   ref  point t : bank 8+(t>>4), word t&15               banks 8..15
+#   result: bank 16+p word 0/1 = (re, im) partial        banks 16..31
+NR_CORR_CYCLES = 52
+
+
+def kernel_bpsk_corr(rx_re, rx_im, ref, name="bpsk_corr"):
+    import nr_seq as nr
+    prog = Program()
+    for p in range(16):
+        prog.set(0, p, "lacc", a="zero")
+        prog.set(1, p, "mov", a="zero", dst=2)
+        for k in range(8):
+            t = p * 8 + k
+            base = 2 + k * 6
+            if t >= 127:
+                continue
+            prog.set(base + 0, p, "ld", dst=4, imm=spad_idx(t >> 4, 2 * (t & 15)))
+            prog.set(base + 1, p, "ld", dst=5, imm=spad_idx(t >> 4, 2 * (t & 15) + 1))
+            prog.set(base + 2, p, "ld", dst=6, imm=spad_idx(8 + (t >> 4), t & 15))
+            prog.set(base + 3, p, "mac", a=4, b=6)
+            prog.set(base + 4, p, "mul", a=5, b=6, dst=7)
+            prog.set(base + 5, p, "add", a=2, b=7, dst=2)
+        prog.set(50, p, "st", a="acc", imm=spad_idx(16 + p, 0))
+        prog.set(51, p, "st", a=2, imm=spad_idx(16 + p, 1))
+
+    preload = []
+    for t in range(127):
+        preload.append((spad_addr(t >> 4, 2 * (t & 15)), sx16(rx_re[t]) & 0xFFFFFFFF))
+        preload.append((spad_addr(t >> 4, 2 * (t & 15) + 1), sx16(rx_im[t]) & 0xFFFFFFFF))
+    ref15 = nr.q15_bpsk(ref)
+    for t in range(127):
+        preload.append((spad_addr(8 + (t >> 4), t & 15), ref15[t] & 0xFFFFFFFF))
+
+    exp = nr.corr_partials(rx_re, rx_im, ref)
+
+    def check(st):
+        errs = []
+        for p in range(16):
+            got_r = st.get(("spad", spad_addr(16 + p, 0)))
+            got_i = st.get(("spad", spad_addr(16 + p, 1)))
+            if got_r != (exp[p][0] & 0xFFFFFFFF):
+                errs.append(f"PE{p} re: got 0x{got_r:08x} expected 0x{exp[p][0] & 0xFFFFFFFF:08x}")
+            if got_i != (exp[p][1] & 0xFFFFFFFF):
+                errs.append(f"PE{p} im: got 0x{got_i:08x} expected 0x{exp[p][1] & 0xFFFFFFFF:08x}")
+        return errs
+
+    return Kernel(name, NR_CORR_CYCLES, prog.build(NR_CORR_CYCLES), preload, [], check,
+                  spad_dump=(spad_addr(0, 0), 32 * 32))
+
+
+def build_pss_kernel() -> Kernel:
+    import nr_seq as nr
+    rnd = random.Random(71)
+    rx_re = [rnd.randint(-8000, 8000) for _ in range(127)]
+    rx_im = [rnd.randint(-8000, 8000) for _ in range(127)]
+    return kernel_bpsk_corr(rx_re, rx_im, nr.pss_seq(1), name="pss_corr")
+
+
+def build_sss_kernel() -> Kernel:
+    import nr_seq as nr
+    rnd = random.Random(72)
+    rx_re = [rnd.randint(-8000, 8000) for _ in range(127)]
+    rx_im = [rnd.randint(-8000, 8000) for _ in range(127)]
+    return kernel_bpsk_corr(rx_re, rx_im, nr.sss_seq(42, 1), name="sss_corr")
+
+
+# Polar encoder: 16 words of 32 bits = 512 bits = N.  Steps 1..16 are inside a
+# word (masked shift+xor), steps 32..256 are word-to-word xor.
+NR_POLAR_CYCLES = 40
+POLAR_MASKS = (0x55555555, 0x33333333, 0x0F0F0F0F, 0x00FF00FF, 0x0000FFFF)
+
+
+def kernel_polar_enc(u, n=512):
+    import nr_seq as nr
+    prog = Program()
+    cyc = 0
+    for stage, mask in enumerate(POLAR_MASKS):
+        step = 1 << stage
+        for pe in range(16):
+            prog.set(cyc + 0, pe, "ld", dst=0, imm=spad_idx(0, pe))
+            prog.set(cyc + 1, pe, "shr", a=0, dst=1, imm=step)
+            prog.set(cyc + 2, pe, "and", a=1, b=3 + stage, dst=1)
+            prog.set(cyc + 3, pe, "xor", a=0, b=1, dst=0)
+            prog.set(cyc + 4, pe, "st", a=0, imm=spad_idx(0, pe))
+        cyc += 5
+    for stage in range(5, 9):
+        d = 1 << (stage - 5)
+        for pe in range(16):
+            prog.set(cyc + 0, pe, "ld", dst=0, imm=spad_idx(0, pe))
+            if (pe & d) == 0:
+                prog.set(cyc + 1, pe, "ld", dst=1, imm=spad_idx(0, pe + d))
+                prog.set(cyc + 2, pe, "xor", a=0, b=1, dst=0)
+                prog.set(cyc + 3, pe, "st", a=0, imm=spad_idx(0, pe))
+        cyc += 4
+    cycles = cyc + 2
+
+    words = []
+    for w in range(16):
+        v = 0
+        for b in range(32):
+            idx = w * 32 + b
+            if idx < len(u):
+                v |= (u[idx] & 1) << b        # bit b = element w*32+b (LSB-first)
+        words.append(v)
+    preload = []
+    for w in range(16):
+        preload.append((spad_addr(0, w), words[w] & 0xFFFFFFFF))
+    for stage, mask in enumerate(POLAR_MASKS):
+        for pe in range(16):
+            preload.append((0x1000 + pe * 32 + (3 + stage) * 4, mask))
+
+    exp = nr.polar_transform(u, n)
+    exp_words = []
+    for w in range(16):
+        v = 0
+        for b in range(32):
+            v |= (exp[w * 32 + b] & 1) << b
+        exp_words.append(v)
+
+    def check(st):
+        errs = []
+        for w in range(16):
+            got = st.get(("spad", spad_addr(0, w)))
+            if got != (exp_words[w] & 0xFFFFFFFF):
+                errs.append(f"word {w}: got 0x{got:08x} expected 0x{exp_words[w] & 0xFFFFFFFF:08x}")
+        return errs
+
+    return Kernel("polar_enc", cycles, prog.build(cycles), preload, [], check,
+                  spad_dump=(spad_addr(0, 0), 32 * 32))
+
+
+def build_polar_enc_kernel() -> Kernel:
+    rnd = random.Random(73)
+    return kernel_polar_enc([rnd.randint(0, 1) for _ in range(512)])
+
+
+# Polar SC node update: 16 (a, b, beta) triples -> f (min-sum) and g.
+#   a: bank 0 word t   b: bank 1 word t   beta: bank 2 word t
+#   f: bank 16 word t  g: bank 17 word t
+NR_NODE_CYCLES = 22
+
+
+def kernel_polar_node(a, b, beta):
+    import nr_seq as nr
+    prog = Program()
+    for pe in range(16):
+        prog.set(0, pe, "ld", dst=0, imm=spad_idx(0, pe))
+        prog.set(1, pe, "ld", dst=1, imm=spad_idx(1, pe))
+        prog.set(2, pe, "ld", dst=2, imm=spad_idx(2, pe))
+        prog.set(3, pe, "shr", a=0, dst=3, imm=31)        # sign mask of a
+        prog.set(4, pe, "xor", a=0, b=3, dst=4)
+        prog.set(5, pe, "sub", a=4, b=3, dst=4)           # |a|
+        prog.set(6, pe, "shr", a=1, dst=5, imm=31)        # sign mask of b
+        prog.set(7, pe, "xor", a=1, b=5, dst=6)
+        prog.set(8, pe, "sub", a=6, b=5, dst=6)           # |b|
+        prog.set(9, pe, "min", a=4, b=6, dst=7)           # min(|a|,|b|)
+        prog.set(10, pe, "xor", a=3, b=5, dst=3)          # sign(a)*sign(b)
+        prog.set(11, pe, "xor", a=7, b=3, dst=4)
+        prog.set(12, pe, "sub", a=4, b=3, dst=4)          # f
+        prog.set(13, pe, "sub", a="zero", b=2, dst=6)     # -beta
+        prog.set(14, pe, "and", a=0, b=6, dst=7)          # beta*a
+        prog.set(15, pe, "shl", a=7, dst=7, imm=1)        # 2*beta*a
+        prog.set(16, pe, "add", a=1, b=0, dst=6)          # b + a
+        prog.set(17, pe, "sub", a=6, b=7, dst=6)          # g
+        prog.set(18, pe, "st", a=4, imm=spad_idx(16, pe))
+        prog.set(19, pe, "st", a=6, imm=spad_idx(17, pe))
+
+    preload = []
+    for t in range(16):
+        preload.append((spad_addr(0, t), a[t] & 0xFFFFFFFF))
+        preload.append((spad_addr(1, t), b[t] & 0xFFFFFFFF))
+        preload.append((spad_addr(2, t), beta[t] & 1))
+    exp_f = [nr.f_node(a[t], b[t]) for t in range(16)]
+    exp_g = [nr.g_node(a[t], b[t], beta[t]) for t in range(16)]
+
+    def check(st):
+        errs = []
+        for t in range(16):
+            got = st.get(("spad", spad_addr(16, t)))
+            if got != (exp_f[t] & 0xFFFFFFFF):
+                errs.append(f"f[{t}]: got 0x{got:08x} expected 0x{exp_f[t] & 0xFFFFFFFF:08x}")
+            got = st.get(("spad", spad_addr(17, t)))
+            if got != (exp_g[t] & 0xFFFFFFFF):
+                errs.append(f"g[{t}]: got 0x{got:08x} expected 0x{exp_g[t] & 0xFFFFFFFF:08x}")
+        return errs
+
+    return Kernel("polar_node", NR_NODE_CYCLES, prog.build(NR_NODE_CYCLES), preload, [], check,
+                  spad_dump=(spad_addr(0, 0), 32 * 32))
+
+
+def build_polar_node_kernel() -> Kernel:
+    rnd = random.Random(74)
+    a = [rnd.randint(-1000000, 1000000) for _ in range(16)]
+    b = [rnd.randint(-1000000, 1000000) for _ in range(16)]
+    beta = [rnd.randint(0, 1) for _ in range(16)]
+    return kernel_polar_node(a, b, beta)
+
+
 
 
 if __name__ == "__main__":

@@ -201,7 +201,7 @@ LLR(b) = min_{s: b=1} M(s) − min_{s: b=0} M(s)      然后 >>10 归一化成�
   所以「等待阵列完成」不能轮询该状态位（会被并发的 DMA 中断清掉而永久错过），
   必须在 ISR 里累加**完成计数**（与 `RING_DONE` 同样的"进度"语义）。
 
-### 4.7 FFT：radix-4 分级 + 融合 radix-16 尾段（`sw/soc/fft_bm.c`）
+### 4.6 FFT：radix-4 分级 + 融合 radix-16 尾段（`sw/soc/fft_bm.c`）
 
 scratchpad 一页只有 1024 字、单次阵列运行上限 512 拍，所以 4096 点复数 FFT 必须
 分块。实现分两段：
@@ -239,20 +239,7 @@ scratchpad 一页只有 1024 字、单次阵列运行上限 512 拍，所以 409
 > 逐位一致的判据是完整 2N 个字（re/im）与黄金模型完全相同；`-DCHK1024` 调试构建
 > （离线快照比对）保留在代码里，用于以后回归时分阶段定位。
 
-### 4.8 slot 时基调度骨架（`sw/soc/slot_rtos.c`）
-
-把 `irq_bm` 的「等完成」改造成真正的 **slot 循环**：
-
-- **CLINT 机器定时器**（`mtimecmp`）每 1200 拍产生一次机器定时中断，ISR 只做三件事：
-  `ticks++`、按绝对时刻重装 `mtimecmp`（落后的 tick 记成 overrun）、置 `slot_pending`；
-- 主循环 `while (slots_done < SLOTS) { wfi; if (slot_pending) slot_job(slots_done++); }`，
-  服务一个 slot 后再睡回去；
-- `slot_job` = 输入 DMA（64 字，row=4/stride=32）→ 15 拍 LS 信道估计 → 输出 DMA
-  （32 字，bank 16 起）；两步 DMA 与阵列完成都由 PLIC 中断唤醒 `wfi`；
-- 验收：8 个 slot、24 次完成中断、tick 间隔严格 1200 拍（抖动 0）、零 overrun，
-  H 值与黄金模型逐位一致（`tools/check_slot.py`）。
-
-### 4.6 集成时发现的缺陷（都已修）
+### 4.7 集成时发现的缺陷（都已修）
 
 | 现象 | 根因 | 修复 |
 |---|---|---|
@@ -273,6 +260,45 @@ scratchpad 一页只有 1024 字、单次阵列运行上限 512 拍，所以 409
 第四条是 ABI 层面的坑：**只要寄存器窗口是 32 位、而 CPU 会合并相邻写，就必须保证
 「一次 store 就能表达一个完整动作」或中间插入 `fence`**。ABI 里 `gpcp_cgra_array_start()`
 与 `gpcp_cgra_dma_start()` 已经按这个规则实现。
+
+### 4.8 slot 时基调度骨架（`sw/soc/slot_rtos.c`）
+
+把 `irq_bm` 的「等完成」改造成真正的 **slot 循环**：
+
+- **CLINT 机器定时器**（`mtimecmp`）每 1200 拍产生一次机器定时中断，ISR 只做三件事：
+  `ticks++`、按绝对时刻重装 `mtimecmp`（落后的 tick 记成 overrun）、置 `slot_pending`；
+- 主循环 `while (slots_done < SLOTS) { wfi; if (slot_pending) slot_job(slots_done++); }`，
+  服务一个 slot 后再睡回去；
+- `slot_job` = 输入 DMA（64 字，row=4/stride=32）→ 15 拍 LS 信道估计 → 输出 DMA
+  （32 字，bank 16 起）；两步 DMA 与阵列完成都由 PLIC 中断唤醒 `wfi`；
+- 验收：8 个 slot、24 次完成中断、tick 间隔严格 1200 拍（抖动 0）、零 overrun，
+  H 值与黄金模型逐位一致（`tools/check_slot.py`）。
+
+### 4.9 NR 同步与 Polar kernel（B4 骨架的第一批积木）
+
+序列定义（38.211 / 38.212，`tools/nr_seq.py` 与微码共用）：
+
+| 信号 | 定义 |
+|---|---|
+| PSS | 127 点 m 序列 `x(i+7)=x(i+4)+x(i)`，`d(n)=1-2x((n+43·N_ID2) mod 127)` |
+| SSS | 127 点 `[1-2x0((n+m0) mod 127)]·[1-2x1((n+m1) mod 127)]`，`m0=15⌊N_ID1/112⌋+5N_ID2`，`m1=N_ID1 mod 112`（x1 用 `x1(i+7)=x1(i+1)+x1(i)`） |
+| Polar | `x=u·F⊗n`，`F=[[1,0],[1,1]]`，按 `x[i]^=x[i+step]` 的蝶形（step=1,2,…,N/2），无附加置换 |
+
+**`pss_corr` / `sss_corr`（52 拍）**：16 个 PE，每个 8 个 BPSK 抽头（127/128 用满），
+实部用 `MAC` 累加进 `acc`、虚部用普通寄存器累加，产出 16 个 per-PE 复相关分块；
+CPU 把 16 个分块相加即为 127 点相关值（BPSK 参考符号为 Q15 全幅 ±32767）。
+spad 布局：rx 点 `t` 在 bank `t>>4` 的 `2*(t&15)`（re/im 占两个字），参考在 bank `8+(t>>4)`。
+
+**`polar_enc`（43 拍）**：512 bit 输入 = 16 个字（32 bit/字，LSB-first）。
+step 1/2/4/8/16 在同一字内用「算术右移 + 编译期掩码 + XOR」，step 32…256 用 PE 间字异或
+（只让 `(w & d)==0` 的 PE 写回，其余 NOP），9 级全部在一个阵列运行里完成。
+
+**`polar_node`（22 拍）**：16 组 `(a,b,β)` → min-sum `f=sign(a)·sign(b)·min(|a|,|b|)`
+与 `g=b+(1-2β)a`；`g` 用 `-β` 掩码 + 移位实现「乘以 ±1」，**不用 32 位乘法**（`MUL` 只取 16 位）。
+
+以上 4 个 kernel 全部与 `tools/nr_seq.py` 的黄金模型**逐位一致**（进入 `python3 tools/cgra.py test`，
+共 13 项）。这是 SSB/PBCH 链路（FFT → PSS/SSS → 信道估计 → 解调 → Polar）的算法积木；
+尚未接入 SoC 链路，也没有 SSS 的 336 假设搜索与 SC 译码的树遍历调度。
 
 ## 5. 验证结果（`python3 tools/cgra.py test`）
 
