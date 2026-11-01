@@ -6,7 +6,7 @@
  *     loaded at 0x8040_0000 (4096 complex samples each, int32 re/im)
  *   * the 4096-point radix-4 FFT is the verified engine from
  *     sw/soc/ssb_fft.inc (same microcode/twiddle ROM as run-fft); the spectrum
- *     comes out digit-reversed, so X[k] = data[bitrev12(k)]
+ *     comes out digit-reversed, so X[k] = data[rev4(k)]
  *   * the 127 PSS resource elements are packed into the bpsk_corr layout and
  *     correlated against the three N_ID(2) candidates
  *
@@ -14,6 +14,11 @@
  *   [0..5]  PSS correlation (re,im) of candidate 0, 1, 2 (>> 16)
  *   [6] detected N_ID2   [7] true N_ID2
  *   [8] errors   [9] cycles   [10] array runs   [11] 0x600D
+ *   [12..138]  reference words of candidate 1 read back from the scratchpad
+ *   [140..171] 16 x (re,im) per-PE accumulators of candidate 1
+ *   [172..425] 254 rx words (packed spectrum) of candidate 1
+ *   [426..429] engine-latched descriptor of the reference copy (src,len,stride,row)
+ *   [430..941] scratchpad banks 8..23 (the 2D row layout the copy produced)
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 
@@ -46,6 +51,14 @@ static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t prog[CORR_CYCLES * NPES];
 static uint32_t errs, runs, n_desc, out_idx, done;
+static int32_t *last_fb;        /* result block of the most recent corr_run */
+static uint32_t latch[4];       /* descriptor the engine latched for the refs copy */
+
+/* host readback of one scratchpad word (register window 0xA000 + idx*4) */
+static uint32_t spad_rd(uint32_t idx)
+{
+    return mmio_r(CGRA_BASE + 0xA000u + idx * 4u);
+}
 
 static void wait_desc(uint32_t want)
 {
@@ -115,6 +128,7 @@ static void corr_run(int64_t *re, int64_t *im)
 {
     int32_t *fb = oblk + out_idx * 32;
     out_idx = (out_idx + 1) % OUT_BLOCKS;
+    last_fb = fb;
 
     n_desc = 0;
     dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);                 /* rx: linear 254 words */
@@ -130,6 +144,11 @@ static void corr_run(int64_t *re, int64_t *im)
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
     done += 2;
     wait_desc(done);
+    /* debug: what the engine decoded for the second (reference) descriptor */
+    latch[0] = mmio_r(CGRA_BASE + 0x0030u);
+    latch[1] = mmio_r(CGRA_BASE + 0x0034u);
+    latch[2] = mmio_r(CGRA_BASE + 0x0038u);
+    latch[3] = mmio_r(CGRA_BASE + 0x003Cu);
     gpcp_cgra_array_start(CGRA_BASE, 0, CORR_CYCLES);
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     {
@@ -171,8 +190,8 @@ int main(void)
 
 
     for (int t = 0; t < NREP; t++) {
-        uint32_t idx = bitrev12((uint32_t)(NPSS_RE0 + t));
-        /* the fixed-point FFT divides by ~16: scale back to the grid amplitude */
+        uint32_t idx = rev4((uint32_t)(NPSS_RE0 + t));
+        /* the fixed-point FFT is normalised by 4096 and pre-scaled by TD_SCALE */
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 0] = td[1 * 2 * FFT_N + 2 * idx] << 4;
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 1] = td[1 * 2 * FFT_N + 2 * idx + 1] << 4;
     }
@@ -183,15 +202,36 @@ int main(void)
     int64_t best = -1;
     uint32_t nid2 = 0;
     for (int c = 0; c < 3; c++) {
+        /* the source buffer is read linearly by the engine, the 2D walk spreads
+         * the 127 words over 16-word rows (bank 8+r, word t%16) */
         for (int t = 0; t < NREP; t++)
-            pref[(t >> 4) * 32 + (t & 15)] = pss_sign(c, t) * 32767;
+            pref[t] = pss_sign(c, t) * 32767;
         __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-        (void)pref[7 * 32 + 15];      /* last packed reference word */
+        (void)pref[NREP - 1];         /* last reference word */
 
         int64_t re, im;
         corr_run(&re, &im);
         RESULT_BASE[2 * c + 0] = (uint32_t)(re >> 16);
         RESULT_BASE[2 * c + 1] = (uint32_t)(im >> 16);
+        /* probe of the true candidate: what the array actually consumed.
+         *   [12 .. 138]   127 reference words as the kernel addresses them
+         *   [140 .. 171]  16 x (re,im) per-PE accumulators (RAM copy)
+         *   [172 .. 425]  254 rx words (the packed spectrum) read back
+         *   [426 .. 429]  engine-latched descriptor (src, len, stride, row)
+         *   [430 .. 941]  512 scratchpad words, banks 8..23 (the row layout)  */
+        if (c == 1) {
+            uint32_t o = 12;
+            for (uint32_t t = 0; t < NREP; t++)
+                RESULT_BASE[o + t] = spad_rd((8u + (t >> 4)) * 32u + (t & 15u));
+            for (uint32_t i = 0; i < 32u; i++)
+                RESULT_BASE[o + 128u + i] = (uint32_t)last_fb[i];
+            for (uint32_t i = 0; i < 2u * NREP; i++)
+                RESULT_BASE[o + 160u + i] = spad_rd(i);
+            for (uint32_t i = 0; i < 4u; i++)
+                RESULT_BASE[o + 160u + 2u * NREP + i] = latch[i];
+            for (uint32_t i = 0; i < 512u; i++)
+                RESULT_BASE[o + 160u + 2u * NREP + 4u + i] = spad_rd(8u * 32u + i);
+        }
         int64_t mag = (re < 0 ? -re : re) + (im < 0 ? -im : im);
         if (mag > best) { best = mag; nid2 = (uint32_t)c; }
     }

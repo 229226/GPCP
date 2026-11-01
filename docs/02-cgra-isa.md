@@ -228,7 +228,10 @@ SoC 侧对 64-bit store 也会拆成两次 32-bit 寄存器写（见 `gpcp_soc.s
 
 行为：使能且 `head != tail` 时引擎自动开始；每个描述符完成后写状态字、`RING_DONE++`、
 `head` 前进（到 `size` 回绕），描述符的 `irq` 位置 1 时发完成中断；
-`head == tail` 时回到空闲，`RING_CTRL.idle` 置位。
+`head == tail` 时回到空闲，`RING_CTRL.idle` 置位。`RING_TAIL` 允许写成 `RING_SIZE`
+（**"最后一个的下一个"与 0 是同一个槽**），引擎内部按 `tail mod size` 比较
+（`ring_tail_n = (ring_tail >= ring_size) ? 0 : ring_tail`）；否则 head 回绕到 0 的
+批次会把前几个描述符再执行一遍（台架 `--ring-size 2 --ring-tail 2` 可复现）。
 
 ---
 

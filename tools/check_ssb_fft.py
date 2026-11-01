@@ -17,6 +17,21 @@ NREP = 127
 PSS_RE0 = 56
 
 
+def sx32(v):
+    return v - 0x100000000 if v & 0x80000000 else v
+
+
+def sx16(v):
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def i32(v):
+    """wrap a Python int to int32 (the array accumulator is 32 bits)"""
+    v &= 0xFFFFFFFF
+    return v - 0x100000000 if v & 0x80000000 else v
+
+
 def main(path):
     vals = []
     for line in open(path):
@@ -29,10 +44,7 @@ def main(path):
         print(f"  dump too short: {len(vals)} words")
         return 1
 
-    def sx(v):
-        return v - 0x100000000 if v & 0x80000000 else v
-
-    metrics = [(sx(vals[2 * c]), sx(vals[2 * c + 1])) for c in range(3)]
+    metrics = [(sx32(vals[2 * c]), sx32(vals[2 * c + 1])) for c in range(3)]
     norms = [abs(a) + abs(b) for a, b in metrics]
 
     # reference (floating point) correlation of the same symbol
@@ -54,6 +66,52 @@ def main(path):
     if vals[11] != 0x600D:
         print(f"  epilogue missing: 0x{vals[11]:08x}")
         ok = False
+
+    # ---- probe of candidate 1: check what the array actually consumed ----------
+    if len(vals) >= 172 + 2 * NREP:
+        refs = [sx32(vals[12 + t]) for t in range(NREP)]
+        fb = [sx32(vals[140 + k]) for k in range(32)]
+        rx = [(sx32(vals[172 + 2 * t]), sx32(vals[172 + 2 * t + 1]))
+              for t in range(NREP)]
+        want_ref = [int(round(sp.nr_seq.pss_seq(1)[t])) * 32767 for t in range(NREP)]
+        ref_bad = [t for t in range(NREP) if refs[t] != want_ref[t]]
+        rx_zero = [t for t in range(NREP) if rx[t][0] == 0 and rx[t][1] == 0]
+        # per-PE accumulator recomputed with the 16-bit MAC the array implements
+        pe_bad = []
+        for p in range(16):
+            sr = si = 0
+            for t in range(p * 8, min(NREP, p * 8 + 8)):
+                sr = i32(sr + sx16(rx[t][0]) * sx16(refs[t]))
+                si = i32(si + sx16(rx[t][1]) * sx16(refs[t]))
+            if fb[2 * p] != sr or fb[2 * p + 1] != si:
+                pe_bad.append((p, fb[2 * p], sr, fb[2 * p + 1], si))
+        if ref_bad:
+            print(f"  probe: {len(ref_bad)}/{NREP} reference words differ from the "
+                  f"PSS sequence, first {ref_bad[:6]}")
+            ok = False
+        if rx_zero:
+            print(f"  probe: {len(rx_zero)}/{NREP} rx resource elements are zero, "
+                  f"first {rx_zero[:6]}")
+            ok = False
+        if pe_bad:
+            print(f"  probe: {len(pe_bad)}/16 per-PE accumulators differ from the "
+                  f"16-bit MAC of the probe data, first {pe_bad[:4]}")
+            ok = False
+        lat = [sx32(vals[426 + i]) for i in range(4)]
+        print(f"  probe: latched descriptor src=0x{lat[0] & 0xFFFFFFFF:08x} "
+              f"len={lat[1]} stride={lat[2]} row={lat[3]}")
+        if len(vals) >= 430 + 512:
+            rows = [want_ref[16 * r:16 * r + 16] for r in range(8)]
+            banks = [[sx32(vals[430 + 32 * b + w]) for w in range(32)]
+                     for b in range(16)]        # banks 8..23
+            used = [8 + b for b in range(16) if any(banks[b][w] != 0 for w in range(32))]
+            print(f"  probe: non-empty banks {used}")
+            for r in range(8):
+                got = banks[r][:15]
+                same = got == rows[r][:15]
+                print(f"  probe: row {r} (t={16 * r}..{16 * r + 15}) -> bank {8 + r}: "
+                      f"{'match' if same else 'MISMATCH'}"
+                      + ("" if same else f"  hw={got[:4]} want={rows[r][:4]}"))
     # the true candidate must dominate the other two
     if not (norms[1] > 3 * norms[0] and norms[1] > norms[2]):
         print(f"  candidate ordering wrong: |c0|={norms[0]} |c1|={norms[1]} |c2|={norms[2]}")

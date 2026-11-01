@@ -16,6 +16,7 @@
 #include <verilated.h>
 #include <Vcgra_axi_lite.h>
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -169,6 +170,9 @@ int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
 
     std::string prog_path, preload_path, din_path, dump_path, dma_mem_path, dma_dump_path, dma_ops_path;
+    std::string ring_path;
+    uint32_t ring_base = 0x00000200;   // byte address, 8-byte aligned, inside the 4 KiB model
+    uint32_t ring_size = 1024;         // like the SoC: a deep ring, head reset per batch
     int buf_page = 0;
     int cycles = 0;
     uint32_t spad_start = 0;
@@ -187,6 +191,9 @@ int main(int argc, char** argv) {
         else if (a == "--dma-mem") dma_mem_path = next();
         else if (a == "--dma-dump") dma_dump_path = next();
         else if (a == "--dma-ops") dma_ops_path = next();
+        else if (a == "--ring-desc") ring_path = next();
+        else if (a == "--ring-base") ring_base = (uint32_t)strtoul(next().c_str(), nullptr, 0);
+        else if (a == "--ring-size") ring_size = (uint32_t)strtoul(next().c_str(), nullptr, 0);
         else if (a == "--buf-page") buf_page = std::atoi(next().c_str());
         else if (a == "--cycles") cycles = std::atoi(next().c_str());
         else if (a == "--spad-dump") {
@@ -241,13 +248,22 @@ int main(int argc, char** argv) {
         g_stream = true;
     }
 
-    // 3b. copy-engine descriptors (src, dst, len, page, dir)
+    // 3b. copy-engine descriptors (src, dst, len, page, dir, stride, row).
+    //     Numbers may be written in decimal or with a 0x prefix - streams need
+    //     per-token parsing, the plain `>>` would stop at the 'x'.
     if (!dma_ops_path.empty()) {
         std::ifstream f(dma_ops_path);
-        uint32_t src, dst, len, page, dir;
-        while (f >> src >> dst >> len >> page >> dir) {
+        std::string line;
+        while (std::getline(f, line)) {
+            std::istringstream ss(line);
+            std::vector<uint32_t> t;
+            std::string tok;
+            while (ss >> tok) t.push_back((uint32_t)strtoul(tok.c_str(), nullptr, 0));
+            if (t.size() < 5) continue;
+            uint32_t src = t[0], dst = t[1], len = t[2], page = t[3], dir = t[4];
             uint32_t stride = 1, row = 0;
-            if (!(f >> stride >> row)) { f.clear(); stride = 1; row = 0; }
+            if (t.size() > 5) stride = t[5];
+            if (t.size() > 6) row = t[6];
             axil_wr(0x0010, src);
             axil_wr(0x0014, dst);
             axil_wr(0x0018, len);
@@ -257,7 +273,47 @@ int main(int argc, char** argv) {
             axil_wr(0x001C, 0x1 | (dir << 1));
             int guard = 0;
             while (((axil_rd(0x001C) & 0x2) == 0) && guard++ < 100000) ;
+            if (guard >= 100000) std::fprintf(stderr, "timeout: single-shot dma\n");
         }
+    }
+
+    // 3c. descriptor ring: each line holds one 32-byte descriptor (8 words).
+    //     Descriptors are placed at --ring-base inside the slave memory model,
+    //     the ring is then walked by the engine exactly as the SoC does it.
+    if (!ring_path.empty()) {
+        std::ifstream f(ring_path);
+        std::vector<std::array<uint32_t, 8>> descs;
+        std::string line;
+        while (std::getline(f, line)) {
+            std::istringstream ss(line);
+            std::array<uint32_t, 8> d{};
+            std::string tok;
+            size_t n = 0;
+            while (ss >> tok) {
+                if (n < d.size()) d[n] = (uint32_t)strtoul(tok.c_str(), nullptr, 0);
+                n++;
+            }
+            if (n >= d.size()) descs.push_back(d);
+        }
+        if (descs.empty()) {
+            std::fprintf(stderr, "no descriptors in %s\n", ring_path.c_str());
+            return 6;
+        }
+        uint32_t base_w = mem_w(ring_base);
+        for (size_t i = 0; i < descs.size(); i++)
+            for (size_t k = 0; k < 8; k++)
+                g_dma_mem[(base_w + (uint32_t)(i * 8 + k)) & 0x3FF] = descs[i][k];
+        axil_wr(0x0048, ring_base);
+        axil_wr(0x004C, ring_size);
+        axil_wr(0x0050, 0);
+        axil_wr(0x0054, (uint32_t)descs.size());
+        axil_wr(0x0058, 0x1);
+        int guard = 0;
+        while (((axil_rd(0x005C) & 0xFFFF) < (uint32_t)descs.size()) && guard++ < 100000) ;
+        if (guard >= 100000) std::fprintf(stderr, "timeout: descriptor ring\n");
+        axil_wr(0x0058, 0x0);
+        std::fprintf(stderr, "[ring] %zu descriptors, size=%u, done=%u\n", descs.size(),
+                     ring_size, axil_rd(0x005C) & 0xFFFF);
     }
     axil_wr(0x0020, (uint32_t)buf_page);  // array page
 
@@ -296,7 +352,7 @@ int main(int argc, char** argv) {
 
     if (!dma_dump_path.empty()) {
         std::ofstream f(dma_dump_path);
-        for (int i = 0; i < 256; i++)
+        for (size_t i = 0; i < g_dma_mem.size(); i++)
             f << "0x" << std::hex << g_dma_mem[i] << "\n";
     }
 

@@ -139,6 +139,12 @@ module cgra_top #(
   logic [15:0] ring_size, ring_head, ring_tail, ring_done;
   logic        ring_en, ring_mode, desc_irq, rd_desc, wr_status;
   logic [31:0] desc_addr;
+  // RING_TAIL may be programmed as "one past the last entry" == ring_size; that
+  // is the same slot as 0, so comparisons must be made modulo the ring depth.
+  // Without this, a head that wraps back to 0 never matches a tail of ring_size
+  // and the engine re-executes the first descriptors of the batch.
+  logic [15:0] ring_tail_n;
+  assign ring_tail_n = (ring_size != 16'd0 && ring_tail >= ring_size) ? 16'd0 : ring_tail;
 
   // descriptor buffer: 4 beats = 32 bytes (the only buffering in the engine -
   // data beats are streamed straight into / out of the scratchpad)
@@ -315,7 +321,7 @@ module cgra_top #(
       unique case (dstate)
         D_IDLE: begin
           // ring mode: fetch the next descriptor as soon as there is work
-          if (ring_en && !dma_busy && (ring_size != 16'd0) && (ring_head != ring_tail)) begin
+          if (ring_en && !dma_busy && (ring_size != 16'd0) && (ring_head != ring_tail_n)) begin
             dma_busy  <= 1'b1;
             dma_done  <= 1'b0;
             dma_beat  <= 2'd0;
@@ -359,6 +365,10 @@ module cgra_top #(
           // streaming in: the beat that arrives is written to the scratchpad
           // in the same cycle (two words per beat)
           if (m_axi_rvalid && m_axi_rready) begin
+            if (DBG) $display("[cg-walk] cur=%0d cnt=%0d row=%0d stride=%0d odd=%b we0=%b a0=%0d d0=%h a1=%0d d1=%h",
+                              dma_cur, dma_row_cnt, dma_run_row, dma_run_stride, dma_last_odd,
+                              spad_dma_we0, spad_dma_addr0, spad_dma_wdata0[15:0],
+                              spad_dma_addr1, spad_dma_wdata1[15:0]);
             if (m_axi_rlast) begin
               dma_bcnt <= 8'd0;
               dma_idx  <= dma_nidx;
@@ -406,7 +416,7 @@ module cgra_top #(
               ring_done <= ring_done + 16'd1;
               ring_head <= (ring_head + 16'd1 >= ring_size) ? 16'd0 : ring_head + 16'd1;
               if (ring_en && (((ring_head + 16'd1 >= ring_size) ? 16'd0
-                                                             : ring_head + 16'd1) != ring_tail)) begin
+                                                             : ring_head + 16'd1) != ring_tail_n)) begin
                 dma_beat <= 2'd0;
                 rd_desc  <= 1'b1;
                 dstate   <= D_AR;
@@ -580,7 +590,7 @@ module cgra_top #(
         7'h4C: rd_data = {16'b0, ring_size};
         7'h50: rd_data = {16'b0, ring_head};
         7'h54: rd_data = {16'b0, ring_tail};
-        7'h58: rd_data = {29'b0, dma_busy, (ring_head == ring_tail), ring_en};
+        7'h58: rd_data = {29'b0, dma_busy, (ring_head == ring_tail_n), ring_en};
         7'h5C: rd_data = {16'b0, ring_done};
         7'h60: rd_data = {16'b0, dbg_soc_state, wr_status, rd_desc, 2'b0, 4'(dstate),
                           dma_bcnt[3:0]};
