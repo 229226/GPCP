@@ -8,7 +8,8 @@
  *     sw/soc/ssb_fft.inc (same microcode/twiddle ROM as run-fft); the spectrum
  *     comes out digit-reversed, so X[k] = data[rev4(k)]
  *   * the 127 PSS resource elements are packed into the bpsk_corr layout and
- *     correlated against the three N_ID(2) candidates
+ *     correlated against the three N_ID(2) candidates; the SSS symbol (3) then
+ *     runs the same kernel over all 336 N_ID(1) hypotheses
  *
  * Results at 0x8001_0000 (words):
  *   [0..5]  PSS correlation (re,im) of candidate 0, 1, 2 (>> 16)
@@ -19,6 +20,8 @@
  *   [172..425] 254 rx words (packed spectrum) of candidate 1
  *   [426..429] engine-latched descriptor of the reference copy (src,len,stride,row)
  *   [430..941] scratchpad banks 8..23 (the 2D row layout the copy produced)
+ *   [942] detected N_ID1   [943] true N_ID1
+ *   [944] best SSS metric (>>10)   [945] metric of the true hypothesis
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 
@@ -34,16 +37,29 @@
 #define NSYM             4
 
 #define DESC_BASE        0x80020000ul
-#define PSS_REF_BASE     0x80040000ul          /* 3 x 128 packed words */
+#define PSS_REF_BASE     0x80040000ul          /* 3 x 128 words (one per N_ID2) */
 #define RX_BASE          0x80050000ul          /* 254 packed words     */
 #define OUT_BASE         0x80060000ul          /* rotating result blocks */
 #define OUT_BLOCKS       64
 #define TD_RAM           0x80400000ul          /* samples (loaded)     */
 
+/* SSS hypothesis search: all 336 reference blocks are generated up front (a
+ * block written right in front of its DMA can still be stale in RAM), and each
+ * candidate gets its own result block (the engine writes RAM without
+ * invalidating the CPU D$).  Both live above the 512 KiB linker RAM, so they
+ * never collide with code/stack. */
+#define NHYP             336
+#define REF_STRIDE       128
+#define SSS_REF_BASE     0x80200000ul          /* 336 x 128 words = 172 KiB */
+#define SSS_OUT_BASE     0x80240000ul          /* 336 x 32 words           */
+#define TRUE_NID1        200
+
 static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
 static int32_t *pref = (int32_t *)PSS_REF_BASE;
 static int32_t *rxp = (int32_t *)RX_BASE;
 static int32_t *oblk = (int32_t *)OUT_BASE;
+static int32_t *sref = (int32_t *)SSS_REF_BASE;
+static int32_t *sout = (int32_t *)SSS_OUT_BASE;
 
 static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
@@ -82,6 +98,31 @@ static void build_mseq(void)
 }
 
 static int pss_sign(int nid2, int n) { return mseq[(n + 43 * nid2) % NREP] ? -1 : 1; }
+
+/* SSS 38.211 7.4.2.3: m0 = 15*floor(N_ID1/112) + 5*N_ID2, m1 = N_ID1 mod 112,
+ * d(n) = [1-2x0((n+m0)%127)] * [1-2x1((n+m1)%127)] */
+static uint8_t x0seq[2 * NREP], x1seq[2 * NREP];
+
+static void build_sss_seq(void)
+{
+    for (int i = 0; i < 7; i++) {
+        x0seq[i] = (uint8_t)(i == 6);
+        x1seq[i] = (uint8_t)(i == 6);
+    }
+    for (int i = 0; i < 2 * NREP - 7; i++) {
+        x0seq[i + 7] = (uint8_t)(x0seq[i + 4] ^ x0seq[i]);
+        x1seq[i + 7] = (uint8_t)(x1seq[i + 1] ^ x1seq[i]);
+    }
+}
+
+static int sss_sym(int nid1, int nid2, int n)
+{
+    int m0 = 15 * (nid1 / 112) + 5 * nid2;
+    int m1 = nid1 % 112;
+    int a = x0seq[(n + m0) % NREP] ? -1 : 1;
+    int b = x1seq[(n + m1) % NREP] ? -1 : 1;
+    return a * b;
+}
 
 static void build_corr_uc(void)
 {
@@ -124,31 +165,33 @@ static void dsc(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
     n_desc++;
 }
 
-static void corr_run(int64_t *re, int64_t *im)
+/* One correlation on the array: stream the 127 reference words (2D walk, 16
+ * words per bank), optionally reload the rx block into spad 0, run the 52-cycle
+ * MAC microcode and stream the 16 per-PE partials out.  rx stays in the
+ * scratchpad between candidates, so only the first one reloads it. */
+static void corr_one(uint32_t ref_ram, int32_t *fb, int with_rx, int cap)
 {
-    int32_t *fb = oblk + out_idx * 32;
-    out_idx = (out_idx + 1) % OUT_BLOCKS;
-    last_fb = fb;
-
     n_desc = 0;
-    dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);                 /* rx: linear 254 words */
-    dsc(PSS_REF_BASE, 8 * 32, NREP, 0, 0, 32, 16);         /* refs: 16 words/bank */
-    dsc((uint32_t)(uintptr_t)fb, 16 * 32, 32, 0, 1, 32, 2); /* results: 2 words/bank */
+    uint32_t n_in;
+    if (with_rx) dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);    /* rx: linear 254 words */
+    dsc(ref_ram, 8 * 32, NREP, 0, 0, 32, 16);             /* refs: 16 words/bank */
+    n_in = n_desc;
 
     done = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, DESC_BASE);
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_SIZE, RING_DEPTH);
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_HEAD, 0);
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, 2);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, n_in);
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
-    done += 2;
+    done += n_in;
     wait_desc(done);
-    /* debug: what the engine decoded for the second (reference) descriptor */
-    latch[0] = mmio_r(CGRA_BASE + 0x0030u);
-    latch[1] = mmio_r(CGRA_BASE + 0x0034u);
-    latch[2] = mmio_r(CGRA_BASE + 0x0038u);
-    latch[3] = mmio_r(CGRA_BASE + 0x003Cu);
+    if (cap) {                     /* what the engine decoded for the refs copy */
+        latch[0] = mmio_r(CGRA_BASE + 0x0030u);
+        latch[1] = mmio_r(CGRA_BASE + 0x0034u);
+        latch[2] = mmio_r(CGRA_BASE + 0x0038u);
+        latch[3] = mmio_r(CGRA_BASE + 0x003Cu);
+    }
     gpcp_cgra_array_start(CGRA_BASE, 0, CORR_CYCLES);
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     {
@@ -158,15 +201,19 @@ static void corr_run(int64_t *re, int64_t *im)
         }
     }
     runs++;
-    gpcp_cgra_ring_push(CGRA_BASE, 3);
+    dsc((uint32_t)(uintptr_t)fb, 16 * 32, 32, 0, 1, 32, 2); /* results: 2 words/bank */
+    gpcp_cgra_ring_push(CGRA_BASE, n_in + 1u);
     done += 1;
     wait_desc(done);
     mmio_w(CGRA_BASE + GPCP_CGRA_RING_CTRL, 0);
+}
 
+/* |re| + |im| of one result block (the CPU sum, as in sw/soc/sss_bm.c) */
+static uint64_t metric_of(int32_t *fb)
+{
     int64_t sr = 0, si = 0;
     for (int p = 0; p < NPES; p++) { sr += fb[2 * p]; si += fb[2 * p + 1]; }
-    *re = sr;
-    *im = si;
+    return (uint64_t)((sr < 0 ? -sr : sr) + (si < 0 ? -si : si));
 }
 
 /* ------------------------------------------------------------------ epilogue */
@@ -183,9 +230,11 @@ int main(void)
     uint32_t t0;
 
     build_mseq();
-    /* ---- FFT of the PSS symbol (symbol 1) ---- */
+    build_sss_seq();
+    /* ---- FFT of the PSS symbol (1) and the SSS symbol (3) ---- */
     t0 = mtime();
     fft4096(td + 1 * 2 * FFT_N);
+    fft4096(td + 3 * 2 * FFT_N);
     build_corr_uc();          /* the FFT image owned the imem until here */
 
 
@@ -198,19 +247,22 @@ int main(void)
 
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     (void)rxp[2 * NREP - 1];       /* drain the store buffer before the DMA */
-    /* ---- three PSS candidates ---- */
+    /* ---- three PSS candidates (all reference blocks generated up front) ---- */
+    for (int c = 0; c < 3; c++)
+        for (int t = 0; t < NREP; t++)
+            pref[c * REF_STRIDE + t] = pss_sign(c, t) * 32767;
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    (void)pref[2 * REF_STRIDE + NREP - 1];
+
     int64_t best = -1;
     uint32_t nid2 = 0;
     for (int c = 0; c < 3; c++) {
-        /* the source buffer is read linearly by the engine, the 2D walk spreads
-         * the 127 words over 16-word rows (bank 8+r, word t%16) */
-        for (int t = 0; t < NREP; t++)
-            pref[t] = pss_sign(c, t) * 32767;
-        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-        (void)pref[NREP - 1];         /* last reference word */
-
-        int64_t re, im;
-        corr_run(&re, &im);
+        int32_t *fb = oblk + out_idx * 32;
+        out_idx = (out_idx + 1) % OUT_BLOCKS;
+        last_fb = fb;
+        corr_one(PSS_REF_BASE + 4u * (uint32_t)c * REF_STRIDE, fb, 1, c == 1);
+        int64_t re = 0, im = 0;
+        for (int p = 0; p < NPES; p++) { re += fb[2 * p]; im += fb[2 * p + 1]; }
         RESULT_BASE[2 * c + 0] = (uint32_t)(re >> 16);
         RESULT_BASE[2 * c + 1] = (uint32_t)(im >> 16);
         /* probe of the true candidate: what the array actually consumed.
@@ -240,6 +292,36 @@ int main(void)
         errs++;
     RESULT_BASE[6] = nid2;
     RESULT_BASE[7] = 1;
+
+    /* ---- SSS: 336 hypotheses on the spectrum of symbol 3 ---------------- */
+    for (int t = 0; t < NREP; t++) {
+        uint32_t idx = rev4((uint32_t)(NPSS_RE0 + t));
+        rxp[(t >> 4) * 32 + 2 * (t & 15) + 0] = td[3 * 2 * FFT_N + 2 * idx] << 4;
+        rxp[(t >> 4) * 32 + 2 * (t & 15) + 1] = td[3 * 2 * FFT_N + 2 * idx + 1] << 4;
+    }
+    for (int h = 0; h < NHYP; h++)
+        for (int t = 0; t < NREP; t++)
+            sref[h * REF_STRIDE + t] = sss_sym(h, (int)nid2, t) * 32767;
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    (void)rxp[2 * NREP - 1];
+    (void)sref[(NHYP - 1) * REF_STRIDE + NREP - 1];   /* drain both stores */
+
+    uint64_t sbest = 0, strue = 0;
+    uint32_t nid1 = 0;
+    for (int h = 0; h < NHYP; h++) {
+        int32_t *fb = sout + h * 32;
+        corr_one(SSS_REF_BASE + 4u * (uint32_t)h * REF_STRIDE, fb, h == 0, 0);
+        uint64_t mag = metric_of(fb);
+        if (h == (int)TRUE_NID1) strue = mag;
+        if (mag > sbest) { sbest = mag; nid1 = (uint32_t)h; }
+    }
+    if (nid1 != TRUE_NID1)
+        errs++;
+    RESULT_BASE[942] = nid1;
+    RESULT_BASE[943] = TRUE_NID1;
+    RESULT_BASE[944] = (uint32_t)(sbest >> 10);
+    RESULT_BASE[945] = (uint32_t)(strue >> 10);
+
     RESULT_BASE[8] = errs;
     RESULT_BASE[9] = mtime() - t0;
     RESULT_BASE[10] = runs;

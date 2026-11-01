@@ -112,7 +112,30 @@ def main(path):
                 print(f"  probe: row {r} (t={16 * r}..{16 * r + 15}) -> bank {8 + r}: "
                       f"{'match' if same else 'MISMATCH'}"
                       + ("" if same else f"  hw={got[:4]} want={rows[r][:4]}"))
-    # the true candidate must dominate the other two
+    # ---- SSS: 336 hypotheses on the spectrum of symbol 3 ---------------------
+    if len(vals) >= 946:
+        got_nid1 = vals[942]
+        true_nid1 = vals[943]
+        # model: same correlation on the float FFT of the SSS symbol
+        x3 = sp._fft(td[3])
+        seq = [sp.nr_seq.sss_seq(h, 1) for h in range(336)]
+        gold = []
+        for h in range(336):
+            r = sum(x3[PSS_RE0 + t].real * seq[h][t] for t in range(NREP))
+            i = sum(x3[PSS_RE0 + t].imag * seq[h][t] for t in range(NREP))
+            gold.append(abs(r) + abs(i))
+        best_h = max(range(336), key=lambda h: gold[h])
+        print(f"  probe: SSS N_ID1 hw={got_nid1} (metric {vals[944]}) "
+              f"true={true_nid1} (metric {vals[945]}), model argmax={best_h} "
+              f"model true={gold[true_nid1]:.0f} best={gold[best_h]:.0f}")
+        if got_nid1 != true_nid1:
+            print(f"  SSS: detected N_ID1 {got_nid1} instead of {true_nid1}")
+            ok = False
+        if best_h != true_nid1:
+            print(f"  SSS: the model itself does not peak on {true_nid1} "
+                  f"(argmax {best_h}) - grid/RE layout problem")
+            ok = False
+
     if not (norms[1] > 3 * norms[0] and norms[1] > norms[2]):
         print(f"  candidate ordering wrong: |c0|={norms[0]} |c1|={norms[1]} |c2|={norms[2]}")
         ok = False
@@ -127,9 +150,10 @@ def main(path):
     if ok:
         print(f"[info] PSS on the FFT output: |c0|={norms[0]} |c1|={norms[1]} "
               f"|c2|={norms[2]} (model {gold_norms[0]:.0f}/{gold_norms[1]:.0f}/"
-              f"{gold_norms[2]:.0f}), {vals[10]} array runs, {vals[9]} cycles")
-        print("[ OK ] SSB sample-level PSS: 4096-point FFT then correlation, "
-              "N_ID2 detected from the spectrum")
+              f"{gold_norms[2]:.0f}), N_ID2={vals[6]}, {vals[10]} array runs, "
+              f"{vals[9]} cycles")
+        print("[ OK ] SSB sample-level front end: 4096-point FFT, PSS (N_ID2) and "
+              "SSS (336 hypotheses, N_ID1) detected from the spectrum")
     return 0 if ok else 1
 
 
