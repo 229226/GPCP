@@ -35,7 +35,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-slot linux clean
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-slot linux clean
 
 all:
 	mkdir -p $(ROOT)/$(OBJ)
@@ -129,6 +129,24 @@ run-ssb: all
 		--dump $(ROOT)/$(OBJ)/ssb_dump.txt \
 		--max-cycles 20000000
 	python3 $(ROOT)/tools/check_ssb.py $(ROOT)/$(OBJ)/ssb_dump.txt
+
+SSBTD = $(ROOT)/build/ssb/td.bin
+
+$(SSBTD):
+	@mkdir -p $(dir $(SSBTD))
+	python3 $(ROOT)/tools/ssb_plan.py dump $(SSBTD)
+
+run-ssbfft: all $(SSBTD)
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/ssb_fft_bm.bin@0x80000000 \
+		--load $(SSBTD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80010000 --nwords 6 \
+		--dump $(ROOT)/$(OBJ)/ssb_fft_dump.txt \
+		--max-cycles 40000000
+	python3 $(ROOT)/tools/check_ssb_fft.py $(ROOT)/$(OBJ)/ssb_fft_dump.txt
 
 run-slot: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc

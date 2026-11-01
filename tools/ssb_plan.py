@@ -309,6 +309,16 @@ def subcarriers():
 TD_SCALE = 256                   # pre-scale the samples so the fixed-point FFT keeps precision
 
 
+def _dump_bin(path):
+    import struct
+    td, grid, payload = build_td()
+    with open(path, "wb") as f:
+        for s in range(NSYM):
+            for c in td[s]:
+                for v in (int(c.real) * TD_SCALE, int(c.imag) * TD_SCALE):
+                    f.write(struct.pack("<I", v & 0xFFFFFFFF))
+
+
 def dump_td(path, nid1=TRUE_NID1, nid2=TRUE_NID2):
     td, grid, payload = build_td(nid1, nid2)
     with open(path, "w") as f:
@@ -331,3 +341,12 @@ def build_td(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None, amp=2000):
         td.append([int(round(c.real)) + 1j * int(round(c.imag))
                    for c in _fft(freq, inverse=True)])
     return td, grid, payload
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) >= 3 and sys.argv[1] == "dump":
+        _dump_bin(sys.argv[2])
+        print(f"[info] wrote {sys.argv[2]}")
+    else:
+        print("usage: ssb_plan.py dump <file>")
