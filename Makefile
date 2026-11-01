@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-full sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot linux
+.PHONY: all test build clean verify verify-full sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux
 
 all: test
 
@@ -60,6 +60,7 @@ soc-run-polar: ; $(MAKE) -C sim/soc run-polar
 soc-run-ssb: ; $(MAKE) -C sim/soc run-ssb
 
 soc-run-ssbfft: ; $(MAKE) -C sim/soc run-ssbfft
+soc-run-ssb-slot: ; $(MAKE) -C sim/soc run-ssb-slot
 soc-run-fftprobe: ; $(MAKE) -C sim/soc run-fftprobe
 
 soc-run-slot:

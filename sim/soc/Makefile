@@ -35,7 +35,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot linux clean
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -160,6 +160,22 @@ run-ssbfft: all $(SSBTD)
 
 # FFT port used by the sample-level SSB chain (ssb_fft.inc): every bin compared
 # bit-exactly with the fixed-point reference for the same time-domain symbol
+# P0.2: sample-level SSB chain driven by the CLINT slot timer -- the 336 SSS
+# hypotheses are amortised across slot ticks (one batch per tick) instead of run
+# as one straight line.  Same loads as run-ssbfft; the checker validates the MIB
+# plus the slot-scheduling bookkeeping (ticks / overruns / bad traps).
+run-ssb-slot: all $(SSBTD)
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/ssb_slot_bm.bin@0x80000000 \
+		--load $(SSBTD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80010000 --nwords 1000 \
+		--dump $(ROOT)/$(OBJ)/ssb_slot_dump.txt \
+		--max-cycles 40000000
+	python3 $(ROOT)/tools/check_ssb_slot.py $(ROOT)/$(OBJ)/ssb_slot_dump.txt
+
 run-fftprobe: all $(SSBTD)
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin

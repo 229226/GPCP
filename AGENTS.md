@@ -55,6 +55,7 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `run-sync` / `run-sss` / `run-polar` | N_ID2 / N_ID1=200 / 32 bit 全对，partial 逐位 |
 | `run-ssb` | 1459 runs，2,414,474 周期，MIB 逐位 |
 | `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32**，1907 runs，4,335,553 周期 |
+| `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 
