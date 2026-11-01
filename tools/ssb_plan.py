@@ -261,3 +261,73 @@ def receiver(y, nid1, nid2):
                 llr[n] = -v if scr[n] else v
                 n += 1
     return h, llr
+
+
+# ------------------------------------------------------- time-domain samples
+NFFT = 4096
+
+
+def _fft(x, inverse=False):
+    """Iterative radix-2 complex FFT (pure Python, N a power of two)."""
+    n = len(x)
+    x = list(x)
+    j = 0
+    for i in range(1, n):
+        bit = n >> 1
+        while j & bit:
+            j ^= bit
+            bit >>= 1
+        j |= bit
+        if i < j:
+            x[i], x[j] = x[j], x[i]
+    length = 2
+    sgn = 1.0 if inverse else -1.0
+    while length <= n:
+        ang = sgn * 2.0 * 3.141592653589793 / length
+        wl = complex(3.141592653589793 * 0 + __import__("math").cos(ang),
+                     __import__("math").sin(ang))
+        half = length // 2
+        for i in range(0, n, length):
+            w = 1 + 0j
+            for k in range(half):
+                u = x[i + k]
+                v = x[i + k + half] * w
+                x[i + k] = u + v
+                x[i + k + half] = u - v
+                w *= wl
+        length <<= 1
+    if inverse:
+        x = [c / n for c in x]
+    return x
+
+
+def subcarriers():
+    """SSB RE index -> FFT subcarrier (k = r, i.e. DC..239 for the demo)."""
+    return {r: r for r in range(NRE)}
+
+
+TD_SCALE = 256                   # pre-scale the samples so the fixed-point FFT keeps precision
+
+
+def dump_td(path, nid1=TRUE_NID1, nid2=TRUE_NID2):
+    td, grid, payload = build_td(nid1, nid2)
+    with open(path, "w") as f:
+        for s in range(NSYM):
+            for c in td[s]:
+                f.write(f"{int(c.real) * TD_SCALE} {int(c.imag) * TD_SCALE}\n")
+    return payload
+
+
+def build_td(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None, amp=2000):
+    """OFDM time-domain samples of the 4 SSB symbols (IFFT of the grid)."""
+    grid, payload, bits = build_grid(nid1, nid2, payload)
+    sc = subcarriers()
+    td = []
+    for s in range(NSYM):
+        freq = [0j] * NFFT
+        for r in range(NRE):
+            if grid[s][r] != 0:
+                freq[sc[r]] = grid[s][r]
+        td.append([int(round(c.real)) + 1j * int(round(c.imag))
+                   for c in _fft(freq, inverse=True)])
+    return td, grid, payload
