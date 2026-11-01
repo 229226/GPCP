@@ -134,9 +134,17 @@ def main():
             if not os.path.exists(os.path.join(root, "build/sw/ssb_fft_bm.bin")):
                 raise SystemExit("missing build/sw/ssb_fft_bm.bin: make -C sw/soc")
             os.environ.pop("LD_LIBRARY_PATH", None)
-            ok2, ok1, err, cyc = hw_point(snr, a.seed, bin_path, root)
-            print(f"{snr:7.1f} |    hw | {'ok' if ok2 else 'WRONG':>5} | "
-                  f"{'ok' if ok1 else 'WRONG':>5} | {err:7d} | {cyc}")
+            e2 = e1 = 0
+            errs = []
+            cyc = 0
+            for sd in seeds:
+                ok2, ok1, err, cyc = hw_point(snr, sd, bin_path, root)
+                e2 += not ok2
+                e1 += not ok1
+                errs.append(err)
+            avg = sum(errs) / len(errs)
+            print(f"{snr:7.1f} |    hw | {len(errs) - e2:3d}/{len(errs):<2d} | "
+                  f"{len(errs) - e1:3d}/{len(errs):<2d} | {avg:7.2f} | {cyc}")
     return 0
 
 
