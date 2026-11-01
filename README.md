@@ -32,7 +32,9 @@
 - **NR 同步 + Polar kernel（B4 骨架）**：`pss_corr` / `sss_corr`（127 点复相关，
   16 PE × 8 抽头，**52 拍**）、`polar_enc`（512 bit 蝶形编码，**43 拍**）、
   `polar_node`（min-sum f/g 节点更新，**22 拍**，`g` 不用 32 位乘法）；
-  序列按 38.211/38.212 生成（`tools/nr_seq.py`），四个 kernel 与黄金模型**逐位一致**。
+  序列按 38.211/38.212 生成（`tools/nr_seq.py`），四个 kernel 与黄金模型**逐位一致**；
+  **SoC 级 PSS 检测已闭环**：三个候选各跑一次 52 拍相关、CPU 做 argmax，
+  3 次阵列运行 2688 周期，检出 `N_ID2` 与真值一致（`make -C sim/soc run-sync`）。
 - **slot 时基调度**：CLINT 定时器每 1200 拍打一次 tick，ISR 只记时/重装，
   主循环 `wfi` + 一个 slot 一次服务；**抖动 0、零 overrun、8 slot 逐位一致**
   （`make -C sim/soc run-slot`）。

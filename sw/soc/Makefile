@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
