@@ -408,6 +408,35 @@ def self_test(n: int, seed: int = 5) -> bool:
     return bad == 0
 
 
+SEEDS = {256: 0x1357, 1024: 0x2468, 4096: 0x369C}
+
+
+def test_vector(n: int, seed: int = None, mod: int = 3000):
+    """Same LCG as fill_input() in sw/soc/fft_bm.c."""
+    if seed is None:
+        seed = SEEDS[n]
+    rng = seed & 0xFFFFFFFF
+    vals = []
+    for _ in range(2 * n):
+        rng = (rng * 1664525 + 1013904223) & 0xFFFFFFFF
+        vals.append((rng >> 16) % (2 * mod + 1) - mod)
+    return vals[0::2], vals[1::2]
+
+
+def write_expect(n: int, stages: int, path: Path):
+    """Write the expected 2*n word array after `stages` full radix-4 stages."""
+    re, im = test_vector(n)
+    for s in range(stages):
+        re, im = stage_on_tiles(re, im, n, s)
+    words = []
+    for k in range(n):
+        words.append(re[k] & 0xFFFFFFFF)
+        words.append(im[k] & 0xFFFFFFFF)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"".join(struct.pack("<I", w) for w in words))
+    print(f"[exp] {path}: {len(words)} words (N={n}, {stages} stages)")
+
+
 def write_lut(path: Path):
     words = []
     for n in (256, 1024, 4096):
@@ -425,6 +454,9 @@ def write_lut(path: Path):
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "lut":
         write_lut(Path(sys.argv[2]))
+        return 0
+    if len(sys.argv) > 3 and sys.argv[1] == "exp":
+        write_expect(int(sys.argv[2]), int(sys.argv[3]), Path(sys.argv[4]))
         return 0
     ok = True
     for n in (256, 1024, 4096):

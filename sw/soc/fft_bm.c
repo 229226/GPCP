@@ -431,14 +431,82 @@ int main(void)
     {
         uint32_t pg = 0;
         g[0] = n_tiles; desc_full_stages(256,  d256,  LUT_OFS_256,  &pg);
-        g[1] = n_tiles; desc_full_stages(4096, d4096, LUT_OFS_4096, &pg);
-        g[2] = n_tiles; desc_full_stages(1024, d1024, LUT_OFS_1024, &pg);
+        g[1] = n_tiles; desc_full_stages(1024, d1024, LUT_OFS_1024, &pg);
+        g[2] = n_tiles; desc_full_stages(4096, d4096, LUT_OFS_4096, &pg);
         g[3] = n_tiles;
     }
     for (i = 0; i < 3u; i++) {
         t0 = mtime();
+#ifdef CHK1024
+        if (i == 1u) {
+            exec_tiles(g[i], g[i] + 4u);          /* 1024: stage 0 tiles */
+            {
+                uint32_t *dbg = (uint32_t *)0x80010000ul;
+                const uint32_t *e1 = (const uint32_t *)0x80200000ul;
+                uint32_t k, bad = 0, first = 0xFFFFFFFFu;
+                uint32_t blk[16];
+                for (k = 0; k < 16u; k++) blk[k] = 0;
+                for (k = 0; k < 1024u; k++) {
+                    if ((uint32_t)d1024[2 * k] != e1[2 * k] ||
+                        (uint32_t)d1024[2 * k + 1] != e1[2 * k + 1]) {
+                        bad++;
+                        blk[k >> 6]++;
+                        if (first == 0xFFFFFFFFu) first = k;
+                    }
+                }
+                dbg[15000] = bad;
+                dbg[15001] = first;
+                dbg[15002] = (first == 0xFFFFFFFFu) ? 0u : (first & 63u);
+                for (k = 0; k < 16u; k++) dbg[15003 + k] = blk[k];
+            }
+            exec_tiles(g[i] + 4u, g[i + 1]);      /* 1024: stage 1 tiles */
+        } else
+#endif
         exec_tiles(g[i], g[i + 1]);
         t_full[i] = mtime() - t0;
+#ifdef CHK1024
+        if (i == 1u) {
+            /* compare the 1024 stage result against ROM snapshots computed
+             * offline: after one stage (s1) and after two stages (s2) */
+            uint32_t *dbg = (uint32_t *)0x80010000ul;
+            const uint32_t *e1 = (const uint32_t *)0x80200000ul;
+            const uint32_t *e2 = (const uint32_t *)0x80201000ul;
+            uint32_t k, bad1 = 0, bad2 = 0, f1 = 0xFFFFFFFFu, f2 = 0xFFFFFFFFu;
+            uint32_t got_r = 0, got_i = 0, exp_r = 0, exp_i = 0;
+            uint32_t blk[16];
+            for (k = 0; k < 16u; k++) blk[k] = 0;
+            for (k = 0; k < 1024u; k++) {
+                if ((uint32_t)d1024[2 * k] != e1[2 * k] ||
+                    (uint32_t)d1024[2 * k + 1] != e1[2 * k + 1]) {
+                    bad1++;
+                    if (f1 == 0xFFFFFFFFu) f1 = k;
+                }
+                if ((uint32_t)d1024[2 * k] != e2[2 * k] ||
+                    (uint32_t)d1024[2 * k + 1] != e2[2 * k + 1]) {
+                    bad2++;
+                    blk[k >> 6]++;
+                    if (f2 == 0xFFFFFFFFu) {
+                        f2 = k;
+                        got_r = (uint32_t)d1024[2 * k];
+                        got_i = (uint32_t)d1024[2 * k + 1];
+                        exp_r = e2[2 * k];
+                        exp_i = e2[2 * k + 1];
+                    }
+                }
+            }
+            dbg[16000] = bad1;
+            dbg[16001] = f1;
+            dbg[16002] = (f1 == 0xFFFFFFFFu) ? 0u : (f1 & 63u);
+            dbg[16003] = bad2;
+            dbg[16004] = f2;
+            dbg[16005] = (f2 == 0xFFFFFFFFu) ? 0u : (f2 & 63u);
+            dbg[16006] = got_r;
+            dbg[16007] = got_i;
+            dbg[16008] = exp_r;
+            dbg[16009] = exp_i;
+            for (k = 0; k < 16u; k++) dbg[16010 + k] = blk[k];
+        }
+#endif
     }
 
     /* ---- phase 2: fused radix-16 tails ---- */
