@@ -41,6 +41,8 @@ make verify / make verify-full        # 同上两个的 make 包装
 # 3) B3 Linux（长任务；日志可反复评分，不必重跑）
 make -C sim/soc linux LINUX_MAX_CYCLES=1e8 LINUX_REQUIRE=3   # 探针：看 init 是否跑起来
 make -C sim/soc linux-status                                  # 只重新评分已有日志
+make -C sim/soc linux LINUX_TRACE=2000000 LINUX_MAX_CYCLES=7e7 # 采 PC 样，定位"静默启动"
+python3 tools/sym_pc.py build/linux_boot.log                   # 用 vmlinux 给 PC 命名
 
 # 2) 只跑某个基准
 env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
@@ -62,6 +64,7 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
+| `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
 | `make -C sim/soc linux-status` | 分级评分：stage 0..8（OpenSBI→kernel→initramfs→/init→uname→/proc→CGRA 用户态→干净退出），并要求 16 个累加器值正确 |
 
 ---

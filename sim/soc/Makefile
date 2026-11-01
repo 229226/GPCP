@@ -207,6 +207,9 @@ run-slot: all
 LINUX_MAX_CYCLES ?= 200000000
 LINUX_LOG        ?= $(ROOT)/build/linux_boot.log
 LINUX_REQUIRE    ?= 7
+# LINUX_TRACE=1000000 asks the bench to print the retired PC every N cycles
+# (use with tools/sym_pc.py to see where a silent boot is spending its time)
+LINUX_TRACE      ?=
 LINUX_IMAGES      = --load $(ROOT)/third_party/opensbi/build/platform/generic/firmware/fw_jump.bin@0x80000000 \
                     --load $(ROOT)/third_party/linux-6.6.52/arch/riscv/boot/Image@0x80200000 \
                     --load $(ROOT)/build/linux/gpcp.dtb@0x81F00000 \
@@ -215,7 +218,8 @@ LINUX_IMAGES      = --load $(ROOT)/third_party/opensbi/build/platform/generic/fi
 linux: all
 	$(MAKE) -C $(ROOT)/sw/linux
 	set -o pipefail; env -u LD_LIBRARY_PATH $(BIN) $(LINUX_IMAGES) \
-		--max-cycles $(LINUX_MAX_CYCLES) 2>&1 | tee $(LINUX_LOG)
+		--max-cycles $(LINUX_MAX_CYCLES) $(if $(LINUX_TRACE),--trace-pc $(LINUX_TRACE),) \
+		2>&1 | tee $(LINUX_LOG)
 	python3 $(ROOT)/tools/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
 
 linux-status:
