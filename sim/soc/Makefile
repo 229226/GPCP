@@ -37,8 +37,18 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 
 .PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot linux clean
 
-all:
-	mkdir -p $(ROOT)/$(OBJ)
+# The model is only rebuilt when one of its inputs changes; `make all` used to
+# re-run Verilator every time (~35 s), which made the run-* targets painful to
+# chain.  Header/f-list changes inside CVA6 are not tracked: `make clean` if you
+# touch third_party/cva6.
+# Prerequisites are written relative to the repo root (that is where the
+# recipes cd into), so they must be prefixed for make, which runs in sim/soc.
+PREREQ := $(addprefix $(ROOT)/,$(SRCS)) $(ROOT)/sim/soc/cva6.f
+
+all: $(BIN)
+
+$(BIN): $(PREREQ)
+	@mkdir -p $(ROOT)/$(OBJ)
 	cd $(ROOT) && env -u LD_LIBRARY_PATH $(VERILATOR) $(VFLAGS) $(INC) \
 		-f sim/soc/cva6.f $(SRCS) --Mdir $(OBJ) -o Vgpcp_soc
 

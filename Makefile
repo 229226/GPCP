@@ -1,8 +1,16 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot linux
+.PHONY: all test build clean verify verify-full sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot linux
 
 all: test
+
+# One-command acceptance: kernels + a quick SoC subset
+verify:
+	bash tools/verify.sh quick
+
+# Full SoC benchmark matrix
+verify-full:
+	bash tools/verify.sh full
 
 # Build the Verilator model (if needed) and run all CGRA kernel tests
 test:

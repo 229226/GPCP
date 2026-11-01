@@ -3,6 +3,9 @@
 > 目标：用 **RISC-V CPU + CGRA 阵列**实现 gNB 侧完整无线协议（LTE + 5G NR 双模），
 > 优先复用开源项目。当前阶段为**纯仿真原型**（科研性质）。
 
+> **接手开发请先读 [`AGENTS.md`](AGENTS.md)**：现状、硬规矩（15 条踩坑规则）、调试方法论、
+> 以及一条命令的全量验收 `bash tools/verify.sh quick|full`（`make verify` / `make verify-full`）。
+
 ## 当前状态：M0 / B2 完成，L1 数据面 + DMA 双缓冲完成，B3 进行中
 
 - **M0**：4×4 CGRA 阵列 RTL（int16 MAC / int32 累加，最近邻 1 周期路由）、全局定序器、
