@@ -160,3 +160,37 @@ make -C sim/soc linux
    OpenSBI 的用法未触发，但 Linux 高并发场景需要补（AMO 后使行失效）。
 5. **无 SMP**：单 hart。
 6. **OpenSBI 的两处补丁是原型专用**，上板/多 hart 需移除或改为通用实现。
+
+## 10. 当前阻塞：内核在 arch_initcall 之后进入 idle（2026-11 实测）
+
+结论先说：**这份 RTL 上的 Linux 能启动、能打印、能跑 initcall，但在 `arch_initcall`
+级别之后不再出现任何输出，CPU 停在 `arch_cpu_idle`，`/init` 从未执行。**
+
+证据（都可复跑，命令见 `AGENTS.md` §2）：
+
+| 实验 | 周期预算 | 结果 |
+|---|---|---|
+| 正常启动 | 40 M | 最后一行 `cpu0: Ratio of byte access...`（内核时间 1.45 s），之后 60 M 周期无输出 |
+| 正常启动 | 100 M | 同上，`TIMEOUT`；`tools/check_linux.py` 定级 **stage 2** |
+| `--trace-pc 2 M` | 70 M | PC 采样：38–46 M 与 50–64 M 都在 `arch_cpu_idle`（单段最长 14 M 周期），中间出现一次 `scheduler_tick`；20–34 M 落在 OpenSBI 的 `$ecall` 路径（0x8000_xxxx）与 `console_unlock` |
+| `initcall_debug` 引导参数 | 60 M | 日志里**没有**出现 `calling ...`，只有命令行回显里有 `initcall_debug` |
+
+解读：
+
+1. `scheduler_tick` 出现过 → 定时器中断（CLINT `mtip`）是工作的，`jiffies` 会走；
+2. 之后长时间 idle → 没有可运行任务，即 `kernel_init` 阻塞在某个等待上（`/init` 未 exec）；
+3. `initcall_debug` 没打出 `calling` → 该 `core_param` 在本内核上没生效（待查：`parse_args`
+   阶段是否被前面的参数吞掉，或该 6.6.52 配置里打印走的是 trace 路径）。
+
+下一步（按代价从低到高）：
+
+- 去掉 `console=ttyS0`、只留 `earlycon=sbi` 跑一次：区分"内核真的停住"还是"8250 接管后
+  控制台失效"（后者会让日志看起来像停住）；
+- 用 `initcall_blacklist=<fn>` 逐个屏蔽"可能等待外部事件"的 initcall；
+- 若仍无解，重编内核（`CONFIG_DEBUG_KERNEL` 已 y，但可加 `CONFIG_DEBUG_INFO`/`KALLSYMS`
+  以便 `%pS` 打印函数名），或改用 `tinyconfig` 把 initcall 数量降一个量级；
+- 软件侧并行：用 QEMU 跑同一份 initramfs 验证用户态程序（`cgra_test` 的正确性不依赖本 RTL）。
+
+> 注：RTL 里还留着 32 条上限的 `[trap]` 调试打印（`gpcp_soc.sv` 805 行），它会与
+> `earlycon=sbi` 的逐字符 ecall 交错，把控制台输出切碎（`tools/check_linux.py` 已做去噪，
+> 但新的日志分析脚本要记得处理）。
