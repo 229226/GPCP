@@ -143,7 +143,7 @@ run-ssbfft: all $(SSBTD)
 		--load $(ROOT)/build/sw/ssb_fft_bm.bin@0x80000000 \
 		--load $(SSBTD)@0x80400000 \
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
-		--results 0x80010000 --nwords 946 \
+		--results 0x80010000 --nwords 992 \
 		--dump $(ROOT)/$(OBJ)/ssb_fft_dump.txt \
 		--max-cycles 40000000
 	python3 $(ROOT)/tools/check_ssb_fft.py $(ROOT)/$(OBJ)/ssb_fft_dump.txt

@@ -35,10 +35,11 @@
   序列按 38.211/38.212 生成（`tools/nr_seq.py`），四个 kernel 与黄金模型**逐位一致**；
   **SoC 级小区搜索已闭环**：PSS 检测（3 候选、2688 周期）与 SSS 336 假设搜索
   （218,894 周期）都检出正确的小区 ID，partial 逐位一致
-  （`make -C sim/soc run-sync` / `run-sss`）；**采样级**链路已起步：4096 点 FFT → PSS
-  与 SSS 336 假设搜索（`make -C sim/soc run-ssbfft`，N_ID2=1 / N_ID1=200 均正确，
-  候选比 35× / 0.125 与模型一致；端口逐 bin 自检 `run-fftprobe` 与定点参考**逐位一致**）；
-  **Polar SC 译码**走 CGRA 树遍历
+  （`make -C sim/soc run-sync` / `run-sss`）；**采样级链路已闭环**：4 个符号的 4096 点 FFT →
+  PSS（N_ID2）→ SSS 336 假设（N_ID1）→ DMRS 信道估计（H=(16,0)）→ QPSK 解调 + PBCH 解扰 →
+  Polar SC(N=512) → **MIB 32/32 位**（`make -C sim/soc run-ssbfft`，1907 次阵列运行、
+  4,335,553 周期；端口逐 bin 自检 `run-fftprobe` 与定点参考**逐位一致**）；
+  **Polar SC 译码**也走 CGRA 树遍历
   （N=64/K=32，79,025 周期，64/64 位正确，`make -C sim/soc run-polar`）；**SSB 片段已串联**：
   PSS/SSS → DMRS 信道估计 → QPSK 解调 + PBCH 解扰 → Polar SC(N=512) → MIB，
   检出 N_ID1/N_ID2 与 MIB 全部逐位正确（`make -C sim/soc run-ssb`）。

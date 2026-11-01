@@ -1,15 +1,16 @@
 /* -----------------------------------------------------------------------------
- * SSB at the sample level: 4096-point FFT of a time-domain SSB symbol, then
- * PSS detection on the resulting spectrum (SoC level).
+ * SSB at the sample level: 4096-point FFTs of the four time-domain symbols, then
+ * the whole receive chain (SoC level).
  *
  *   * the four SSB symbols are generated offline by tools/ssb_plan.py and
  *     loaded at 0x8040_0000 (4096 complex samples each, int32 re/im)
  *   * the 4096-point radix-4 FFT is the verified engine from
  *     sw/soc/ssb_fft.inc (same microcode/twiddle ROM as run-fft); the spectrum
  *     comes out digit-reversed, so X[k] = data[rev4(k)]
- *   * the 127 PSS resource elements are packed into the bpsk_corr layout and
- *     correlated against the three N_ID(2) candidates; the SSS symbol (3) then
- *     runs the same kernel over all 336 N_ID(1) hypotheses
+ *   * PSS (3 candidates) and SSS (336 hypotheses) on the symbol 1 / 3 spectra
+ *   * DMRS channel estimate per symbol (60 pilots, Gold sequence, c_init =
+ *     3*N_ID1 + N_ID2), QPSK demod + PBCH descrambling -> 512 LLRs,
+ *     polar SC decode (min-sum node microcode, 22 cycles) -> 32 MIB bits
  *
  * Results at 0x8001_0000 (words):
  *   [0..5]  PSS correlation (re,im) of candidate 0, 1, 2 (>> 16)
@@ -22,6 +23,10 @@
  *   [430..941] scratchpad banks 8..23 (the 2D row layout the copy produced)
  *   [942] detected N_ID1   [943] true N_ID1
  *   [944] best SSS metric (>>10)   [945] metric of the true hypothesis
+ *   [946..953] channel estimate (re,im) per symbol, H_SCALE = 16
+ *   [954..985] decoded MIB payload (32 bits)
+ *   [986..990] error breakdown: wait timeout / corr spin / node spin /
+ *              block-pool overrun, node blocks used
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 
@@ -54,12 +59,43 @@
 #define SSS_OUT_BASE     0x80240000ul          /* 336 x 32 words           */
 #define TRUE_NID1        200
 
+/* PBCH: DMRS channel estimate -> QPSK demod + descrambling -> polar SC */
+#define NRE              240
+#define NPILOT           60
+#define QPSK             2000
+#define KINFO            32
+#define NPOL             512
+#define SDEPTH           9
+#define NODE_CYCLES      22
+#define LLR_SHIFT        2
+#define H_SCALE          16          /* keep a fractional part in H_hat */
+
+#define Y_BASE           0x80030000ul          /* 4 x 240 complex = 1920 words */
+#define LC_IN_BASE       0x80032000ul          /* a/b/beta staging (3 x 16)    */
+#define GOLD_BASE        0x80300000ul          /* Gold sequences (above linker RAM) */
+#define LB_BASE          0x80320000ul          /* LLR / bit buffers            */
+#define NODE_OUT_BASE    0x80330000ul          /* one fresh block per node run */
+#define NODE_OUT_BLOCKS  2048
+#define NODE_OUT_STRIDE  32                    /* words per block              */
+#define GOLD_LEN         (NPOL + 1600 + 31)
+
 static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
 static int32_t *pref = (int32_t *)PSS_REF_BASE;
 static int32_t *rxp = (int32_t *)RX_BASE;
 static int32_t *oblk = (int32_t *)OUT_BASE;
 static int32_t *sref = (int32_t *)SSS_REF_BASE;
 static int32_t *sout = (int32_t *)SSS_OUT_BASE;
+static int32_t *yw = (int32_t *)Y_BASE;
+static int32_t *ain = (int32_t *)LC_IN_BASE;
+static int32_t *bin = (int32_t *)(LC_IN_BASE + 64);
+static int32_t *bet = (int32_t *)(LC_IN_BASE + 128);
+static uint32_t *gold_x1 = (uint32_t *)GOLD_BASE;
+static uint32_t *gold_x2 = (uint32_t *)(GOLD_BASE + 4 * GOLD_LEN);
+static int32_t (*lbuf)[NPOL] = (int32_t (*)[NPOL])LB_BASE;
+static uint8_t (*bbuf)[NPOL] =
+    (uint8_t (*)[NPOL])(LB_BASE + 4 * (SDEPTH + 1) * NPOL);
+static int32_t *noblk = (int32_t *)NODE_OUT_BASE;
+static uint32_t nblk;          /* node runs never reuse a block (CPU D$ stays cold) */
 
 static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
@@ -67,6 +103,7 @@ static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t prog[CORR_CYCLES * NPES];
 static uint32_t errs, runs, n_desc, out_idx, done;
+static uint32_t dbg_wait, dbg_corr_spin, dbg_array_spin, dbg_nblk;   /* errs breakdown */
 static int32_t *last_fb;        /* result block of the most recent corr_run */
 static uint32_t latch[4];       /* descriptor the engine latched for the refs copy */
 
@@ -80,7 +117,7 @@ static void wait_desc(uint32_t want)
 {
     uint32_t spins = 0, got;
     while ((got = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE)) != want) {
-        if (++spins > 4000000u) { (void)got; errs++; break; }
+        if (++spins > 4000000u) { (void)got; errs++; dbg_wait++; break; }
     }
 }
 
@@ -197,7 +234,7 @@ static void corr_one(uint32_t ref_ram, int32_t *fb, int with_rx, int cap)
     {
         uint32_t spins = 0;
         while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_BUSY) {
-            if (++spins > 4000000u) { errs++; break; }
+            if (++spins > 4000000u) { errs++; dbg_corr_spin++; break; }
         }
     }
     runs++;
@@ -216,6 +253,165 @@ static uint64_t metric_of(int32_t *fb)
     return (uint64_t)((sr < 0 ? -sr : sr) + (si < 0 ? -si : si));
 }
 
+/* ---------------------------------------------------------- PBCH sequences */
+/* Gold sequence of 38.211 5.2.1 (x1 with tap 3, x2 with taps 3/2/1), skipped
+ * by Nc = 1600 like tools/ssb_plan.py's gold(). */
+static void gold_init(uint32_t c_init)
+{
+    uint32_t n = NPOL + 1600;
+    for (uint32_t i = 0; i < n + 31; i++) { gold_x1[i] = 0; gold_x2[i] = 0; }
+    gold_x1[0] = 1;
+    for (uint32_t i = 0; i < 31; i++) gold_x2[i] = (c_init >> i) & 1u;
+    for (uint32_t i = 0; i < n; i++) {
+        gold_x1[i + 31] = gold_x1[i + 3] ^ gold_x1[i];
+        gold_x2[i + 31] = gold_x2[i + 3] ^ gold_x2[i + 2] ^ gold_x2[i + 1] ^ gold_x2[i];
+    }
+}
+
+static uint32_t gold_bit(uint32_t n) { return gold_x1[1600 + n] ^ gold_x2[1600 + n]; }
+
+static uint32_t bitrev(uint32_t v, uint32_t bits)
+{
+    uint32_t r = 0;
+    for (uint32_t b = 0; b < bits; b++) r |= ((v >> b) & 1u) << (bits - 1 - b);
+    return r;
+}
+
+static int is_frozen(uint32_t i)
+{
+    return bitrev(i % NPOL, SDEPTH) < (uint32_t)(NPOL - KINFO);
+}
+
+/* ------------------------------------------------------------ polar min-sum */
+static void build_node_uc(void)
+{
+    for (uint32_t i = 0; i < NODE_CYCLES * NPES; i++)
+        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
+    for (uint32_t pe = 0; pe < NPES; pe++) {
+#define E(cyc, op, a, b, d, imm) prog[(cyc) * NPES + pe] = gpcp_cgra_inst(op, a, b, d, imm)
+        E(0,  GPCP_OP_LD, 0, 0, 0, sidx(0, pe));
+        E(1,  GPCP_OP_LD, 0, 0, 1, sidx(1, pe));
+        E(2,  GPCP_OP_LD, 0, 0, 2, sidx(2, pe));
+        E(3,  GPCP_OP_SHR, 0, 0, 3, 31);
+        E(4,  GPCP_OP_XOR, 0, 3, 4, 0);
+        E(5,  GPCP_OP_SUB, 4, 3, 4, 0);
+        E(6,  GPCP_OP_SHR, 1, 0, 5, 31);
+        E(7,  GPCP_OP_XOR, 1, 5, 6, 0);
+        E(8,  GPCP_OP_SUB, 6, 5, 6, 0);
+        E(9,  GPCP_OP_MIN, 4, 6, 7, 0);
+        E(10, GPCP_OP_XOR, 3, 5, 3, 0);
+        E(11, GPCP_OP_XOR, 7, 3, 4, 0);
+        E(12, GPCP_OP_SUB, 4, 3, 4, 0);
+        E(13, GPCP_OP_SUB, GPCP_SRC_ZERO, 2, 6, 0);
+        E(14, GPCP_OP_AND, 0, 6, 7, 0);
+        E(15, GPCP_OP_SHL, 7, 0, 7, 1);
+        E(16, GPCP_OP_ADD, 1, 0, 6, 0);
+        E(17, GPCP_OP_SUB, 6, 7, 6, 0);
+        E(18, GPCP_OP_ST, 4, 0, 0, sidx(16, pe));
+        E(19, GPCP_OP_ST, 6, 0, 0, sidx(17, pe));
+#undef E
+    }
+    for (uint32_t i = 0; i < NODE_CYCLES * NPES; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+}
+
+static void array_run(uint32_t cycles)
+{
+    gpcp_cgra_array_start(CGRA_BASE, 0, cycles);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    uint32_t spins = 0;
+    while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_BUSY) {
+        if (++spins > 4000000u) { errs++; dbg_array_spin++; break; }
+    }
+    runs++;
+}
+
+/* one f/g node over up to 16 LLR pairs: a, b and beta are staged in the
+ * scratchpad, the 16 per-PE results are streamed back (16 words each) */
+static void node_run(uint32_t d, uint32_t o, uint32_t half, const uint8_t *bp, uint32_t cnt)
+{
+    for (uint32_t chunk = 0; chunk < cnt; chunk += NPES) {
+        uint32_t n = cnt - chunk < NPES ? cnt - chunk : NPES;
+        for (uint32_t k = 0; k < n; k++) {
+            ain[k] = lbuf[d][o + chunk + k];
+            bin[k] = lbuf[d][o + half + chunk + k];
+            bet[k] = bp ? bp[chunk + k] : 0;
+        }
+        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+        (void)ain[n - 1];
+
+        int32_t *fb = noblk + (nblk % NODE_OUT_BLOCKS) * NODE_OUT_STRIDE;
+        int32_t *gb = fb + 16;
+        nblk++;
+        if (nblk > NODE_OUT_BLOCKS) { errs++; dbg_nblk++; nblk = 0; }
+
+        n_desc = 0;
+        dsc((uint32_t)(uintptr_t)ain, 0, n, 0, 0, 0, 0);
+        dsc((uint32_t)(uintptr_t)bin, 32, n, 0, 0, 0, 0);
+        dsc((uint32_t)(uintptr_t)bet, 64, n, 0, 0, 0, 0);
+        uint32_t n_in = n_desc;
+
+        done = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, DESC_BASE);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_SIZE, RING_DEPTH);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_HEAD, 0);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, n_in);
+        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
+        done += n_in;
+        wait_desc(done);
+        array_run(NODE_CYCLES);
+        dsc((uint32_t)(uintptr_t)fb, 16 * 32, n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)gb, 17 * 32, n, 0, 1, 0, 0);
+        gpcp_cgra_ring_push(CGRA_BASE, n_in + 2u);
+        done += 2;
+        wait_desc(done);
+        mmio_w(CGRA_BASE + GPCP_CGRA_RING_CTRL, 0);
+        for (uint32_t k = 0; k < n; k++) {
+            lbuf[d + 1][o + chunk + k] = fb[k];
+            lbuf[d + 1][o + half + chunk + k] = gb[k];
+        }
+    }
+}
+
+static void sc(uint32_t d, uint32_t o, uint32_t size)
+{
+    if (size == 1) {
+        bbuf[d][o] = (uint8_t)(is_frozen(o) ? 0 : (lbuf[d][o] < 0));
+        return;
+    }
+    uint32_t half = size >> 1;
+    node_run(d, o, half, 0, half);
+    sc(d + 1, o, half);
+    node_run(d, o, half, &bbuf[d + 1][o], half);
+    sc(d + 1, o + half, half);
+    for (uint32_t i = 0; i < half; i++) {
+        bbuf[d][o + i] = bbuf[d + 1][o + i] ^ bbuf[d + 1][o + half + i];
+        bbuf[d][o + half + i] = bbuf[d + 1][o + half + i];
+    }
+}
+
+/* -------------------------------------------------------- PBCH RE mapping */
+static int64_t div_round(int64_t v, int64_t d)
+{
+    return (v + (v < 0 ? -(d / 2) : (d / 2))) / d;
+}
+
+static int pilot_re(int p) { return p * 4; }
+static int is_mid(int r) { return r >= NPSS_RE0 && r < NPSS_RE0 + NREP; }
+
+/* data RE scan order, identical to tools/ssb_plan.py */
+static void data_re_list(uint32_t s, int *out, int *cnt)
+{
+    int n = 0;
+    for (int r = 0; r < NRE; r++) {
+        if ((r % 4) == 0) continue;                       /* DMRS */
+        if ((s == 1 || s == 3) && is_mid(r)) continue;     /* PSS / SSS */
+        out[n++] = r;
+    }
+    *cnt = n;
+}
+
 /* ------------------------------------------------------------------ epilogue */
 static void finish(void)
 {
@@ -231,10 +427,10 @@ int main(void)
 
     build_mseq();
     build_sss_seq();
-    /* ---- FFT of the PSS symbol (1) and the SSS symbol (3) ---- */
+    /* ---- FFT of all four SSB symbols ---------------------------------- */
     t0 = mtime();
-    fft4096(td + 1 * 2 * FFT_N);
-    fft4096(td + 3 * 2 * FFT_N);
+    for (int s = 0; s < NSYM; s++)
+        fft4096(td + s * 2 * FFT_N);
     build_corr_uc();          /* the FFT image owned the imem until here */
 
 
@@ -322,6 +518,81 @@ int main(void)
     RESULT_BASE[944] = (uint32_t)(sbest >> 10);
     RESULT_BASE[945] = (uint32_t)(strue >> 10);
 
+    /* ---- grid from the four spectra: 240 REs of every symbol ------------ */
+    for (int s = 0; s < NSYM; s++)
+        for (int r = 0; r < NRE; r++) {
+            uint32_t idx = rev4((uint32_t)r);
+            yw[(s * NRE + r) * 2 + 0] = td[s * 2 * FFT_N + 2 * idx] << 4;
+            yw[(s * NRE + r) * 2 + 1] = td[s * 2 * FFT_N + 2 * idx + 1] << 4;
+        }
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    (void)yw[2 * NRE - 1];
+
+    /* ---- DMRS channel estimate per symbol (60 pilots, Gold sequence) ---- */
+    gold_init(3u * nid1 + nid2);            /* c_init = 3*N_ID1 + N_ID2 */
+    int32_t hre[NSYM], him[NSYM];
+    {
+        int n = 0;
+        int64_t den = (int64_t)NPILOT * 2 * QPSK * QPSK / H_SCALE;
+        for (int s = 0; s < NSYM; s++) {
+            int64_t accr = 0, acci = 0;
+            for (int p = 0; p < NPILOT; p++) {
+                int32_t dr = (int32_t)(1 - 2 * (int)gold_bit(2u * (uint32_t)n)) * QPSK;
+                int32_t di = (int32_t)(1 - 2 * (int)gold_bit(2u * (uint32_t)n + 1u)) * QPSK;
+                int32_t yr = yw[(s * NRE + pilot_re(p)) * 2 + 0];
+                int32_t yi = yw[(s * NRE + pilot_re(p)) * 2 + 1];
+                accr += (int64_t)yr * dr + (int64_t)yi * di;      /* y*d* */
+                acci += (int64_t)yi * dr - (int64_t)yr * di;
+                n++;
+            }
+            hre[s] = (int32_t)div_round(accr, den);
+            him[s] = (int32_t)div_round(acci, den);
+            RESULT_BASE[946 + 2 * s] = (uint32_t)hre[s];
+            RESULT_BASE[947 + 2 * s] = (uint32_t)him[s];
+        }
+    }
+
+    /* ---- QPSK demod + PBCH descrambling -> 512 LLRs -------------------- */
+    for (int i = 0; i < NPOL; i++) lbuf[0][i] = 0;
+    {
+        int n = 0;
+        for (int s = 0; s < NSYM; s++) {
+            int res[NRE], cnt = 0;
+            data_re_list((uint32_t)s, res, &cnt);
+            for (int j = 0; j < cnt; j++) {
+                if (n + 1 >= NPOL) break;
+                int32_t yr = yw[(s * NRE + res[j]) * 2 + 0];
+                int32_t yi = yw[(s * NRE + res[j]) * 2 + 1];
+                int64_t eqr = (int64_t)yr * hre[s] + (int64_t)yi * him[s];
+                int64_t eqi = (int64_t)yi * hre[s] - (int64_t)yr * him[s];
+                int32_t v0 = (int32_t)(eqr >> LLR_SHIFT);
+                int32_t v1 = (int32_t)(eqi >> LLR_SHIFT);
+                if (v0 > 2000000) v0 = 2000000;
+                if (v0 < -2000000) v0 = -2000000;
+                if (v1 > 2000000) v1 = 2000000;
+                if (v1 < -2000000) v1 = -2000000;
+                lbuf[0][n] = gold_bit((uint32_t)n) ? -v0 : v0;
+                lbuf[0][n + 1] = gold_bit((uint32_t)n + 1) ? -v1 : v1;
+                n += 2;
+            }
+        }
+    }
+
+    /* ---- polar SC decode (N = 512, K = 32) ----------------------------- */
+    build_node_uc();
+    sc(0, 0, NPOL);
+    {
+        int k = 0;
+        for (uint32_t i = 0; i < NPOL; i++)
+            if (!is_frozen(i) && k < KINFO)
+                RESULT_BASE[954 + k++] = bbuf[SDEPTH][i];
+    }
+
+    RESULT_BASE[986] = dbg_wait;
+    RESULT_BASE[987] = dbg_corr_spin;
+    RESULT_BASE[988] = dbg_array_spin;
+    RESULT_BASE[989] = dbg_nblk;
+    RESULT_BASE[990] = nblk;
     RESULT_BASE[8] = errs;
     RESULT_BASE[9] = mtime() - t0;
     RESULT_BASE[10] = runs;

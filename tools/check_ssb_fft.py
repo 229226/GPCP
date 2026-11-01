@@ -136,6 +136,24 @@ def main(path):
                   f"(argmax {best_h}) - grid/RE layout problem")
             ok = False
 
+    # ---- DMRS channel estimate + decoded MIB -------------------------------
+    if len(vals) >= 986:
+        h = [(sx32(vals[946 + 2 * s]), sx32(vals[947 + 2 * s])) for s in range(4)]
+        print(f"  probe: channel estimate (H_SCALE=16) per symbol: {h}")
+        # the samples carry no channel: H must come out as (16, 0)
+        if any(abs(hre - 16) > 2 or abs(him) > 2 for hre, him in h):
+            print("  DMRS: channel estimate is not (16, 0) - pilot Gold/c_init wrong")
+            ok = False
+        mib = [vals[954 + k] for k in range(32)]
+        want = sp.payload_bits()
+        bad = [k for k in range(32) if mib[k] != want[k]]
+        print(f"  probe: decoded MIB bits = {''.join(str(b) for b in mib)}")
+        print(f"  probe: model MIB bits   = {''.join(str(b) for b in want)}")
+        if bad:
+            print(f"  MIB: {len(bad)}/32 bits differ (first {bad[:6]})")
+            ok = False
+
+    # the true candidate must dominate the other two
     if not (norms[1] > 3 * norms[0] and norms[1] > norms[2]):
         print(f"  candidate ordering wrong: |c0|={norms[0]} |c1|={norms[1]} |c2|={norms[2]}")
         ok = False
@@ -152,8 +170,9 @@ def main(path):
               f"|c2|={norms[2]} (model {gold_norms[0]:.0f}/{gold_norms[1]:.0f}/"
               f"{gold_norms[2]:.0f}), N_ID2={vals[6]}, {vals[10]} array runs, "
               f"{vals[9]} cycles")
-        print("[ OK ] SSB sample-level front end: 4096-point FFT, PSS (N_ID2) and "
-              "SSS (336 hypotheses, N_ID1) detected from the spectrum")
+        print("[ OK ] SSB sample-level receive chain: 4096-point FFTs, PSS (N_ID2), "
+              "SSS (N_ID1), DMRS channel estimate, QPSK+descrambling and polar SC "
+              "-> 32/32 MIB bits")
     return 0 if ok else 1
 
 
