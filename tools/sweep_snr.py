@@ -108,11 +108,15 @@ def main():
     ap.add_argument("--seeds", type=int, default=1,
                     help="average over seeds 1..N (noise realisations)")
     ap.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ap.add_argument("--csv", default=None,
+                    help="append one row per (snr, mode) to this CSV file "
+                         "(snr,mode,seed0,seeds,nid2_ok,nid1_ok,mib_err,per_seed,cycles)")
     a = ap.parse_args()
     if not (a.model or a.hw):
         ap.error("choose --model and/or --hw")
 
     root = os.path.abspath(a.root)
+    csv_rows = []
     print(f"{'SNR dB':>7} | {'mode':>5} | {'NID2 ok':>7} | {'NID1 ok':>7} | {'MIB err':>7} | cycles")
     print("-" * 58)
     for snr in a.snr:
@@ -128,6 +132,10 @@ def main():
             avg = sum(errs) / len(errs)
             print(f"{snr:7.1f} | model | {len(errs) - e2:3d}/{len(errs):<2d} | "
                   f"{len(errs) - e1:3d}/{len(errs):<2d} | {avg:7.2f} | -")
+            if len(errs) > 1:
+                print(f"        per-seed MIB err: {errs}")
+            csv_rows.append((snr, "model", a.seed, len(errs), len(errs) - e2,
+                             len(errs) - e1, avg, " ".join(str(e) for e in errs), 0))
         if a.hw:
             bin_path = os.path.join(root, "sim/soc/build/Vgpcp_soc")
             if not os.path.exists(bin_path):
@@ -146,6 +154,20 @@ def main():
             avg = sum(errs) / len(errs)
             print(f"{snr:7.1f} |    hw | {len(errs) - e2:3d}/{len(errs):<2d} | "
                   f"{len(errs) - e1:3d}/{len(errs):<2d} | {avg:7.2f} | {cyc}")
+            if len(errs) > 1:
+                print(f"        per-seed MIB err: {errs}")
+            csv_rows.append((snr, "hw", a.seed, len(errs), len(errs) - e2,
+                             len(errs) - e1, avg, " ".join(str(e) for e in errs), cyc))
+
+    if a.csv:
+        new = not os.path.exists(a.csv)
+        with open(a.csv, "a") as f:
+            if new:
+                f.write("snr,mode,seed0,seeds,nid2_ok,nid1_ok,mib_err,per_seed,cycles\n")
+            for r in csv_rows:
+                f.write("%.1f,%s,%d,%d,%d,%d,%.2f,%s,%d\n" %
+                        (r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]))
+        print(f"appended {len(csv_rows)} row(s) to {a.csv}")
     return 0
 
 

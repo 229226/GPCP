@@ -67,7 +67,7 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
-| `make snr-sweep` / `make snr-sweep-hw` | SNR 瀑布：模型 −8/−9 dB 仍 0 误比特、−10 dB 1.5、−12 dB 5.4、−14 dB 7.3（8 seed）；硬件 −8 dB 0、−12 dB 1.5（2 seed），周期 4,378,714（`docs/07` §4.16） |
+| `make snr-sweep` / `make snr-sweep-hw` | SNR 瀑布：模型 −8/−9 dB 0 误比特、−10 dB 1.5、−12 dB 5.4、−14 dB 7.3（8 seed）；硬件 −8/−10 dB 0、−12 dB 7.2（6 seed）、−14 dB 10.2（6 seed）、−16 dB 15.7（3 seed），周期 4,378,71x；`--csv` 可分批累计（`docs/07` §4.16） |
 | `make -C sim/soc linux-status` | 分级评分：stage 0..8（OpenSBI→kernel→initramfs→/init→uname→/proc→CGRA 用户态→干净退出），并要求 16 个累加器值正确 |
 
 ---
