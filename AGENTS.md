@@ -22,7 +22,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | B4-SSB 频域链（PSS/SSS/DMRS/QPSK/Polar/MIB） | ✅ |
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
-| PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 0.0545 mm²、Fmax≈810 MHz（pre-layout）、24.5 mW@500 MHz；IMEM 重构为 512×512 宽字 1R1W（`docs/08`） |
+| PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 0.0545 mm²、Fmax≈810 MHz（pre-layout）、24.5 mW@500 MHz；IMEM 已重构为 512×512 宽字 1R1W；**spad 目前是全交叉开关（~2.6 mm²，尚未 bank 化）**（`docs/08` §3.2） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
 | M3 规模扩展（8×8）+ 自动映射 + LDPC | ⬜ 未开始 |
 
@@ -73,7 +73,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
 | `make snr-sweep` / `make snr-sweep-hw` | SNR 瀑布：模型 −8/−9 dB 0 误比特、−10 dB 1.5、−12 dB 5.4、−14 dB 7.3（8 seed）；硬件 −8/−10 dB 0、−12 dB 7.2（6 seed）、−14 dB 10.2（6 seed）、−16 dB 15.7（3 seed），周期 4,378,71x；`--csv` 可分批累计（`docs/07` §4.16） |
 | `make -C sim/soc linux-status` | 分级评分：stage 0..8（OpenSBI→kernel→initramfs→/init→uname→/proc→CGRA 用户态→干净退出），并要求 16 个累加器值正确 |
-| `make -C syn sta` | **面积 54,463 µm²**（逻辑，5,072 个 flop 占 49.6%）、**Fmax ≈ 810 MHz**（关键路径 1.23 ns，pre-layout）、**24.5 mW@500 MHz**；存储另算 ≈0.158 mm²（IMEM 512×512 1R1W 后，`docs/08`） |
+| `make -C syn sta` | **逻辑面积 54,463 µm²**（5,072 个 flop 占 49.6%）、**Fmax ≈ 810 MHz**（1.23 ns，pre-layout）、**24.5 mW@500 MHz**；存储另算：IMEM 0.138 mm²（512×512 1R1W）、spad 0.16（2R2W bank）~2.6（现状交叉开关）⇒ 合计 0.27~0.35 mm²（bank 化后）/ ~2.8 mm²（现状），`docs/08` §3 |
 
 ---
 
