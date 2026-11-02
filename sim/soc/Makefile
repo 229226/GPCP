@@ -232,7 +232,8 @@ LINUX_EARLYCON := $(subst gpcp.dtb,gpcp-earlycon.dtb,$(LINUX_DTB))
 linux-earlycon: all
 	$(MAKE) -C $(ROOT)/sw/linux
 	set -o pipefail; env -u LD_LIBRARY_PATH $(BIN) $(subst $(LINUX_DTB),$(LINUX_EARLYCON),$(LINUX_IMAGES)) \
-		--max-cycles $(LINUX_MAX_CYCLES) 2>&1 | tee $(LINUX_LOG)
+		--max-cycles $(LINUX_MAX_CYCLES) $(if $(LINUX_TRACE),--trace-pc $(LINUX_TRACE),) \
+		2>&1 | tee $(LINUX_LOG)
 	python3 $(ROOT)/tools/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
 
 clean:

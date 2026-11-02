@@ -174,6 +174,25 @@ make -C sim/soc linux
 | 正常启动 | 100 M | 同上，`TIMEOUT`；`tools/check_linux.py` 定级 **stage 2** |
 | `--trace-pc 2 M` | 70 M | PC 采样：38–46 M 与 50–64 M 都在 `arch_cpu_idle`（单段最长 14 M 周期），中间出现一次 `scheduler_tick`；20–34 M 落在 OpenSBI 的 `$ecall` 路径（0x8000_xxxx）与 `console_unlock` |
 | `initcall_debug` 引导参数 | 60 M | 日志里**没有**出现 `calling ...`，只有命令行回显里有 `initcall_debug` |
+| `--trace-pc 0.5 M`（earlycon-only） | 75 M | 40–46 M 仍在真干活（`timekeeping_update`、`kernfs_activate_one`、`rwsem_read_trylock`、`hrtimer_interrupt`、`kobject_uevent_env`）；**46.5 M 起连续 28.5 M 周期全是 `arch_cpu_idle`** |
+| 160 M 长跑（earlycon-only） | 160 M | 最后输出仍在 1.98 s（50 M 处），之后 110 M 周期零输出；`stage 2` |
+
+从 `vmlinux` 里直接 dump `__initcall3` 表（8 字节/项，`__initcall3_start=0x80613478`，
+`__initcall4_start=0x806134d8`）并按链接顺序命名，最后两项是：
+
+```
+ 9  serial_base_init
+11  of_platform_default_populate_init
+```
+
+即 `subsys_initcall` 级别跑完了（最后一项就是"按 DT 建平台设备"）。因此：
+
+- `hrtimer_interrupt` / `scheduler_tick` 正常 → 定时器与中断可用；
+- 46.5 M 后纯 idle → **所有可运行任务都阻塞**，最可能是某个设备 probe 永久等待；
+- 我们 DT 里唯一"驱动明明编进来了（`CONFIG_SERIAL_8250=y` + `CONSOLE=y`）却从头到尾
+  没有任何 8250 打印"的设备就是 `ns16550a`；且它的 `interrupts = <1>` 与 PLIC 的
+  `riscv,ndev = <1>`（CGRA 的源）冲突，启动时还有 `Fixed dependency cycle(s) with
+  /soc/plic@c000000` 警告。
 
 解读：
 
@@ -181,6 +200,16 @@ make -C sim/soc linux
 2. 之后长时间 idle → 没有可运行任务，即 `kernel_init` 阻塞在某个等待上（`/init` 未 exec）；
 3. `initcall_debug` 没打出 `calling` → 该 `core_param` 在本内核上没生效（待查：`parse_args`
    阶段是否被前面的参数吞掉，或该 6.6.52 配置里打印走的是 trace 路径）。
+
+正在做的判定实验（三个变体并行，60 M 周期，要求 stage 3）：
+
+| # | 变体 | 若通过说明 |
+|---|---|---|
+| A | `initcall_blacklist=serial8250_init`（bootargs） | 8250 驱动注册是阻塞点 |
+| B | `serial@10000000 { status = "disabled"; }` | "设备存在 + 被 probe"是阻塞点 |
+| C | 删掉 UART 的 `interrupts = <1>` | 中断号冲突 / `request_irq` 是阻塞点 |
+
+日志：`build/linux_exp_{a,b,c}.log`。
 
 下一步（按代价从低到高）：
 
