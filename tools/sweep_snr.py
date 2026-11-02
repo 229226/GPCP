@@ -27,7 +27,7 @@ import ssb_plan as sp
 
 
 def model_point(snr, seed):
-    td, grid, payload = sp.build_td(snr_db=snr, seed=seed)
+    td, grid, payload = sp.build_td(snr_db=snr, seed=seed, channel=CHANNEL)
     sc = sp.subcarriers()
     y = [[sp._fft(td[s])[sc[r]] for r in range(sp.NRE)] for s in range(sp.NSYM)]
 
@@ -62,7 +62,8 @@ def hw_point(snr, seed, bin_path, root):
     td_path = os.path.join(root, "build/ssb/td_snr.bin")
     os.makedirs(os.path.dirname(td_path), exist_ok=True)
     sub = subprocess.run([sys.executable, os.path.join(root, "tools/ssb_plan.py"),
-                          "dump", td_path, "--snr", str(snr), "--seed", str(seed)],
+                          "dump", td_path, "--snr", str(snr), "--seed", str(seed),
+                          "--channel", CHANNEL],
                          capture_output=True, text=True, env={k: v for k, v in os.environ.items()
                                                              if k != "LD_LIBRARY_PATH"})
     if sub.returncode != 0:
@@ -100,10 +101,12 @@ def hw_point(snr, seed, bin_path, root):
 
 
 def main():
+    global CHANNEL
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", action="store_true")
     ap.add_argument("--hw", action="store_true")
     ap.add_argument("--snr", type=float, nargs="+", default=[-4, -2, 0, 2, 4, 6, 8])
+    ap.add_argument("--channel", choices=("awgn", "epa"), default="awgn")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--seeds", type=int, default=1,
                     help="average over seeds 1..N (noise realisations)")
@@ -112,6 +115,7 @@ def main():
                     help="append one row per (snr, mode) to this CSV file "
                          "(snr,mode,seed0,seeds,nid2_ok,nid1_ok,mib_err,per_seed,cycles)")
     a = ap.parse_args()
+    CHANNEL = a.channel
     if not (a.model or a.hw):
         ap.error("choose --model and/or --hw")
 
@@ -170,6 +174,8 @@ def main():
         print(f"appended {len(csv_rows)} row(s) to {a.csv}")
     return 0
 
+
+CHANNEL = "awgn"
 
 if __name__ == "__main__":
     sys.exit(main())

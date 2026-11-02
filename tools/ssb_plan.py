@@ -369,8 +369,43 @@ def add_awgn(td, snr_db, seed=1):
              for c in s] for s in td]
 
 
+# 3GPP TS 36.101 Extended Pedestrian A (EPA): (power dB, delay in samples at
+# 30.72 MHz).  Delays 30/70/90/110/190/410 ns -> 0.9/2.2/2.8/3.4/5.8/12.6 samples.
+EPA_TAPS = ((0.0, 0), (-1.0, 1), (-2.0, 2), (-3.0, 3),
+            (-8.0, 4), (-17.2, 6), (-20.8, 13))
+
+
+def add_fading(td, taps=EPA_TAPS, seed=1):
+    """Multi-tap Rayleigh (frequency selective) channel, quasi-static per block.
+
+    Each tap gets an independent Rayleigh gain with the profile power, the taps
+    are normalised to unit mean power, and the four symbols are filtered with
+    the *same* taps (the channel is assumed constant over one SSB, which is the
+    usual channel-estimation assumption).  The cyclic prefix makes the
+    circular convolution in here valid.
+    """
+    import math
+    import random
+    rnd = random.Random(seed * 7919 + 13)
+    pw = [10.0 ** (p / 10.0) for p, _ in taps]
+    tot = sum(pw)
+    gains = [complex(rnd.gauss(0.0, math.sqrt(w / tot / 2.0)),
+                     rnd.gauss(0.0, math.sqrt(w / tot / 2.0))) for w in pw]
+    out = []
+    for s in td:
+        n = len(s)
+        y = []
+        for i in range(n):
+            acc = 0j
+            for g, (_, d) in zip(gains, taps):
+                acc += g * s[(i - d) % n]
+            y.append(acc)
+        out.append(y)
+    return out
+
+
 def build_td(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None, amp=2000, snr_db=None,
-             seed=1):
+             seed=1, channel="awgn"):
     """OFDM time-domain samples of the 4 SSB symbols (IFFT of the grid).
 
     snr_db adds AWGN (see add_awgn) so the same program can be swept over SNR;
@@ -386,6 +421,8 @@ def build_td(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None, amp=2000, snr_db=None
                 freq[sc[r]] = grid[s][r]
         td.append([int(round(c.real)) + 1j * int(round(c.imag))
                    for c in _fft(freq, inverse=True)])
+    if channel == "epa":
+        td = add_fading(td, seed=seed)
     if snr_db is not None:
         td = add_awgn(td, snr_db, seed)
     return td, grid, payload
@@ -400,6 +437,8 @@ if __name__ == "__main__":
     d.add_argument("--snr", type=float, default=None,
                    help="add AWGN at this SNR (dB over the whole 4-symbol block)")
     d.add_argument("--seed", type=int, default=1)
+    d.add_argument("--channel", choices=("awgn", "epa"), default="awgn",
+                   help="awgn = flat channel, epa = 3GPP multi-tap Rayleigh")
     a = ap.parse_args()
     if a.cmd == "dump":
         _dump_bin(a.file, snr_db=a.snr, seed=a.seed)
