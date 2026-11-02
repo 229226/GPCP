@@ -167,7 +167,9 @@ def payload_bits(seed=0x1234):
 
 
 def nid_hash(nid1, nid2):
+    """N_ID_cell = 3*N_ID1 + N_ID2 (used as the PBCH *data* scrambling init)."""
     return 3 * nid1 + nid2
+
 
 
 def build_grid(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None):
