@@ -51,8 +51,8 @@ def main(path):
     td, grid, payload = sp.build_td()
     x = sp._fft(td[1])
     ref = [sp.nr_seq.pss_seq(c) for c in range(3)]
-    gold = [(sum(x[PSS_RE0 + t].real * ref[c][t] for t in range(NREP)),
-             sum(x[PSS_RE0 + t].imag * ref[c][t] for t in range(NREP)))
+    gold = [(sum(x[sp.SSB_K0 + PSS_RE0 + t].real * ref[c][t] for t in range(NREP)),
+             sum(x[sp.SSB_K0 + PSS_RE0 + t].imag * ref[c][t] for t in range(NREP)))
             for c in range(3)]
     gold_norms = [abs(a) + abs(b) for a, b in gold]
 
@@ -121,8 +121,8 @@ def main(path):
         seq = [sp.nr_seq.sss_seq(h, 1) for h in range(336)]
         gold = []
         for h in range(336):
-            r = sum(x3[PSS_RE0 + t].real * seq[h][t] for t in range(NREP))
-            i = sum(x3[PSS_RE0 + t].imag * seq[h][t] for t in range(NREP))
+            r = sum(x3[sp.SSB_K0 + PSS_RE0 + t].real * seq[h][t] for t in range(NREP))
+            i = sum(x3[sp.SSB_K0 + PSS_RE0 + t].imag * seq[h][t] for t in range(NREP))
             gold.append(abs(r) + abs(i))
         best_h = max(range(336), key=lambda h: gold[h])
         print(f"  probe: SSS N_ID1 hw={got_nid1} (metric {vals[944]}) "

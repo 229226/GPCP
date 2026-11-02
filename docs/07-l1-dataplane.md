@@ -479,6 +479,28 @@ N_ID2 / N_ID1 在整个 -20…+8 dB 范围都正确（SSS 的 336 假设搜索�
   （32 位 MIB 完全错的期望是 16，所以 -16 dB 已接近"随机"。）
 - 下一步：20~50 个 seed 画曲线；硬件侧相应地加 `--seeds`（每个点约 2.2 分钟仿真）。
 
+### 4.17 SSB 的真实子载波位置（38.211 保真 P1 第一步）
+
+原来模型与硬件都假设 `RE r ↔ FFT bin r`（SSB 落在 DC 上，且贴着 FFT 边缘），
+这是不可实现的：DC 会被收发端滤波/直流偏移吃掉，边缘也没有保护带。
+
+改动（已逐位回归）：
+
+| 位置 | 改动 |
+|---|---|
+| `tools/ssb_plan.py` | `SSB_K0 = 480`，`subcarriers() = {r: SSB_K0 + r}` —— SSB 的 240 个 RE 落在 bin 480..719，避开 DC 与两侧边缘 |
+| `sw/soc/ssb_fft_bm.c` | 三处频谱抽取全改为 `rev4(SSB_K0 + …)`（PSS 符号 1、SSS 符号 3、四符号网格） |
+| `tools/check_ssb_fft.py` / `sweep_snr.py` | 模型侧同步用 `sp.subcarriers()`，否则"模型 vs 硬件"的比值会失真 |
+
+**过程中又抓到一个构建陷阱**：`build/ssb/td.bin` 的 make 规则没有依赖 `tools/ssb_plan.py`，
+改模型后镜像不重建，硬件拿旧样本去读新频点 → PSS 度量掉到 239/159/191（噪声水平）、
+SSS 判错、MIB 全 0。加依赖后一切恢复正常。这条已写进 `AGENTS.md` 的构建陷阱。
+
+验收（`make -C sim/soc run-ssbfft`）：N_ID2=1、N_ID1=200、四个符号 H=(16,0)、
+MIB 32/32、1907 次阵列运行、4,334,790 周期；`verify.sh quick` 5/5 PASS。
+
+意义：链路不再"把 SSB 放在 DC"，为后续加 CP、加保护带、加载波偏移（真实 RF）留出了空间。
+
 ## 5. 验证结果（`python3 tools/cgra.py test`）
 
 ```

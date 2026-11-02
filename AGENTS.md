@@ -60,7 +60,7 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `run-fft` | 256/1024/4096 = **4399 / 22956 / 116761** 周期，逐位一致 |
 | `run-sync` / `run-sss` / `run-polar` | N_ID2 / N_ID1=200 / 32 bit 全对，partial 逐位 |
 | `run-ssb` | 1459 runs，2,414,474 周期，MIB 逐位 |
-| `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32**，1907 runs，4,335,553 周期 |
+| `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32，H=(16,0) 四个符号**，1907 runs，4,334,790 周期（SSB 占 bin 480..719，避开 DC） |
 | `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
@@ -130,6 +130,8 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 3. **黄金模型要异构**：定点参考（`fft_plan.reference_fft`，逐位）＋ 浮点/独立算法（SNR）。
    只用同源模型会互相背书（`rev4` 那个 bug 就是这样躲过了 `run-fft`）。
 4. **现象"改了代码结果一字不变"→ 先查构建**：make 依赖/mtime、旧 `.bin`、`--rebuild`、`touch`。
+   已知案例：`build/ssb/td.bin` 曾不依赖 `tools/ssb_plan.py`，改模型后硬件仍在跑旧样本
+   （表现为"频谱抽取全读到噪声"）。新增数据镜像规则时，**务必把生成它的脚本列为依赖**。
 5. **失败先分类再动手**：数据错？时序挂死？性能差？—— 三类各有独立的检查表（见 §7）。
 
 ---

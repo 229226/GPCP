@@ -38,6 +38,7 @@
 #define CORR_CYCLES      52
 #define RING_DEPTH       1024
 #define NREP             127
+#define SSB_K0 480    /* SSB RE r sits at FFT bin SSB_K0 + r (guarded, off DC) */
 #define NPSS_RE0         56
 #define NSYM             4
 
@@ -435,7 +436,7 @@ int main(void)
 
 
     for (int t = 0; t < NREP; t++) {
-        uint32_t idx = rev4((uint32_t)(NPSS_RE0 + t));
+        uint32_t idx = rev4((uint32_t)(SSB_K0 + NPSS_RE0 + t));
         /* the fixed-point FFT is normalised by 4096 and pre-scaled by TD_SCALE */
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 0] = td[1 * 2 * FFT_N + 2 * idx] << 4;
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 1] = td[1 * 2 * FFT_N + 2 * idx + 1] << 4;
@@ -491,7 +492,7 @@ int main(void)
 
     /* ---- SSS: 336 hypotheses on the spectrum of symbol 3 ---------------- */
     for (int t = 0; t < NREP; t++) {
-        uint32_t idx = rev4((uint32_t)(NPSS_RE0 + t));
+        uint32_t idx = rev4((uint32_t)(SSB_K0 + NPSS_RE0 + t));
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 0] = td[3 * 2 * FFT_N + 2 * idx] << 4;
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 1] = td[3 * 2 * FFT_N + 2 * idx + 1] << 4;
     }
@@ -521,7 +522,7 @@ int main(void)
     /* ---- grid from the four spectra: 240 REs of every symbol ------------ */
     for (int s = 0; s < NSYM; s++)
         for (int r = 0; r < NRE; r++) {
-            uint32_t idx = rev4((uint32_t)r);
+            uint32_t idx = rev4((uint32_t)(SSB_K0 + r));
             yw[(s * NRE + r) * 2 + 0] = td[s * 2 * FFT_N + 2 * idx] << 4;
             yw[(s * NRE + r) * 2 + 1] = td[s * 2 * FFT_N + 2 * idx + 1] << 4;
         }

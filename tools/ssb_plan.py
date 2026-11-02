@@ -301,9 +301,15 @@ def _fft(x, inverse=False):
     return x
 
 
+# 38.211 places the 240 SSB resource elements at an offset inside the carrier;
+# the demo used k = r (REs sitting on DC), which is not physical.  Keep the SSB
+# clear of DC and of the FFT edges: RE r -> FFT bin SSB_K0 + r.
+SSB_K0 = 480
+
+
 def subcarriers():
-    """SSB RE index -> FFT subcarrier (k = r, i.e. DC..239 for the demo)."""
-    return {r: r for r in range(NRE)}
+    """SSB RE index -> FFT subcarrier (k = SSB_K0 + r)."""
+    return {r: SSB_K0 + r for r in range(NRE)}
 
 
 TD_SCALE = 256                   # pre-scale the samples so the fixed-point FFT keeps precision

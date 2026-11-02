@@ -28,14 +28,15 @@ import ssb_plan as sp
 
 def model_point(snr, seed):
     td, grid, payload = sp.build_td(snr_db=snr, seed=seed)
-    y = [[sp._fft(td[s])[r] for r in range(sp.NRE)] for s in range(sp.NSYM)]
+    sc = sp.subcarriers()
+    y = [[sp._fft(td[s])[sc[r]] for r in range(sp.NRE)] for s in range(sp.NSYM)]
 
     # PSS: three candidates on the symbol that carries it
     ref = [sp.nr_seq.pss_seq(c) for c in range(3)]
     cor = []
     for c in range(3):
-        re = sum(y[1][sp.PSS_RE0 + t].real * ref[c][t] for t in range(sp.NPSS))
-        im = sum(y[1][sp.PSS_RE0 + t].imag * ref[c][t] for t in range(sp.NPSS))
+        re = sum(y[1][sp.SSB_K0 + sp.PSS_RE0 + t].real * ref[c][t] for t in range(sp.NPSS))
+        im = sum(y[1][sp.SSB_K0 + sp.PSS_RE0 + t].imag * ref[c][t] for t in range(sp.NPSS))
         cor.append(abs(re) + abs(im))
     nid2 = max(range(3), key=lambda c: cor[c])
 
@@ -43,8 +44,8 @@ def model_point(snr, seed):
     seqs = [sp.nr_seq.sss_seq(h, nid2) for h in range(336)]
 
     def sss_metric(h):
-        re = sum(y[3][sp.PSS_RE0 + t].real * seqs[h][t] for t in range(sp.NPSS))
-        im = sum(y[3][sp.PSS_RE0 + t].imag * seqs[h][t] for t in range(sp.NPSS))
+        re = sum(y[3][sp.SSB_K0 + sp.PSS_RE0 + t].real * seqs[h][t] for t in range(sp.NPSS))
+        im = sum(y[3][sp.SSB_K0 + sp.PSS_RE0 + t].imag * seqs[h][t] for t in range(sp.NPSS))
         return (re * re + im * im) ** 0.5
 
     best = max(range(336), key=sss_metric)

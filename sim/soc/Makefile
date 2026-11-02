@@ -143,7 +143,8 @@ run-ssb: all
 
 SSBTD = $(ROOT)/build/ssb/td.bin
 
-$(SSBTD):
+# the image must follow the model: changing ssb_plan.py changes the samples
+$(SSBTD): $(ROOT)/tools/ssb_plan.py
 	@mkdir -p $(dir $(SSBTD))
 	python3 $(ROOT)/tools/ssb_plan.py dump $(SSBTD)
 
