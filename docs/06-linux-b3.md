@@ -211,14 +211,28 @@ make -C sim/soc linux
 | C | 去掉 UART `interrupts = <1>` | 1.980 s `pnp: ... disabled` | **不是** UART 中断号冲突 |
 | D | `fw_devlink=off deferred_probe_timeout=5` | **0.349 s** `devtmpfs: initialized` | 反而更早停：设备依赖链一关，某个 probe 更早开始并阻塞 |
 | E | `deferred_probe_timeout=5` | 1.818 s `Fixed dependency cycle(s)` | 略早停 |
-| F | serial `status = "disabled"`（正确放在 `/soc` 内） | 见下一轮日志 `build/linux_exp_f.log` | 判定"是否存在设备 probe 阻塞" |
+| F | serial `status = "disabled"`（正确放在 `/soc` 内） | 控制台全无输出 | **无效**：OpenSBI 的 `stdout-path` 指向被禁节点，连启动横幅都没了 |
+| G | `initcall_blacklist=serial8250_init,univ8250_console_init,serial_base_init` | 2.058 s `iommu: DMA domain TLB ...` | 仍卡（且比基线多走一条消息）→ **不是 serial 驱动** |
+| G2 | `deferred_probe_timeout=1` | 1.493 s `cpu0: Ratio of byte access ...` | 仍卡（1 s 超时也没救）→ **不是 deferred-probe 等待** |
 
 由此收敛出的判断：**问题不是一个"等超时"的 deferred probe**（D/E 都没让引导越过 2.0 s），
 而是某个**设备 probe 在等一个永远不会来的事件**；`fw_devlink=off` 让它更早开始探测、
 于是更早卡住（0.349 s），这与"serial 探测"高度吻合——A 只黑名单了 `serial8250_init`，
 但 8250 驱动还有 `univ8250_console_init` 等注册路径，未必都被跳过。
 
-后续若 F 仍卡：下一步是**重编内核**（把 `CONFIG_INITRAMFS_SOURCE` 指向现有
+### B3 决定：冻结（按"时间盒"策略）
+
+7 个变体（A/B/C/D/E/F/G/G2）全部停在 1.5–2.1 s 内核时间、`/init` 之前，且已经排除了：
+8250 驱动注册、UART 中断号冲突、deferred-probe 超时、CLINT/定时器（`hrtimer_interrupt` 可见）。
+**再靠 bootarg/DT 盲试收益已经很低**，B3 冻结在这里（结论、证据、复跑命令都在本节与
+`AGENTS.md`），主线转回 B4 的 PHY 保真（P1）。
+
+解冻时的下一步（成本已知，约 20 分钟编译 + 40 分钟仿真）：
+1. 把 `build/linux/initramfs` 做成**内置 initramfs**（`CONFIG_INITRAMFS_SOURCE`），绕开 initrd 交接；
+2. 对 `driver core` 与 `drivers/tty/serial/*` 打开 `dyndbg`，把 probe 的最后一步打出来；
+3. 若定位到具体驱动，再决定是改 DT 还是改 RTL。
+
+早期设想的"重编内核（把 `CONFIG_INITRAMFS_SOURCE` 指向现有
 `build/linux/initramfs` 做成内置 initramfs，绕开 initrd 交接），并用
 `CONFIG_DYNAMIC_DEBUG`/`dyndbg` 对 `drivers/tty/serial/*` 打开调试打印，
 把 probe 的最后一步打出来。

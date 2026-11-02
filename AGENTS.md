@@ -139,13 +139,15 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 ## 6. 当前缺口与下一步（按性价比，详见 `docs/03`）
 
 **P0（最近）**
-1. **B3 Linux 收尾 — 已定位阻塞，缺"修掉它"**：`tools/check_linux.py`（stage 0..8 + 16 个累加器）、
+1. **B3 Linux — 已冻结（时间盒到期）**：`tools/check_linux.py`（stage 0..8 + 16 个累加器）、
    `make -C sim/soc linux[-status]`、`LINUX_TRACE` + `tools/sym_pc.py` 都已就绪。
    实测结论：**内核能启动、打印、跑 initcall，但在 `arch_initcall` 之后进入 idle，
    `/init` 从未执行**（100 M 周期仍停在 stage 2；PC 采样显示 38–46 M、50–64 M 都在
    `arch_cpu_idle`，中间有一次 `scheduler_tick`）。细节与四个实验见 `docs/06` §10。
-   剩余：按该节"下一步"验证控制台是否失效 → 屏蔽可疑 initcall → 必要时换 minimal 配置；
-   UART 输入、真 PLIC 中断、把 stage 7 纳入 `verify.sh --linux`。
+   时间盒内 8 个变体（A/B/C/D/E/F/G/G2）全部停在 1.5–2.1 s 内核时间、`/init` 之前；
+   已排除 8250 驱动注册、UART 中断冲突、deferred-probe 超时、定时器。**冻结**，解冻动作见
+   `docs/06` §10 末尾（内置 initramfs + dyndbg，约 20 分钟编译 + 40 分钟仿真）。
+   剩余：UART 输入、真 PLIC 中断、把 stage 7 纳入 `verify.sh --linux`。
 2. **采样级链接入 slot 时基**：4 个符号按 tick 流水（复用 `slot_rtos.c`），SSS 假设按批分摊，
    使"每 SSB"落在 20 ms 预算内（当前 4.34 M 周期 @100 MHz ≈ 43 ms，差 ~2.2×）。
 
