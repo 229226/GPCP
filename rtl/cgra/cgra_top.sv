@@ -178,6 +178,18 @@ module cgra_top #(
   // INCR burst never crosses an AXI 4 KiB boundary, and to DMA_BEATS)
   logic [7:0]  dma_nb_raw;
   logic [15:0] dma_wleft, dma_bw, dma_nidx, dma_4k;
+  // registered burst plan: the burst length used to be derived combinationally
+  // from (run_len - idx) and (src + idx*4), which was the critical path in
+  // synthesis (idx -> subtract -> <=32 -> mux -> 4 KiB edge -> mux -> nb).
+  // The two operands are now updated only when idx changes (burst start or
+  // burst end), so the same arithmetic sits on a register-to-register path and
+  // the burst path itself is just a compare + mux.
+  logic [15:0] dma_wleft_q;
+  logic [11:0] dma_baddr_lo_q;
+  // "this burst is the last one of the transfer" was the next critical path
+  // (idx + bw >= run_len feeding the FSM).  It is now evaluated during the
+  // address phase (D_AR/D_AW, at least one cycle before the first data beat).
+  logic        dma_last_q;
   logic [31:0] dma_baddr;
   logic        dma_odd, dma_odd_full, dma_last_odd;
   // copy-engine FSM state (declared before dstate_q: strict SV frontends
@@ -197,12 +209,12 @@ module cgra_top #(
   always_ff @(posedge clk or negedge rst_n)
     if (!rst_n) dstate_q <= D_IDLE; else dstate_q <= dstate;
   assign dma_wleft     = dma_run_len - dma_idx;
-  assign dma_nb_raw    = (dma_wleft >= 16'(2 * DMA_BEATS))
+  assign dma_nb_raw    = (dma_wleft_q >= 16'(2 * DMA_BEATS))
                          ? 8'(DMA_BEATS)
-                         : ((dma_wleft + 16'd1) >> 1);
-  assign dma_odd_full  = (dma_wleft < 16'(2 * DMA_BEATS)) ? dma_wleft[0] : 1'b0;
+                         : ((dma_wleft_q + 16'd1) >> 1);
+  assign dma_odd_full  = (dma_wleft_q < 16'(2 * DMA_BEATS)) ? dma_wleft_q[0] : 1'b0;
   assign dma_baddr     = dma_run_src + {16'b0, dma_idx} * 4;
-  assign dma_4k        = (16'd4096 - {4'b0, dma_baddr[11:0]}) >> 3;   // beats to the 4 KiB edge
+  assign dma_4k        = (16'd4096 - {4'b0, dma_baddr_lo_q}) >> 3;    // beats to the 4 KiB edge
   assign dma_nb        = (dma_4k >= 16'(DMA_BEATS)) ? dma_nb_raw
                                                     : ((dma_4k >= 16'd1) ? 8'(dma_4k) : 8'd1);
   assign dma_odd       = (dma_nb == dma_nb_raw) ? dma_odd_full : 1'b0;
@@ -302,6 +314,9 @@ module cgra_top #(
       dma_len     <= 16'd0;
       dma_run_src    <= 32'b0;
       dma_run_len    <= 16'd0;
+      dma_wleft_q    <= 16'd0;
+      dma_baddr_lo_q <= 12'd0;
+      dma_last_q     <= 1'b0;
       dma_run_stride <= 16'd1;
       dma_run_row    <= 16'd0;
       dma_dir     <= 1'b0;
@@ -345,6 +360,7 @@ module cgra_top #(
           end
         end
         D_AR: begin
+          dma_last_q <= !rd_desc && (dma_wleft_q <= dma_bw);
           if (m_axi_arvalid && m_axi_arready) begin
             dma_beat <= 2'd0;
             dma_bcnt <= 8'd0;
@@ -361,6 +377,8 @@ module cgra_top #(
         D_DESC_SET: begin
           dma_run_src    <= desc_buf[0][31:0];
           dma_run_len    <= (desc_buf[1][15:0] > 16'd1024) ? 16'd1024 : desc_buf[1][15:0];
+          dma_wleft_q    <= (desc_buf[1][15:0] > 16'd1024) ? 16'd1024 : desc_buf[1][15:0];
+          dma_baddr_lo_q <= desc_buf[0][11:0];
           dma_run_stride <= desc_buf[1][47:32];
           dma_run_row    <= desc_buf[1][63:48];
           dma_cur        <= desc_buf[0][47:32];
@@ -385,7 +403,9 @@ module cgra_top #(
             if (m_axi_rlast) begin
               dma_bcnt <= 8'd0;
               dma_idx  <= dma_nidx;
-              if (dma_nidx >= dma_run_len) begin
+              dma_wleft_q    <= dma_wleft_q - dma_bw;
+              dma_baddr_lo_q <= (dma_baddr_lo_q + {4'b0, dma_bw[9:0], 2'b00}) & 12'hFFF;
+              if (dma_last_q) begin
                 if (ring_mode) begin
                   wr_status <= 1'b1;
                   dstate    <= D_AW;
@@ -406,6 +426,7 @@ module cgra_top #(
           end
         end
         D_AW: begin
+          dma_last_q <= dma_wleft_q <= dma_bw;
           if (m_axi_awvalid && m_axi_awready) begin
             dma_bcnt <= 8'd0;
             dstate   <= D_SOUT;
@@ -439,7 +460,9 @@ module cgra_top #(
               end
             end else begin
               dma_idx <= dma_nidx;
-              if (dma_nidx >= dma_run_len) begin
+              dma_wleft_q    <= dma_wleft_q - dma_bw;
+              dma_baddr_lo_q <= (dma_baddr_lo_q + {4'b0, dma_bw[9:0], 2'b00}) & 12'hFFF;
+              if (dma_last_q) begin
                 if (ring_mode) begin
                   wr_status <= 1'b1;
                   dstate    <= D_AW;
@@ -490,6 +513,8 @@ module cgra_top #(
             dma_run_len    <= dma_len;
             dma_run_stride <= dma_stride;
             dma_run_row    <= dma_row;
+            dma_wleft_q    <= dma_len;          // idx = 0 after this edge
+            dma_baddr_lo_q <= dma_src[11:0];
             dstate <= wr_data[1] ? D_AW : D_AR;
           end
         end
