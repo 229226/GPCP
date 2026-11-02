@@ -23,6 +23,10 @@ import struct
 from ssb_plan import (bitrev, is_frozen, info_indices, polar_encode, sc_decode,
                       Lcg, wrap32, f_node, g_node, _fft)
 
+# re-export the 38.211 7.4.1.3 DMRS init so the checker (tools/check_ssb_fid.py)
+# can compare it without reaching into nr_pbch
+pbch_dmrs_cinit = P.pbch_dmrs_cinit
+
 # ---- layout / scalars (must match sw/soc/ssb_fid_bm.c) -------------------
 NSYM = 4
 NRE = 240
@@ -148,7 +152,8 @@ def build_td(nid1=TRUE_NID1, nid2=TRUE_NID2, i_ssb=I_SSB, n_hf=N_HF, payload=Non
     return td, grid, payload, e_sc
 
 
-def dump_td(path, nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None):
+def dump_td(path, nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None,
+            snr_db=None, lcg_seed=0x50B0A5):
     if snr_db is None:
         td, grid, payload, e_sc = build_td(nid1, nid2, payload=payload)
     else:

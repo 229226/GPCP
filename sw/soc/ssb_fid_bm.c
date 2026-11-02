@@ -67,6 +67,14 @@
 #define SYM_WORDS        (2 * (CP_LEN + FFT_N))
 #define NFFT             4096
 
+/* 38.211 7.4.3.1 carrier mapping: SSB RE r sits at FFT bin NFFT/2 - DC_RE + r
+ * (k_ssb = 0), so the DC of the carrier lands on RE 24 and stays nulled.
+ * Same expression as tools/ssb_plan_p1.py's bin_of(). */
+static uint32_t re_bin(uint32_t r)
+{
+    return (uint32_t)(NFFT / 2 - DC_RE) + r;
+}
+
 /* PBCH: DMRS channel estimate -> QPSK demod + descrambling -> polar SC */
 #define NRE              240
 #define NPILOT           60
@@ -266,7 +274,9 @@ static uint64_t metric_of(int32_t *fb)
  * by Nc = 1600 like tools/ssb_plan.py's gold(). */
 static void gold_init(uint32_t c_init)
 {
-    uint32_t n = NPOL + 1600;
+    /* the PBCH data scrambling needs E = RM_LEN bits (720), longer than the
+     * 512-bit polar block: fill the whole GOLD_LEN buffer */
+    uint32_t n = RM_LEN + 1600;
     for (uint32_t i = 0; i < n + 31; i++) { gold_x1[i] = 0; gold_x2[i] = 0; }
     gold_x1[0] = 1;
     for (uint32_t i = 0; i < 31; i++) gold_x2[i] = (c_init >> i) & 1u;
@@ -456,14 +466,16 @@ int main(void)
     build_mseq();
     build_sss_seq();
     /* ---- FFT of all four SSB symbols ---------------------------------- */
+    /* Each symbol on RAM is [CP (CP_LEN) | useful (FFT_N)] complex samples:
+     * the FFT runs on the useful window (CP stripped), in place. */
     t0 = mtime();
     for (int s = 0; s < NSYM; s++)
-        fft4096(td + s * 2 * FFT_N);
+        fft4096(spec[s]);
     build_corr_uc();          /* the FFT image owned the imem until here */
 
 
     for (int t = 0; t < NREP; t++) {
-        uint32_t idx = rev4((uint32_t)(NPSS_RE0 + t));
+        uint32_t idx = rev4(re_bin((uint32_t)(NPSS_RE0 + t)));
         /* the fixed-point FFT is normalised by 4096 and pre-scaled by TD_SCALE */
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 0] = spec[0][2 * idx] << 4;
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 1] = spec[0][2 * idx + 1] << 4;
@@ -496,7 +508,7 @@ int main(void)
 
     /* ---- SSS: 336 hypotheses on the spectrum of symbol 3 ---------------- */
     for (int t = 0; t < NREP; t++) {
-        uint32_t idx = rev4((uint32_t)(NPSS_RE0 + t));
+        uint32_t idx = rev4(re_bin((uint32_t)(NPSS_RE0 + t)));
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 0] = spec[2][2 * idx] << 4;
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 1] = spec[2][2 * idx + 1] << 4;
     }
@@ -527,8 +539,7 @@ int main(void)
     for (int s = 0; s < NSYM; s++)
         for (int r = 0; r < NRE; r++) {
             if (r == DC_RE) continue;                 /* carrier DC null */
-            uint32_t bin = (uint32_t)(NFFT / 2 - DC_RE) + (uint32_t)r;
-            uint32_t idx = rev4(bin);
+            uint32_t idx = rev4(re_bin((uint32_t)r));
             yw[(s * NRE + r) * 2 + 0] = spec[s][2 * idx] << 4;
             yw[(s * NRE + r) * 2 + 1] = spec[s][2 * idx + 1] << 4;
         }

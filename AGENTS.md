@@ -21,6 +21,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | M2.5 FFT 256/1024/4096 + slot 时基 | ✅ |
 | B4-SSB 频域链（PSS/SSS/DMRS/QPSK/Polar/MIB） | ✅ |
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
+| P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
 | M3 规模扩展（8×8）+ 自动映射 + LDPC | ⬜ 未开始 |
 
@@ -33,8 +34,8 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用都这样跑
 
 # 1) 一条命令全量验收（推荐先跑这个，确认基线）
-bash tools/verify.sh quick            # 实测 ~110 s：13 kernel + 4 个 SoC 目标
-bash tools/verify.sh full             # 实测 ~230 s：全部 13 个 SoC 基准（14 步全 PASS）
+bash tools/verify.sh quick            # 实测 ~215 s：13 kernel + 5 个 SoC 目标（含 run-ssb-fid）
+bash tools/verify.sh full             # 实测 ~230 s：全部 14 个 SoC 基准（15 步全 PASS）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 make verify / make verify-full        # 同上两个的 make 包装
 
@@ -61,6 +62,7 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `run-sync` / `run-sss` / `run-polar` | N_ID2 / N_ID1=200 / 32 bit 全对，partial 逐位 |
 | `run-ssb` | 1459 runs，2,411,649 周期，H=(32,15)，MIB 逐位（导频 28 个、真实 DMRS `c_init`） |
 | `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32，H=(16,0) 四个符号**，1907 runs，4,378,711 周期（SSB 占 bin 480..719，避开 DC） |
+| `run-ssb-fid` | **N_ID2=1、N_ID1=200、i_SSB=3、n_hf=0、DMRS `c_init`=0x12e101、MIB 32/32**，1907 runs，4,411,511 周期（真 38.211 布局：PSS 符号 0 / SSS 符号 2、CP=288、DC 空在 RE 24、72 个导频、38.212 速率匹配 720→512） |
 | `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
@@ -79,9 +81,9 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `sim/cgra/` | 纯 CGRA 台架（AXI 从机模型） | `tb_cgra.cpp`：`--prog/--dma-mem/--dma-ops/--ring-desc/--spad-dump` |
 | `sim/soc/` | SoC 台架 + 所有 `run-*` 目标 | `Makefile`（每个目标 = 一条 load + dump + check） |
 | `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `ring_*` |
-| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
+| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
-| `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 13 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`nr_seq.py`（38.211/38.212 序列）、`check_*.py`（每个基准的验收器）、`verify.sh` |
+| `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 13 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`check_*.py`（每个基准的验收器）、`verify.sh` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**） | — |
 
 ---
@@ -121,6 +123,15 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
     信道估计保留小数（`H_SCALE=16`）；整数除法一律**四舍五入**（截断曾让 4 个符号估成 15/16 混杂）。
 15. **任何超时/溢出/池溢出都必须计数并上报**（静默超时是本项目最大隐患）；检查器**不许空转**
     （注入错误必须能失败）。
+16. **P1 真映射（`run-ssb-fid`）三件事**：
+    ① 时域每个符号是 `[CP=288 | 4096]` 复样本，FFT 必须跑在 **CP 之后的窗口**（`spec[s]`），
+    且 in-place 输入/输出用同一指针——写成 `td + s*2*FFT_N` 会同时错窗口和错步长
+    （症状：PSS 随机、SSS 判错，但 y 网格"看起来有值"）；
+    ② SSB 的 RE r 对应 bin `NFFT/2 - 24 + r`（`re_bin()`），**PSS/SSS/网格三处都要用**，
+    只给网格加偏移会让 PSS/SSS 落在噪声上；
+    ③ PBCH 扰码要 **E = 720 bit**（速率匹配后），Gold 序列必须按 `RM_LEN` 生成；
+    按 `NPOL=512` 只填 512 个会让后 208 个 bit 恒为 0，两个重复副本被反向解扰 → LLR 相消，
+    症状是"32 位里只错 2 位、但一半 LLR 掉到 ±64"。
 
 ---
 

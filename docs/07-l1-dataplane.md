@@ -541,9 +541,41 @@ DMRS 位置随 `N_ID_cell mod 4` 的频移（`v_shift`）以及 PBCH 的速率�
 SSS 判错、MIB 全 0。加依赖后一切恢复正常。这条已写进 `AGENTS.md` 的构建陷阱。
 
 验收（`make -C sim/soc run-ssbfft`）：N_ID2=1、N_ID1=200、四个符号 H=(16,0)、
-MIB 32/32、1907 次阵列运行、4,334,790 周期；`verify.sh quick` 5/5 PASS。
+MIB 32/32、1907 次阵列运行、4,378,711 周期；`verify.sh quick` 5/5 PASS。
 
 意义：链路不再"把 SSB 放在 DC"，为后续加 CP、加保护带、加载波偏移（真实 RF）留出了空间。
+
+### 4.19 CP 与保护带：P1 真映射链（`run-ssb-fid`）
+
+§4.17 只把 SSB 搬到 bin 480..719，仍是"无 CP、无速率匹配"的简化映射。P1 链按 38.211/38.212
+把剩下的三件事做齐（模型 `tools/ssb_plan_p1.py`，硬件 `sw/soc/ssb_fid_bm.c`）：
+
+| 项目 | 做法 | 模型/硬件对应 |
+|---|---|---|
+| **CP** | 每个符号 4384 个复样本（288 点 CP + 4096 点有用符号，CP 是符号尾部 288 点的拷贝）；接收端丢弃 CP 再做 4096 点 FFT | `nr_pbch.add_cp/strip_cp`；`spec[s] = td + s*SYM_WORDS + 2*CP_LEN` |
+| **DC 空置（保护带）** | SSB RE r 映射到 bin `NFFT/2 - 24 + r`，RE 24 正好落在 DC（bin 2048）并被置零；它本身是 DMRS 网格点，所以只损失 1 个导频（72→71 个可用导频，PBCH 数据仍是 180 RE/符号×2 符号 = 720 bit） | `bin_of(r)` / `re_bin(r)` |
+| **真 38.211 布局** | PSS 在符号 0、SSS 在符号 2（PBCH 在 1/3），DMRS `c_init` 用 `i_SSB=3`、`n_hf=0`（`ibar = i_SSB + 4·n_hf`） | `PBCH_SYMS=[1,3]`、`pbch_dmrs_cinit()` |
+| **38.212 速率匹配** | 512 位 polar 码 → 子块交织 → 720 位循环缓冲（重复）→ 三角交织；接收端反向（三角解交织 → 循环累加 → 子块解交织），LUT 由 `tools/gen_luts.py` 生成 `tools/ssb_fid_luts.h` | `nr_pbch.rate_match_pbch/rate_recover_pbch`；C 里 `tri_perm`/`sb_perm` |
+
+**跑通这条链时连着踩了三个坑**（都写进了 `AGENTS.md` 第 16 条）：
+
+1. **FFT 跑错窗口**：写成 `fft4096(td + s*2*FFT_N)`，既从符号开头（含 CP）开始，又按 4096 点
+   的步长跳（正确步长是 `CP_LEN + NFFT`）。症状：PSS 度量落到噪声、`N_ID2` 随机、SSS 判 18。
+2. **只给网格加了 bin 偏移**：PSS/SSS 仍按 `rev4(NPSS_RE0 + t)` 取，落在噪声上。改成
+   `rev4(re_bin(NPSS_RE0 + t))` 后 `N_ID2=1`、`N_ID1=200`、DMRS `c_init`=0x12E101 全部对上。
+3. **Gold 序列只填了 512 个 bit**：PBCH 扰码要 720 个（`E = RM_LEN`），而 `gold_fill()` 按
+   `NPOL + 1600` 生成。后 208 个 bit 恒为 0，两个循环缓冲副本被反向解扰 → LLR 相消：
+   最终只错 2 个 MIB bit，但 512 个 LLR 里有 46 个掉到 ±64 —— 这个"几乎全对"的症状最容易
+   误导人。改成按 `RM_LEN + 1600` 生成后 32/32。
+
+另外修了检查器的两处小问题：`check_ssb_fid.py` 需要的 `pbch_dmrs_cinit` 在 `ssb_plan_p1`
+里重新导出；`gen_luts.py` 的自检原来把 0/1 位当 LLR 比对（必然 MISMATCH），且**导入即写文件**，
+现在改成 ±1 LLR 组成的真实组合校验 + `__main__` 保护。`$(SSBFID_TD)` 也补上了模型依赖
+（就是 §4.17 里 td 不重建的老陷阱）。
+
+验收（`make -C sim/soc run-ssb-fid`）：N_ID2=1、N_ID1=200、`i_SSB=3`/`n_hf=0`、
+DMRS `c_init`=0x12E101（与模型一致）、两个 PBCH 符号 H=(16,0) 且符号一致、MIB **32/32**、
+1907 次阵列运行、4,411,511 周期、0 内部错误；`verify.sh quick` 6/6 PASS（213 s）。
 
 ## 5. 验证结果（`python3 tools/cgra.py test`）
 

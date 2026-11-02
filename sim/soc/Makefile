@@ -243,7 +243,7 @@ clean:
 # ---- P1 real-mapping SSB benchmark (38.211/38.212 chain on the SoC) ----
 SSBFID_TD = $(ROOT)/build/soc/ssb_fid.td
 
-$(SSBFID_TD):
+$(SSBFID_TD): $(ROOT)/tools/ssb_plan_p1.py $(ROOT)/tools/nr_pbch.py
 	@mkdir -p $(dir $(SSBFID_TD))
 	python3 $(ROOT)/tools/ssb_plan_p1.py dump $@ $(if $(SNR),--snr $(SNR),)
 

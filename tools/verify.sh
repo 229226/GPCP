@@ -60,8 +60,8 @@ echo "log: $LOG"
 run kernels make -C "$ROOT" test
 
 # ---- 2) SoC benchmarks ------------------------------------------------------
-SOCCORE="run-ring run-rxchain run-fft run-ssbfft"
-[ "$MODE" = full ] && SOCCORE="run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-slot run-fftprobe run-slot"
+SOCCORE="run-ring run-rxchain run-fft run-ssbfft run-ssb-fid"
+[ "$MODE" = full ] && SOCCORE="run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-fftprobe run-slot"
 for t in $SOCCORE; do
     run "$t" make -C "$ROOT/sim/soc" "$t"
 done
