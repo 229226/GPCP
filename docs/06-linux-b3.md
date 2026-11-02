@@ -201,15 +201,27 @@ make -C sim/soc linux
 3. `initcall_debug` 没打出 `calling` → 该 `core_param` 在本内核上没生效（待查：`parse_args`
    阶段是否被前面的参数吞掉，或该 6.6.52 配置里打印走的是 trace 路径）。
 
-正在做的判定实验（三个变体并行，60 M 周期，要求 stage 3）：
+### 判定实验结果（每个 60 M 周期，要求 stage 3）
 
-| # | 变体 | 若通过说明 |
-|---|---|---|
-| A | `initcall_blacklist=serial8250_init`（bootargs） | 8250 驱动注册是阻塞点 |
-| B | `serial@10000000 { status = "disabled"; }` | "设备存在 + 被 probe"是阻塞点 |
-| C | 删掉 UART 的 `interrupts = <1>` | 中断号冲突 / `request_irq` 是阻塞点 |
+| # | 变体 | 最后内核输出 | 结论 |
+|---|---|---|---|
+| 基线 | earlycon-only | 1.983 s `pnp: PnP ACPI: disabled` | 46.5 M 起纯 idle |
+| A | `initcall_blacklist=serial8250_init` | 2.006 s `pnp: ... disabled` | **不是** 8250 注册的锅 |
+| B | serial 节点 disabled（sed 写坏，节点被挪出 `/soc`） | 连 OpenSBI 都没打印 | 实验作废（DT 无效） |
+| C | 去掉 UART `interrupts = <1>` | 1.980 s `pnp: ... disabled` | **不是** UART 中断号冲突 |
+| D | `fw_devlink=off deferred_probe_timeout=5` | **0.349 s** `devtmpfs: initialized` | 反而更早停：设备依赖链一关，某个 probe 更早开始并阻塞 |
+| E | `deferred_probe_timeout=5` | 1.818 s `Fixed dependency cycle(s)` | 略早停 |
+| F | serial `status = "disabled"`（正确放在 `/soc` 内） | 见下一轮日志 `build/linux_exp_f.log` | 判定"是否存在设备 probe 阻塞" |
 
-日志：`build/linux_exp_{a,b,c}.log`。
+由此收敛出的判断：**问题不是一个"等超时"的 deferred probe**（D/E 都没让引导越过 2.0 s），
+而是某个**设备 probe 在等一个永远不会来的事件**；`fw_devlink=off` 让它更早开始探测、
+于是更早卡住（0.349 s），这与"serial 探测"高度吻合——A 只黑名单了 `serial8250_init`，
+但 8250 驱动还有 `univ8250_console_init` 等注册路径，未必都被跳过。
+
+后续若 F 仍卡：下一步是**重编内核**（把 `CONFIG_INITRAMFS_SOURCE` 指向现有
+`build/linux/initramfs` 做成内置 initramfs，绕开 initrd 交接），并用
+`CONFIG_DYNAMIC_DEBUG`/`dyndbg` 对 `drivers/tty/serial/*` 打开调试打印，
+把 probe 的最后一步打出来。
 
 下一步（按代价从低到高）：
 
