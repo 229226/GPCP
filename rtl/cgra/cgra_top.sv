@@ -101,7 +101,17 @@ module cgra_top #(
   localparam int MAXCYC = CGRA_MAX_CYCLES;
 
   // ---------------- instruction memory ----------------
-  logic [31:0] imem [0:CGRA_IMEM_WORDS-1];
+  // One 512-bit wide word per row instead of a flat 8192x32 array: the array
+  // consumes all 16 PE instruction words of a cycle at once (static schedule),
+  // so a flat array needs 16 read ports -- in silicon that means 16 replicated
+  // macros (16 x 32 KiB).  A wide word needs a single read port; the host
+  // write touches one 32-bit slice, which is a masked write (WR_EN bit mask)
+  // on the same single write port.
+  // Host word index w = (addr - REG_IMEM_BASE) >> 2 -> row w >> 4, lane w[3:0],
+  // which keeps the existing software ABI (word cycle*16 + pe).
+  localparam int IMEM_ROWS = CGRA_IMEM_WORDS / CGRA_NPES;   // 512 rows
+  localparam int IMEM_AW   = $clog2(IMEM_ROWS);             // 9
+  logic [CGRA_NPES-1:0][31:0] imem [0:IMEM_ROWS-1];
   logic [CGRA_NPES-1:0][31:0] inst_flat;
 
   // ---------------- sequencer ----------------
@@ -110,10 +120,13 @@ module cgra_top #(
 
   assign cycle_o = cycle_cnt;
 
-  always_comb begin
-    for (int p = 0; p < NPES; p++)
-      inst_flat[p] = imem[cycle_cnt * NPES + p];
-  end
+  // Synchronous SRAM read with a one-cycle lookahead: the row fetched during
+  // cycle n-1 is the word executed in cycle n.  While idle the address stays
+  // at row 0, so the edge that raises `busy` also pre-loads word 0 -- a run
+  // still takes exactly num_cycles cycles (no extra fetch cycle).
+  logic [IMEM_AW-1:0] imem_raddr;
+  assign imem_raddr = busy ? (cycle_cnt[IMEM_AW-1:0] + 1'b1) : '0;
+  always_ff @(posedge clk) inst_flat <= imem[imem_raddr];
 
   // ---------------- copy engine state ----------------
   // Descriptor registers (host written) are latched into the *_run copies when
@@ -523,7 +536,9 @@ module cgra_top #(
           buf_page <= wr_data[0];
         end else if ((wr_addr >= REG_IMEM_BASE) &&
                      (wr_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
-          imem[(wr_addr - REG_IMEM_BASE) >> 2] <= wr_data;
+          // word index w = (wr_addr - base) >> 2 -> row w >> 4, lane w[3:0]
+          imem[(wr_addr - REG_IMEM_BASE) >> 6][((wr_addr - REG_IMEM_BASE) >> 2) & 16'hF]
+              <= wr_data;
         end
       end else if (busy) begin
         if (cycle_cnt == num_cycles - 16'd1) begin
@@ -604,7 +619,10 @@ module cgra_top #(
       rd_data = pe_rd;
     end else if ((rd_addr >= REG_IMEM_BASE) &&
                  (rd_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
-      rd_data = imem[(rd_addr - REG_IMEM_BASE) >> 2];
+      // IMEM is write-only for the host: a readback port would make the SRAM
+      // 2R1W instead of 1R1W (~1.5x area), and no software reads microcode
+      // back (see docs/08).  The write port still lets a loader verify by run.
+      rd_data = 32'b0;
     end
   end
 
