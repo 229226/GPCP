@@ -59,13 +59,13 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `run-rxchain` | 4 slot = **2057 周期**（阵列 1220 + ring 546） |
 | `run-fft` | 256/1024/4096 = **4399 / 22956 / 116761** 周期，逐位一致 |
 | `run-sync` / `run-sss` / `run-polar` | N_ID2 / N_ID1=200 / 32 bit 全对，partial 逐位 |
-| `run-ssb` | 1459 runs，2,414,474 周期，MIB 逐位 |
-| `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32，H=(16,0) 四个符号**，1907 runs，4,334,790 周期（SSB 占 bin 480..719，避开 DC） |
+| `run-ssb` | 1459 runs，2,411,649 周期，H=(32,15)，MIB 逐位（导频 28 个、真实 DMRS `c_init`） |
+| `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32，H=(16,0) 四个符号**，1907 runs，4,378,711 周期（SSB 占 bin 480..719，避开 DC） |
 | `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
-| `make snr-sweep` / `make snr-sweep-hw` | SNR 瀑布：模型 −8 dB 仍 0 误比特；硬件 −8..+8 dB 0 误比特，−12 dB 6 误比特，−16 dB 16 误比特且 N_ID1 失锁（`docs/07` §4.16） |
+| `make snr-sweep` / `make snr-sweep-hw` | SNR 瀑布：模型 −8/−9 dB 仍 0 误比特、−10 dB 1.5、−12 dB 5.4、−14 dB 7.3（8 seed）；硬件 −8 dB 0、−12 dB 1.5（2 seed），周期 4,378,714（`docs/07` §4.16） |
 | `make -C sim/soc linux-status` | 分级评分：stage 0..8（OpenSBI→kernel→initramfs→/init→uname→/proc→CGRA 用户态→干净退出），并要求 16 个累加器值正确 |
 
 ---
@@ -113,6 +113,10 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 13. **内存**：SoC 有 64 MiB，但裸机 `link.ld` 只声明 512 KiB（栈顶 `0x8008_0000`）。
     大缓冲（SSS 参考 172 KiB、polar 块池 256 KiB、时域样本 128 KiB）放在 `≥0x8010_0000`
     的高区，**不要**放进 `.bss`（会撞栈/描述符区）。
+    **`.bss` 还必须停在 `0x8001_0000` 以下**（`run-ssb` 的结果窗口就在那里）：新增静态数组后
+    用 `riscv64-unknown-linux-gnu-nm -n build/sw/ssb_bm.elf | tail` 看 `_bss_end`。
+    溢出时结果字与 `.bss` 变量互相覆盖，症状是"PSS/SSS 相关值莫名缩小、判错，但 y 网格明明是对的"
+    （把第二条 Gold 序列放 0x8006_0000 才修好，见 `docs/07` §4.18）。
 14. **定点**：MAC 只有 int16 操作数（`sext16`）+ int32 累加；`|LLR| × 2^DEPTH` 要留在 int32；
     信道估计保留小数（`H_SCALE=16`）；整数除法一律**四舍五入**（截断曾让 4 个符号估成 15/16 混杂）。
 15. **任何超时/溢出/池溢出都必须计数并上报**（静默超时是本项目最大隐患）；检查器**不许空转**

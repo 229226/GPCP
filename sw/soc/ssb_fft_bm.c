@@ -8,8 +8,9 @@
  *     sw/soc/ssb_fft.inc (same microcode/twiddle ROM as run-fft); the spectrum
  *     comes out digit-reversed, so X[k] = data[rev4(k)]
  *   * PSS (3 candidates) and SSS (336 hypotheses) on the symbol 1 / 3 spectra
- *   * DMRS channel estimate per symbol (60 pilots, Gold sequence, c_init =
- *     3*N_ID1 + N_ID2), QPSK demod + PBCH descrambling -> 512 LLRs,
+ *   * DMRS channel estimate per symbol (28 pilots outside PSS/SSS, own Gold
+ *     sequence with the 38.211 7.4.1.4.1 c_init for i_SSB = 2), QPSK demod +
+ *     PBCH descrambling (c_init = N_ID_cell) -> 512 LLRs,
  *     polar SC decode (min-sum node microcode, 22 cycles) -> 32 MIB bits
  *
  * Results at 0x8001_0000 (words):
@@ -62,7 +63,7 @@
 
 /* PBCH: DMRS channel estimate -> QPSK demod + descrambling -> polar SC */
 #define NRE              240
-#define NPILOT           60
+#define NPILOT           28   /* pilots outside the PSS/SSS band (RE 56..182) */
 #define QPSK             2000
 #define KINFO            32
 #define NPOL             512
@@ -92,6 +93,10 @@ static int32_t *bin = (int32_t *)(LC_IN_BASE + 64);
 static int32_t *bet = (int32_t *)(LC_IN_BASE + 128);
 static uint32_t *gold_x1 = (uint32_t *)GOLD_BASE;
 static uint32_t *gold_x2 = (uint32_t *)(GOLD_BASE + 4 * GOLD_LEN);
+/* PBCH DMRS has its own Gold sequence (38.211 7.4.1.4.1), the data scrambling
+ * keeps c_init = N_ID_cell (38.212 7.1.2). */
+static uint32_t *gold2_x1 = (uint32_t *)(GOLD_BASE + 8 * GOLD_LEN);
+static uint32_t *gold2_x2 = (uint32_t *)(GOLD_BASE + 12 * GOLD_LEN);
 static int32_t (*lbuf)[NPOL] = (int32_t (*)[NPOL])LB_BASE;
 static uint8_t (*bbuf)[NPOL] =
     (uint8_t (*)[NPOL])(LB_BASE + 4 * (SDEPTH + 1) * NPOL);
@@ -257,19 +262,32 @@ static uint64_t metric_of(int32_t *fb)
 /* ---------------------------------------------------------- PBCH sequences */
 /* Gold sequence of 38.211 5.2.1 (x1 with tap 3, x2 with taps 3/2/1), skipped
  * by Nc = 1600 like tools/ssb_plan.py's gold(). */
-static void gold_init(uint32_t c_init)
+static void gold_fill(uint32_t *x1, uint32_t *x2, uint32_t c_init)
 {
     uint32_t n = NPOL + 1600;
-    for (uint32_t i = 0; i < n + 31; i++) { gold_x1[i] = 0; gold_x2[i] = 0; }
-    gold_x1[0] = 1;
-    for (uint32_t i = 0; i < 31; i++) gold_x2[i] = (c_init >> i) & 1u;
+    for (uint32_t i = 0; i < n + 31; i++) { x1[i] = 0; x2[i] = 0; }
+    x1[0] = 1;
+    for (uint32_t i = 0; i < 31; i++) x2[i] = (c_init >> i) & 1u;
     for (uint32_t i = 0; i < n; i++) {
-        gold_x1[i + 31] = gold_x1[i + 3] ^ gold_x1[i];
-        gold_x2[i + 31] = gold_x2[i + 3] ^ gold_x2[i + 2] ^ gold_x2[i + 1] ^ gold_x2[i];
+        x1[i + 31] = x1[i + 3] ^ x1[i];
+        x2[i + 31] = x2[i + 3] ^ x2[i + 2] ^ x2[i + 1] ^ x2[i];
     }
 }
 
+static void gold_init(uint32_t c_init) { gold_fill(gold_x1, gold_x2, c_init); }
 static uint32_t gold_bit(uint32_t n) { return gold_x1[1600 + n] ^ gold_x2[1600 + n]; }
+static void gold_init2(uint32_t c_init) { gold_fill(gold2_x1, gold2_x2, c_init); }
+static uint32_t gold_bit2(uint32_t n) { return gold2_x1[1600 + n] ^ gold2_x2[1600 + n]; }
+
+/* 38.211 7.4.1.4.1: c_init = 2^11 (i_SSB+1)(N_ID_cell/4+1) + 2^6 (i_SSB+1)
+ * + (N_ID_cell mod 4); the SSB here is i_SSB = 2. */
+#define I_SSB 2
+static uint32_t dmrs_c_init(int nid1, int nid2)
+{
+    uint32_t nid = (uint32_t)(3 * nid1 + nid2);
+    return ((uint32_t)(I_SSB + 1) << 11) * (nid / 4u + 1u)
+         + ((uint32_t)(I_SSB + 1) << 6) + (nid % 4u);
+}
 
 static uint32_t bitrev(uint32_t v, uint32_t bits)
 {
@@ -398,7 +416,7 @@ static int64_t div_round(int64_t v, int64_t d)
     return (v + (v < 0 ? -(d / 2) : (d / 2))) / d;
 }
 
-static int pilot_re(int p) { return p * 4; }
+static int pilot_re(int p) { return (p < 14) ? p * 4 : 184 + (p - 14) * 4; }
 static int is_mid(int r) { return r >= NPSS_RE0 && r < NPSS_RE0 + NREP; }
 
 /* data RE scan order, identical to tools/ssb_plan.py */
@@ -406,7 +424,7 @@ static void data_re_list(uint32_t s, int *out, int *cnt)
 {
     int n = 0;
     for (int r = 0; r < NRE; r++) {
-        if ((r % 4) == 0) continue;                       /* DMRS */
+        if ((r % 4) == 0 && !is_mid(r)) continue;         /* DMRS (pilots outside PSS/SSS) */
         if ((s == 1 || s == 3) && is_mid(r)) continue;     /* PSS / SSS */
         out[n++] = r;
     }
@@ -529,8 +547,9 @@ int main(void)
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     (void)yw[2 * NRE - 1];
 
-    /* ---- DMRS channel estimate per symbol (60 pilots, Gold sequence) ---- */
-    gold_init(3u * nid1 + nid2);            /* c_init = 3*N_ID1 + N_ID2 */
+    /* ---- DMRS channel estimate per symbol (28 pilots, Gold sequence) ---- */
+    gold_init(3u * nid1 + nid2);            /* data scrambling: c_init = N_ID_cell */
+    gold_init2(dmrs_c_init((int)nid1, (int)nid2));   /* PBCH DMRS c_init (38.211) */
     int32_t hre[NSYM], him[NSYM];
     {
         int n = 0;
@@ -538,8 +557,8 @@ int main(void)
         for (int s = 0; s < NSYM; s++) {
             int64_t accr = 0, acci = 0;
             for (int p = 0; p < NPILOT; p++) {
-                int32_t dr = (int32_t)(1 - 2 * (int)gold_bit(2u * (uint32_t)n)) * QPSK;
-                int32_t di = (int32_t)(1 - 2 * (int)gold_bit(2u * (uint32_t)n + 1u)) * QPSK;
+                int32_t dr = (int32_t)(1 - 2 * (int)gold_bit2(2u * (uint32_t)n)) * QPSK;
+                int32_t di = (int32_t)(1 - 2 * (int)gold_bit2(2u * (uint32_t)n + 1u)) * QPSK;
                 int32_t yr = yw[(s * NRE + pilot_re(p)) * 2 + 0];
                 int32_t yi = yw[(s * NRE + pilot_re(p)) * 2 + 1];
                 accr += (int64_t)yr * dr + (int64_t)yi * di;      /* y*d* */

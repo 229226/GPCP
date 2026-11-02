@@ -6,11 +6,12 @@ Structure follows 38.211/38.212, parameters simplified and documented:
   * 240 RE x 4 OFDM symbols in the frequency domain (the 4096-point FFT is
     verified separately by `make -C sim/soc run-fft`)
   * PSS in symbol 1, SSS in symbol 3 (middle 127 subcarriers), PBCH DMRS on
-    every 4th RE of every symbol (60 pilots), PBCH data on the other REs
+    every 4th RE outside the PSS/SSS band (28 pilots), PBCH data on the other REs
   * MIB payload = 24 bits (+8 zero pad) = K = 32 information bits, polar code
     N = 512, frozen set {i : bitrev9(i) < N-K}; no rate matching / interleaving
     (the real PBCH transmits E = 864 bits, see docs/07 4.13)
-  * PBCH-style Gold scrambling (c_init = 3*N_ID1 + N_ID2), QPSK
+  * PBCH DMRS uses its own Gold sequence, c_init per 38.211 7.4.1.4.1
+    (i_ssb = 2); the data scrambling keeps c_init = N_ID_cell (38.212 7.1.2), QPSK
 
 Receiver: PSS/SSS correlation on the CGRA, DMRS-based channel estimate per
 symbol, equalisation by conj(H_hat) (scale free), soft value
@@ -23,7 +24,9 @@ NRE = 240
 PSS_RE0 = 56
 NPSS = 127
 DMRS_STEP = 4
-NPILOT = NRE // DMRS_STEP        # 60
+# PBCH DMRS must not overwrite PSS/SSS: skip the pilot REs that fall inside
+# the 127-RE PSS/SSS band (RE 56..182).
+NPILOT = NRE // DMRS_STEP - (NPSS // DMRS_STEP + 1)   # 60 - 32 = 28
 KINFO = 32
 NPOL = 512
 DEPTH = 9
@@ -139,7 +142,9 @@ def mid_res():
 
 
 def pilot_res():
-    return list(range(0, NRE, DMRS_STEP))
+    """PBCH DMRS REs, excluding the band used by PSS/SSS."""
+    band = set(mid_res())
+    return [r for r in range(0, NRE, DMRS_STEP) if r not in band]
 
 
 def data_res():
@@ -167,8 +172,18 @@ def payload_bits(seed=0x1234):
 
 
 def nid_hash(nid1, nid2):
-    """N_ID_cell = 3*N_ID1 + N_ID2 (used as the PBCH *data* scrambling init)."""
+    """N_ID_cell = 3*N_ID1 + N_ID2 (the PBCH *data* scrambling init, 38.212 7.1.2)."""
     return 3 * nid1 + nid2
+
+
+I_SSB = 2
+
+
+def pbch_dmrs_c_init(nid1, nid2, i_ssb=I_SSB):
+    """38.211 7.4.1.4.1: c_init = 2^11 (i_SSB+1)(N_ID_cell/4+1)
+    + 2^6 (i_SSB+1) + (N_ID_cell mod 4)."""
+    nid = nid_hash(nid1, nid2)
+    return (2 ** 11) * (i_ssb + 1) * (nid // 4 + 1) + (2 ** 6) * (i_ssb + 1) + (nid % 4)
 
 
 
@@ -186,7 +201,7 @@ def build_grid(nid1=TRUE_NID1, nid2=TRUE_NID2, payload=None):
     grid = [[0j] * NRE for _ in range(NSYM)]
     pss = nr_seq.pss_seq(nid2)
     sss = nr_seq.sss_seq(nid1, nid2)
-    dr = dmrs_values(nid_hash(nid1, nid2))
+    dr = dmrs_values(pbch_dmrs_c_init(nid1, nid2))
 
     for s in range(NSYM):
         if s == 1:
@@ -239,7 +254,7 @@ def sss_corr(y, nid1, nid2):
 
 def receiver(y, nid1, nid2):
     """DMRS channel estimate per symbol, equalise, descramble, soft LLRs."""
-    dr = dmrs_values(nid_hash(nid1, nid2))
+    dr = dmrs_values(pbch_dmrs_c_init(nid1, nid2))
     h = []
     for s in range(NSYM):
         acc = 0j

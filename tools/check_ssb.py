@@ -13,8 +13,13 @@ REF_SCALE = 32767          # the CGRA correlation uses Q15 references
 WORD_SHIFT = 16            # and exports the int64 correlation >> 16
 
 
+def sx(v):
+    """Dump words are unsigned; the program exports signed int64 sums."""
+    return v - 0x100000000 if v & 0x80000000 else v
+
+
 def expect_corr(py_val):
-    return (int(round(py_val * REF_SCALE)) >> WORD_SHIFT) & 0xFFFFFFFF
+    return sx((int(round(py_val * REF_SCALE)) >> WORD_SHIFT) & 0xFFFFFFFF)
 
 
 def main(path):
@@ -28,9 +33,6 @@ def main(path):
     if len(vals) < 89:
         print(f"  dump too short: {len(vals)} words")
         return 1
-
-    def sx(v):
-        return v - 0x100000000 if v & 0x80000000 else v
 
     grid, payload, bits = sp.build_grid()
     y = sp.transmit(grid, sp.Lcg())
