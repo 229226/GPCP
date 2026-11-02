@@ -61,7 +61,8 @@
 
 /* PBCH: DMRS channel estimate -> QPSK demod + descrambling -> polar SC */
 #define NRE              240
-#define NPILOT           60
+#define SSB_K0           480   /* SSB RE r sits at FFT bin SSB_K0 + r */
+#define NPILOT           28   /* pilots outside the PSS/SSS band (RE 56..182) */
 #define QPSK             2000
 #define KINFO            32
 #define NPOL             512
@@ -73,6 +74,7 @@
 #define Y_BASE           0x80030000ul          /* 4 x 240 complex = 1920 words */
 #define LC_IN_BASE       0x80032000ul          /* a/b/beta staging (3 x 16)    */
 #define GOLD_BASE        0x80300000ul          /* Gold sequences (above linker RAM) */
+#define GOLD2_BASE       0x80380000ul          /* PBCH DMRS Gold (data uses GOLD_BASE) */
 #define LB_BASE          0x80320000ul          /* LLR / bit buffers            */
 #define NODE_OUT_BASE    0x80330000ul          /* one fresh block per node run */
 #define NODE_OUT_BLOCKS  2048
@@ -256,19 +258,37 @@ static uint64_t metric_of(int32_t *fb)
 /* ---------------------------------------------------------- PBCH sequences */
 /* Gold sequence of 38.211 5.2.1 (x1 with tap 3, x2 with taps 3/2/1), skipped
  * by Nc = 1600 like tools/ssb_plan.py's gold(). */
-static void gold_init(uint32_t c_init)
+static uint32_t *gold2_x1 = (uint32_t *)GOLD2_BASE;
+static uint32_t *gold2_x2 = (uint32_t *)(GOLD2_BASE + 4 * (NPOL + 1600 + 31));
+
+static void gold_fill(uint32_t *x1, uint32_t *x2, uint32_t c_init)
 {
     uint32_t n = NPOL + 1600;
-    for (uint32_t i = 0; i < n + 31; i++) { gold_x1[i] = 0; gold_x2[i] = 0; }
-    gold_x1[0] = 1;
-    for (uint32_t i = 0; i < 31; i++) gold_x2[i] = (c_init >> i) & 1u;
+    for (uint32_t i = 0; i < n + 31; i++) { x1[i] = 0; x2[i] = 0; }
+    x1[0] = 1;
+    for (uint32_t i = 0; i < 31; i++) x2[i] = (c_init >> i) & 1u;
     for (uint32_t i = 0; i < n; i++) {
-        gold_x1[i + 31] = gold_x1[i + 3] ^ gold_x1[i];
-        gold_x2[i + 31] = gold_x2[i + 3] ^ gold_x2[i + 2] ^ gold_x2[i + 1] ^ gold_x2[i];
+        x1[i + 31] = x1[i + 3] ^ x1[i];
+        x2[i + 31] = x2[i + 3] ^ x2[i + 2] ^ x2[i + 1] ^ x2[i];
     }
 }
 
+static void gold_init(uint32_t c_init) { gold_fill(gold_x1, gold_x2, c_init); }
+
 static uint32_t gold_bit(uint32_t n) { return gold_x1[1600 + n] ^ gold_x2[1600 + n]; }
+
+static void gold_init2(uint32_t c_init) { gold_fill(gold2_x1, gold2_x2, c_init); }
+
+static uint32_t gold_bit2(uint32_t n) { return gold2_x1[1600 + n] ^ gold2_x2[1600 + n]; }
+
+/* 38.211 7.4.1.4.1 (i_SSB = 2, as everywhere else in the project) */
+#define I_SSB 2
+static uint32_t dmrs_c_init(int nid1, int nid2)
+{
+    uint32_t nid = (uint32_t)(3 * nid1 + nid2);
+    return ((uint32_t)(I_SSB + 1) << 11) * (nid / 4u + 1u)
+         + ((uint32_t)(I_SSB + 1) << 6) + (nid % 4u);
+}
 
 static uint32_t bitrev(uint32_t v, uint32_t bits)
 {
@@ -397,7 +417,7 @@ static int64_t div_round(int64_t v, int64_t d)
     return (v + (v < 0 ? -(d / 2) : (d / 2))) / d;
 }
 
-static int pilot_re(int p) { return p * 4; }
+static int pilot_re(int p) { return (p < 14) ? p * 4 : 184 + (p - 14) * 4; }
 static int is_mid(int r) { return r >= NPSS_RE0 && r < NPSS_RE0 + NREP; }
 
 /* data RE scan order, identical to tools/ssb_plan.py */
@@ -405,7 +425,7 @@ static void data_re_list(uint32_t s, int *out, int *cnt)
 {
     int n = 0;
     for (int r = 0; r < NRE; r++) {
-        if ((r % 4) == 0) continue;                       /* DMRS */
+        if ((r % 4) == 0 && !is_mid(r)) continue;         /* DMRS outside PSS/SSS */
         if ((s == 1 || s == 3) && is_mid(r)) continue;     /* PSS / SSS */
         out[n++] = r;
     }
@@ -508,7 +528,7 @@ int main(void)
 
 
     for (int t = 0; t < NREP; t++) {
-        uint32_t idx = rev4((uint32_t)(NPSS_RE0 + t));
+        uint32_t idx = rev4(SSB_K0 + (uint32_t)(NPSS_RE0 + t));
         /* the fixed-point FFT is normalised by 4096 and pre-scaled by TD_SCALE */
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 0] = td[1 * 2 * FFT_N + 2 * idx] << 4;
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 1] = td[1 * 2 * FFT_N + 2 * idx + 1] << 4;
@@ -564,7 +584,7 @@ int main(void)
 
     /* ---- SSS: 336 hypotheses on the spectrum of symbol 3 ---------------- */
     for (int t = 0; t < NREP; t++) {
-        uint32_t idx = rev4((uint32_t)(NPSS_RE0 + t));
+        uint32_t idx = rev4(SSB_K0 + (uint32_t)(NPSS_RE0 + t));
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 0] = td[3 * 2 * FFT_N + 2 * idx] << 4;
         rxp[(t >> 4) * 32 + 2 * (t & 15) + 1] = td[3 * 2 * FFT_N + 2 * idx + 1] << 4;
     }
@@ -607,15 +627,16 @@ int main(void)
     /* ---- grid from the four spectra: 240 REs of every symbol ------------ */
     for (int s = 0; s < NSYM; s++)
         for (int r = 0; r < NRE; r++) {
-            uint32_t idx = rev4((uint32_t)r);
+            uint32_t idx = rev4(SSB_K0 + (uint32_t)r);
             yw[(s * NRE + r) * 2 + 0] = td[s * 2 * FFT_N + 2 * idx] << 4;
             yw[(s * NRE + r) * 2 + 1] = td[s * 2 * FFT_N + 2 * idx + 1] << 4;
         }
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     (void)yw[2 * NRE - 1];
 
-    /* ---- DMRS channel estimate per symbol (60 pilots, Gold sequence) ---- */
-    gold_init(3u * nid1 + nid2);            /* c_init = 3*N_ID1 + N_ID2 */
+    /* ---- DMRS channel estimate per symbol (28 pilots, 38.211 c_init) --- */
+    gold_init(3u * nid1 + nid2);            /* data scrambling c_init */
+    gold_init2(dmrs_c_init(nid1, nid2));    /* PBCH DMRS c_init       */
     int32_t hre[NSYM], him[NSYM];
     {
         int n = 0;
@@ -623,8 +644,8 @@ int main(void)
         for (int s = 0; s < NSYM; s++) {
             int64_t accr = 0, acci = 0;
             for (int p = 0; p < NPILOT; p++) {
-                int32_t dr = (int32_t)(1 - 2 * (int)gold_bit(2u * (uint32_t)n)) * QPSK;
-                int32_t di = (int32_t)(1 - 2 * (int)gold_bit(2u * (uint32_t)n + 1u)) * QPSK;
+                int32_t dr = (int32_t)(1 - 2 * (int)gold_bit2(2u * (uint32_t)n)) * QPSK;
+                int32_t di = (int32_t)(1 - 2 * (int)gold_bit2(2u * (uint32_t)n + 1u)) * QPSK;
                 int32_t yr = yw[(s * NRE + pilot_re(p)) * 2 + 0];
                 int32_t yi = yw[(s * NRE + pilot_re(p)) * 2 + 1];
                 accr += (int64_t)yr * dr + (int64_t)yi * di;      /* y*d* */

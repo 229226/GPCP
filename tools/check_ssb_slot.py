@@ -88,8 +88,8 @@ def main(path):
     td, grid, payload = sp.build_td()
     x3 = sp._fft(td[3])
     seq = [sp.nr_seq.sss_seq(h, 1) for h in range(NHYP)]
-    gold = [abs(sum(x3[PSS_RE0 + t].real * seq[h][t] for t in range(NREP))) +
-            abs(sum(x3[PSS_RE0 + t].imag * seq[h][t] for t in range(NREP)))
+    gold = [abs(sum(x3[sp.SSB_K0 + PSS_RE0 + t].real * seq[h][t] for t in range(NREP))) +
+            abs(sum(x3[sp.SSB_K0 + PSS_RE0 + t].imag * seq[h][t] for t in range(NREP)))
             for h in range(NHYP)]
     best_h = max(range(NHYP), key=lambda h: gold[h])
     if best_h != true_nid1:
