@@ -22,6 +22,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | B4-SSB 频域链（PSS/SSS/DMRS/QPSK/Polar/MIB） | ✅ |
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
+| PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 0.055 mm²、Fmax≈800 MHz（pre-layout）、24.6 mW@500 MHz（`docs/08`） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
 | M3 规模扩展（8×8）+ 自动映射 + LDPC | ⬜ 未开始 |
 
@@ -47,6 +48,9 @@ python3 tools/sym_pc.py build/linux_boot.log                   # 用 vmlinux 给
 
 # 2) 只跑某个基准
 env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
+
+# 4) PPA：综合 + STA/功耗（Nangate45，~2 分钟；结果进 build/syn/<design>-<freq>MHz）
+env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 ```
 
 验收指标（**期望输出里的关键数字**，改动后若变了要同步本文档）：
@@ -69,6 +73,7 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
 | `make snr-sweep` / `make snr-sweep-hw` | SNR 瀑布：模型 −8/−9 dB 0 误比特、−10 dB 1.5、−12 dB 5.4、−14 dB 7.3（8 seed）；硬件 −8/−10 dB 0、−12 dB 7.2（6 seed）、−14 dB 10.2（6 seed）、−16 dB 15.7（3 seed），周期 4,378,71x；`--csv` 可分批累计（`docs/07` §4.16） |
 | `make -C sim/soc linux-status` | 分级评分：stage 0..8（OpenSBI→kernel→initramfs→/init→uname→/proc→CGRA 用户态→干净退出），并要求 16 个累加器值正确 |
+| `make -C syn sta` | **面积 54,596 µm²**（逻辑，5,072 个 flop 占 49.4%）、**Fmax ≈ 800 MHz**（关键路径 1.244 ns，pre-layout）、**24.6 mW@500 MHz**；存储另算 ≈0.151 mm²（`docs/08`） |
 
 ---
 
@@ -84,7 +89,8 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 | `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
 | `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 13 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`check_*.py`（每个基准的验收器）、`verify.sh` |
-| `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**） | — |
+| `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
+| `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
 
 ---
 
@@ -123,7 +129,11 @@ env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
     信道估计保留小数（`H_SCALE=16`）；整数除法一律**四舍五入**（截断曾让 4 个符号估成 15/16 混杂）。
 15. **任何超时/溢出/池溢出都必须计数并上报**（静默超时是本项目最大隐患）；检查器**不许空转**
     （注入错误必须能失败）。
-16. **P1 真映射（`run-ssb-fid`）三件事**：
+16. **综合（`syn/`）用 slang 前端**：Yosys 自带前端不认 `import cgra_pkg::*;`，必须
+    `yosys -m slang -c syn/cgra_syn.tcl`；`proc` 与 Tcl 内建同名，脚本里要写 `yosys proc`；
+    选存储用类型选择 `delete {t:$mem_v2}`（`c:` 是名字选择，删不掉）。推断存储先删掉再综合，
+    否则 8192×32 的 IMEM 会展开成 30 万 flop + 兆级读多路选择（>10 分钟综合、>8 GB）。
+17. **P1 真映射（`run-ssb-fid`）三件事**：
     ① 时域每个符号是 `[CP=288 | 4096]` 复样本，FFT 必须跑在 **CP 之后的窗口**（`spec[s]`），
     且 in-place 输入/输出用同一指针——写成 `td + s*2*FFT_N` 会同时错窗口和错步长
     （症状：PSS 随机、SSS 判错，但 y 网格"看起来有值"）；

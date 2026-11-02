@@ -167,6 +167,19 @@ module cgra_top #(
   logic [15:0] dma_wleft, dma_bw, dma_nidx, dma_4k;
   logic [31:0] dma_baddr;
   logic        dma_odd, dma_odd_full, dma_last_odd;
+  // copy-engine FSM state (declared before dstate_q: strict SV frontends
+  // reject the forward reference that Verilator tolerated)
+  typedef enum logic [3:0] {
+    D_IDLE     = 4'd0,
+    D_AR       = 4'd1,   // issue the read address (AR) for a burst
+    D_RDESC    = 4'd2,   // collect the 4-beat descriptor
+    D_DESC_SET = 4'd3,   // ring: latch the fetched descriptor
+    D_SIN      = 4'd4,   // streaming in: each R beat goes straight into the spad
+    D_AW       = 4'd5,   // issue the write address (AW)
+    D_SOUT     = 4'd6,   // streaming out: each W beat comes straight from the spad
+    D_BRESP    = 4'd7    // wait for the write response
+  } dstate_e;
+  dstate_e dstate;
   logic [3:0]  dstate_q;
   always_ff @(posedge clk or negedge rst_n)
     if (!rst_n) dstate_q <= D_IDLE; else dstate_q <= dstate;
@@ -209,18 +222,6 @@ module cgra_top #(
                                                             : irq_status) | irq_evts;
     end
   end
-
-  typedef enum logic [3:0] {
-    D_IDLE     = 4'd0,
-    D_AR       = 4'd1,   // issue the read address (AR) for a burst
-    D_RDESC    = 4'd2,   // collect the 4-beat descriptor
-    D_DESC_SET = 4'd3,   // ring: latch the fetched descriptor
-    D_SIN      = 4'd4,   // streaming in: each R beat goes straight into the spad
-    D_AW       = 4'd5,   // issue the write address (AW)
-    D_SOUT     = 4'd6,   // streaming out: each W beat comes straight from the spad
-    D_BRESP    = 4'd7    // wait for the write response
-  } dstate_e;
-  dstate_e dstate;
 
   // scratchpad side of the copy engine: a beat carries two words, so one write
   // port per word (they are different words of the same bank) and two read ports
@@ -293,7 +294,6 @@ module cgra_top #(
       dma_dir     <= 1'b0;
       dma_beat    <= 2'd0;
       dma_bcnt    <= 8'd0;
-      buf_page    <= 1'b0;
       dma_page    <= 1'b0;
       ring_base   <= 32'b0;
       ring_size   <= 16'd0;
@@ -493,6 +493,7 @@ module cgra_top #(
       cycle_cnt  <= 16'd0;
       busy       <= 1'b0;
       done       <= 1'b0;
+      buf_page   <= 1'b0;   // single driver: the copy engine never touches it
     end else begin
       if (wr_en) begin
         if (wr_addr == REG_CTRL) begin
