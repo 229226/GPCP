@@ -38,13 +38,14 @@ def main():
         return 2
 
     if a.split:
-        rows = 4
+        rows = 20
         mc = rm.schedule_bn_split(rows=rows)
     else:
         rows = ROWS
         dfg = rm.build_bn_dfg()
         mc, _lv, _sink, _banks = rm.schedule(dfg, ROWS)
-    spad, exp = rm.bn_case(rows=rows, nmsg=NMSG)
+    nmsg = 24 if a.split else NMSG
+    spad, exp = rm.bn_case(rows=rows, nmsg=nmsg)
 
     os.makedirs(a.out, exist_ok=True)
     prog = os.path.join(a.out, "bn.prog.hex")

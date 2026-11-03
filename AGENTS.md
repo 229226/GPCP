@@ -71,7 +71,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-ssb-fid` | **N_ID2=1、N_ID1=200、i_SSB=3、n_hf=0、DMRS `c_init`=0x12e101、MIB 32/32**，1907 runs，4,411,511 周期（真 38.211 布局：PSS 符号 0 / SSS 符号 2、CP=288、DC 空在 RE 24、72 个导频、38.212 速率匹配 720→512） |
 | `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
-| `run-pdsch-bn1` | 单个变量块过 BN 微码：24 个消息槽 + LLR + 硬判决共 **520 个值**逐值等于黄金模型（2 次阵列运行） |
+| `run-pdsch-bn1` | 单个变量块过 BN 微码：24 个消息槽 + LLR + 硬判决共 **520 个值**逐值等于黄金模型（**1 次阵列运行 / 155 拍 / 2 次 DMA**）。微码不再手写，由 `cgra/tools/gen_bn_prog.py`（规则映射器 link 版）生成 `sw/soc/pdsch_bn_prog.h`，`make` 会自动重生成 |
 | `run-pdsch-gather` | 真实块的 CN→重构→gather→**BN→硬判决** 全链逐值对齐（含 spad 对照）；修掉 `V % Zc` 下溢与 `emit` 目标数组两个 bug |
 | `run-pdsch-bg2` | **真实 BG2 块**的检查节点全遍历（42 行 × 20 提升行），DMA 分块流式进出：`min1/min2/sign` 与黄金模型逐位一致，**84 次阵列运行 / 84 次 DMA / 631,360 周期** |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
@@ -83,7 +83,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `bash cgra/tools/map.sh cgra/arch/gpcp-8x8-mesh.xml cgra/dfg/fir4.dot 1 ilp 60` | `[map] mapped=yes II=1`（约 3.4 s，cost 279，7 个算子落在 5 个 PE）；`fir8` 会超时，见 `docs/10` §7.4 |
 | `python3 cgra/tools/bn_chunks.py --arch cgra/arch/gpcp-3x3-mesh.xml --out build/bn_chunks3` | 24 槽 BN 切成 **18 片全部 mapped**（3×3、II=1，合计 48 s），见 `docs/10` §10 |
 | `python3 cgra/tools/rule_map.py --bn` + `python3 cgra/tools/check_rule_bn.py` | 规则映射器自动生成 BN 微码 **118 拍 × 16 PE**，Verilator 台架 **384 个值 0 差异**（手写是 125 拍）；18 个切块也全部模型自检通过，见 `docs/10` §11 |
-| `python3 cgra/tools/rule_map.py --bn-split` + `check_rule_bn.py --split` | **link 版**：4 PE/行、消息常驻寄存器，**30 拍/4 行**；Zc=20 行 = 5×30 = **150 拍**（v0 是 236，1.57×），台架 96 个值 0 差异，见 `docs/10` §12 |
+| `python3 cgra/tools/rule_map.py --bn-split` + `check_rule_bn.py --split` | **link 版**：4 PE/行、消息常驻寄存器，**31 拍/4 行**；Zc=20 行 = 5×31 = **155 拍**（手写是 250，1.61×），台架 500 个值 0 差异，见 `docs/10` §12 |
 
 ---
 

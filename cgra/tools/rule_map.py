@@ -318,62 +318,66 @@ def simulate(mc, spad, n=4):
 
 
 # ---------------------------------------------------------------- BN 拆分成 4 个 PE/行
-#: 24 槽按 4 个 PE 分组（真实最大列度 23：6+6+6+5）
-BN_GROUPS = ((0, 6), (6, 12), (12, 18), (18, 23))
+#: 24 槽（真实最大列度 23 + 1 个补零槽，与流式微码的 BNSLOT=24 一致）按 4 个 PE 均分
+BN_GROUPS = ((0, 6), (6, 12), (12, 18), (18, 24))
+BN_SPLIT_CYC = 31          # 一个 pass（4 行）的拍数（6 条消息/PE）
 
-
-def schedule_bn_split(rows=4, nmsg=23):
+def schedule_bn_split(rows=20, nmsg=24):
     """k=4 的 BN 调度：一行拆到 4 个**横向相邻**的 PE，消息常驻寄存器，
-    部分和与 acc 走 link（1 跳 1 拍，不需要 spad 往返）。
+    部分和与 acc 走 link（1 跳 1 拍，不碰 spad）。每 4 行一个 pass，每 pass 31 拍。
 
-    时间线（j = 0..3，消息组 [0..5][6..11][12..17][18..22]）：
-      c0..5    LD m0..m5 → r1..r6（末组 5 条）
+    时间线（j = 0..3 是 PE 列，每组 6 条消息；se = 2*6-1 = 11 是最后一个 ADD 的拍）：
+      c0..5    LD m0..m5 → r1..r6
       c6       MOV  r0 = r1
-      c7..11   ADD  r0 += r_i              → 各组部分和
-      c12      p0: LD llr→r7；p2: ADD r0 += 'e'（p3 的部分和）
-      c13      p0: ADD r0 += r7；p1: ADD r0 += 'e'（p2 合并值）
-      c15      p0: ADD r0 += 'e'（p1 合并值）= acc
-      c16      p0: SHR r7 = r0 >> 31；p1: MOV r7 = 'w'（acc 广播）
-      c17      p0: ST r7 → bank 25；p2: MOV r7 = 'w'
-      c18      p3: MOV r7 = 'w'
-      减法    每个 PE 对自己的 6（末组 5）条边做 SUB + ST（2 拍/边）
+      c7..se   ADD  r0 += r_i（r2..r6）        → 各组部分和
+      se+1     p2: ADD r0 += 'e'（p3 的部分和）
+      se+2     p1: ADD r0 += 'e'（p2 合并值）；p0: LD llr → r7
+      se+3     p0: ADD r0 += r7
+      se+4     p0: ADD r0 += 'e'（p1 合并值）= acc
+      se+5     p0: SHR r7 = r0 >> 31；p1: MOV r7 = 'w'
+      se+6     p0: ST r7 → bank 25；p2: MOV r7 = 'w'
+      se+7     p0 开始减法；p3: MOV r7 = 'w'
+      se+6..  各 PE 对自己的 6 条边做 SUB + ST（2 拍/边），最后一个在 c30
     """
-    if nmsg != 23:
-        raise SystemExit("schedule_bn_split 目前只支持 23 个消息槽")
+    if nmsg != 24:
+        raise SystemExit("schedule_bn_split 目前只支持 24 个消息槽（= 23 + 1 个补零）")
     mc = Microcode()
-    start = {0: 18, 1: 17, 2: 18, 3: 19}
+    size = BN_GROUPS[0][1] - BN_GROUPS[0][0]
+    se = 2 * size - 1                     # 最后一个 ADD 的拍
+    start = {0: se + 7, 1: se + 6, 2: se + 7, 3: se + 8}
     for r in range(rows):
+        base = BN_SPLIT_CYC * (r // 4)
+        pr = r % 4
         for j, (lo, hi) in enumerate(BN_GROUPS):
-            pe = r * 4 + j
-            size = hi - lo
+            pe = pr * 4 + j
             for i, k in enumerate(range(lo, hi)):
-                mc.put(i, pe, "ld", dst=1 + i, imm=spad_idx(k, r))
-            mc.put(size, pe, "mov", a=1, dst=0)
+                mc.put(base + i, pe, "ld", dst=1 + i, imm=spad_idx(k, r))
+            mc.put(base + size, pe, "mov", a=1, dst=0)
             for i in range(1, size):
-                mc.put(size + i, pe, "add", a=0, b=1 + i, dst=0)
+                mc.put(base + size + i, pe, "add", a=0, b=1 + i, dst=0)
             if j == 0:
-                mc.put(12, pe, "ld", dst=7, imm=spad_idx(24, r))
-                mc.put(13, pe, "add", a=0, b=7, dst=0)
-                mc.put(15, pe, "add", a=0, b="e", dst=0)        # acc
-                mc.put(16, pe, "shr", a=0, dst=7, imm=31)
-                mc.put(17, pe, "st", a=7, imm=spad_idx(25, r))
+                mc.put(base + se + 2, pe, "ld", dst=7, imm=spad_idx(24, r))
+                mc.put(base + se + 3, pe, "add", a=0, b=7, dst=0)
+                mc.put(base + se + 4, pe, "add", a=0, b="e", dst=0)     # acc
+                mc.put(base + se + 5, pe, "shr", a=0, dst=7, imm=31)
+                mc.put(base + se + 6, pe, "st", a=7, imm=spad_idx(25, r))
             elif j == 1:
-                mc.put(13, pe, "add", a=0, b="e", dst=0)
-                mc.put(16, pe, "mov", a="w", dst=7)              # 收到 acc
+                mc.put(base + se + 2, pe, "add", a=0, b="e", dst=0)
+                mc.put(base + se + 5, pe, "mov", a="w", dst=7)          # 收到 acc
             elif j == 2:
-                mc.put(12, pe, "add", a=0, b="e", dst=0)
-                mc.put(17, pe, "mov", a="w", dst=7)
+                mc.put(base + se + 1, pe, "add", a=0, b="e", dst=0)
+                mc.put(base + se + 6, pe, "mov", a="w", dst=7)
             else:
-                mc.put(18, pe, "mov", a="w", dst=7)
+                mc.put(base + se + 7, pe, "mov", a="w", dst=7)
             accr, dstr = (0, 7) if j == 0 else (7, 0)
             for i, k in enumerate(range(lo, hi)):
-                mc.put(start[j] + 2 * i, pe, "sub", a=accr, b=1 + i, dst=dstr)
-                mc.put(start[j] + 2 * i + 1, pe, "st", a=dstr, imm=spad_idx(k, r))
+                mc.put(base + start[j] + 2 * i, pe, "sub", a=accr, b=1 + i, dst=dstr)
+                mc.put(base + start[j] + 2 * i + 1, pe, "st", a=dstr, imm=spad_idx(k, r))
     return mc
 
 
-def check_bn_split(mc, rows=4, nmsg=23, seed=1234):
-    """拆分成 4 PE/行 的黄金模型自检（激励/期望与 check_bn 相同，行数 = rows）。"""
+def check_bn_split(mc, rows=20, nmsg=24, seed=1234):
+    """拆分成 4 PE/行 的黄金模型自检（激励/期望与 check_bn 相同）。"""
     spad, exp = bn_case(rows=rows, nmsg=nmsg, seed=seed)
     simulate(mc, spad)
     errs = [(idx, spad.get(idx), want) for idx, want in exp.items() if spad.get(idx) != want]
@@ -424,22 +428,23 @@ def main():
                     help="BN 拆成 4 个 PE/行（消息常驻寄存器 + link 广播 acc）")
     ap.add_argument("--dfg", help="任意 dot（叶子 m<k>/llr 沿用 BN 布局，其余从 bank 26 起）")
     ap.add_argument("--instances", type=int, default=16)
+    ap.add_argument("--rows", type=int, default=20, help="--bn-split 处理多少行（Zc=20）")
     ap.add_argument("--emit", help="把微码写成二进制（cycle-major，每字 32 bit）")
     ap.add_argument("--emit-hex", metavar="PREFIX",
                     help="写成台架可读的 PREFIX.prog.hex / PREFIX.preload.hex")
     a = ap.parse_args()
 
     if a.bn_split:
-        rows = min(a.instances, 4)
+        rows = min(a.rows, 20)
         mc = schedule_bn_split(rows=rows)
         errs, nvals = check_bn_split(mc, rows=rows)
-        passes = -(-20 // rows) if rows else 0
-        print(f"ldpc_bn/split4: 每行 4 个 PE、每次 {rows} 行；微码 {mc.cycles} 拍 × {NPES} PE")
+        passes = -(-rows // 4)
+        print(f"ldpc_bn/split4: 每行 4 个 PE、每次 4 行；{rows} 行 = {passes} pass，"
+              f"微码 {mc.cycles} 拍 × {NPES} PE")
         print(f"  自检：{nvals} 个 spad 值，差异 {len(errs)} 个")
         for idx, got, want in errs[:8]:
             print(f"    idx={idx} got=0x{(got or 0):08x} want=0x{want:08x}")
-        print(f"  换算：Zc=20 行 → {passes} 次 × {mc.cycles} 拍 = {passes * mc.cycles} 拍"
-              f"（v0 单 PE/行 是 2 次 × 118 = 236 拍）")
+        print(f"  对照：v0（1 PE/行）20 行 = 2 次 × 118 = 236 拍；手写微码 = 2 × 125 = 250 拍")
         if a.emit_hex:
             spad, _exp = bn_case(rows=rows)
             write_hex(a.emit_hex, mc, spad)
