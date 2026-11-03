@@ -49,7 +49,7 @@ def model_point(snr, seed):
         return (re * re + im * im) ** 0.5
 
     best = max(range(336), key=sss_metric)
-    h, llr = sp.receiver(y, best, nid2)
+    h, llr = sp.receiver(y, best, nid2, eq=EQ)
     bits = sp.sc_decode(llr)
     info = sp.info_indices()
     dec = [bits[i] for i in info]
@@ -101,12 +101,16 @@ def hw_point(snr, seed, bin_path, root):
 
 
 def main():
-    global CHANNEL
+    global CHANNEL, EQ
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", action="store_true")
     ap.add_argument("--hw", action="store_true")
     ap.add_argument("--snr", type=float, nargs="+", default=[-4, -2, 0, 2, 4, 6, 8])
     ap.add_argument("--channel", choices=("awgn", "epa"), default="awgn")
+    ap.add_argument("--eq", choices=("flat", "interp"), default="flat",
+                    help="model equaliser: one gain per symbol (what the CGRA "
+                         "computes) or per-pilot + frequency interpolation "
+                         "(study of what the multipath loss would cost/gain)")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--seeds", type=int, default=1,
                     help="average over seeds 1..N (noise realisations)")
@@ -116,6 +120,7 @@ def main():
                          "(snr,mode,seed0,seeds,nid2_ok,nid1_ok,mib_err,per_seed,cycles)")
     a = ap.parse_args()
     CHANNEL = a.channel
+    EQ = a.eq
     if not (a.model or a.hw):
         ap.error("choose --model and/or --hw")
 
@@ -176,6 +181,7 @@ def main():
 
 
 CHANNEL = "awgn"
+EQ = "flat"
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -252,10 +252,59 @@ def sss_corr(y, nid1, nid2):
     return acc
 
 
-def receiver(y, nid1, nid2):
-    """DMRS channel estimate per symbol, equalise, descramble, soft LLRs."""
+def pilot_estimates(y, s, dr):
+    """One LS estimate per pilot RE (same scaling as the flat estimate).
+
+    A single pilot gives acc = d*conj(d)*h = |d|^2 h, so the scaling is
+    2*QPSK^2/H_SCALE, exactly 1/NPILOT of the flat estimate's denominator.
+    """
+    den1 = 2 * QPSK * QPSK // H_SCALE
+    out = []
+    for p, r in enumerate(pilot_res()):
+        d = dr[s * NPILOT + p]
+        acc = y[s][r] * complex(d.real, -d.imag)
+        out.append((r, complex(int(acc.real // den1), int(acc.imag // den1))))
+    return out
+
+
+def h_interp(ests, r):
+    """Linearly interpolate the pilot estimates to data RE r.
+
+    The pilot spacing is 4, so the weights are (3,1)/4, (2,2)/4, (1,3)/4 -- the
+    whole operation is two multiplies and a shift per component.  REs before the
+    first / after the last pilot hold the nearest pilot value (the layout has
+    no pilots at 0..3 and 184..239, and the 127-RE PSS/SSS band is a 132-RE gap
+    that no interpolation can bridge well -- that is the honest limit of
+    frequency-domain interpolation on this grid).
+    """
+    if r <= ests[0][0]:
+        return ests[0][1]
+    for i in range(len(ests) - 1):
+        r0, h0 = ests[i]
+        r1, h1 = ests[i + 1]
+        if r0 <= r <= r1:
+            if r == r0:
+                return h0
+            if r == r1:
+                return h1
+            a = r - r0
+            b = r1 - r
+            return complex((b * h0.real + a * h1.real) // (a + b),
+                           (b * h0.imag + a * h1.imag) // (a + b))
+    return ests[-1][1]
+
+
+def receiver(y, nid1, nid2, eq="flat"):
+    """DMRS channel estimate per symbol, equalise, descramble, soft LLRs.
+
+    eq="flat"   one complex gain per symbol (what the CGRA computes today);
+    eq="interp" one LS estimate per pilot RE, linearly interpolated in frequency
+                (a model-side study of how much the multipath loss is
+                recoverable; the hardware still does the flat version).
+    """
     dr = dmrs_values(pbch_dmrs_c_init(nid1, nid2))
     h = []
+    h_re = []
     for s in range(NSYM):
         acc = 0j
         for p, r in enumerate(pilot_res()):
@@ -263,6 +312,10 @@ def receiver(y, nid1, nid2):
             acc += y[s][r] * complex(d.real, -d.imag)
         den = NPILOT * 2 * QPSK * QPSK // H_SCALE
         h.append(complex(int(acc.real // den), int(acc.imag // den)))
+        if eq == "interp":
+            h_re.append(pilot_estimates(y, s, dr))
+        else:
+            h_re.append(None)
 
     scr = gold(nid_hash(nid1, nid2), NPOL)
     llr = [0] * NPOL
@@ -271,8 +324,9 @@ def receiver(y, nid1, nid2):
         for r in data_res()[s]:
             if n + 1 >= NPOL:
                 break
-            eq = y[s][r] * complex(h[s].real, -h[s].imag)
-            for soft in (eq.real, eq.imag):
+            hv = h[s] if h_re[s] is None else h_interp(h_re[s], r)
+            eqv = y[s][r] * complex(hv.real, -hv.imag)
+            for soft in (eqv.real, eqv.imag):
                 v = int(soft) >> LLR_SHIFT
                 v = max(-2000000, min(2000000, v))
                 llr[n] = -v if scr[n] else v
@@ -332,9 +386,9 @@ def subcarriers():
 TD_SCALE = 256                   # pre-scale the samples so the fixed-point FFT keeps precision
 
 
-def _dump_bin(path, snr_db=None, seed=1):
+def _dump_bin(path, snr_db=None, seed=1, channel="awgn"):
     import struct
-    td, grid, payload = build_td(snr_db=snr_db, seed=seed)
+    td, grid, payload = build_td(snr_db=snr_db, seed=seed, channel=channel)
     with open(path, "wb") as f:
         for s in range(NSYM):
             for c in td[s]:
@@ -441,8 +495,9 @@ if __name__ == "__main__":
                    help="awgn = flat channel, epa = 3GPP multi-tap Rayleigh")
     a = ap.parse_args()
     if a.cmd == "dump":
-        _dump_bin(a.file, snr_db=a.snr, seed=a.seed)
+        _dump_bin(a.file, snr_db=a.snr, seed=a.seed, channel=a.channel)
         print(f"[info] wrote {a.file}"
-              + (f" (SNR {a.snr} dB, seed {a.seed})" if a.snr is not None else ""))
+              + (f" (SNR {a.snr} dB, seed {a.seed}, {a.channel})"
+                 if a.snr is not None else ""))
     else:
         ap.print_help()
