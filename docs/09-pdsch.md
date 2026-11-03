@@ -354,3 +354,24 @@ spad vs gath after DMA-in: 0 diffs
 
 下一步：在这个"有 CN、有块 0"的版本里，**DMA in 之后立刻 dump spad 与 gath 比对**
 （本轮的无 CN 版本已验证 0 差异），若此时不一致，就能定位到"前序操作污染"的具体位置。
+
+## 5. P1 进行中：把 52 块 × 8 迭代搬进硬件（`run-pdsch-iter`）
+
+现状（本轮）：
+
+- 新增 `sw/soc/pdsch_iter_bm.c` + `tools/check_pdsch_iter.py`（支持 `--iters=N`）：
+  "CN（`cn_prog` 172 拍，M1 双页 ping-pong）→ 逐边重构 → 每块 gather / BN(`bn_prog` 155 拍) / scatter"；
+- 两块微码都由规则映射器生成（`gen_cn_prog.py` / `gen_bn_prog.py`），
+  已在纯 CGRA 台架与 SoC 上逐值验证（§4.2 的四段结论仍然成立）；
+- "变量块 → 边表"（`blk_*`）在启动时预计算，避免每个块扫 42×10 条边；
+- **尚未拿到判据结果**：8 次迭代在 Verilator 里超过 1,000 万周期、单次运行 >10 分钟；
+  1 次迭代也 >3 分钟（该 SoC 台架约 10⁴ 周期/秒），所以还没开始逐值对账。
+- 顺带修掉一个地址重叠：`LLR`（52×20 字）原本与 `GATH` 共用 0x8003B000，
+  现在 `LLR`=0x8003A000、`GATH`=0x8003C000、`BOUT`=0x8003D000。
+
+下一步（按代价排序）：
+
+1. 先只跑 `ITERS=1`，用 `check_pdsch_iter.py --iters=1` 定位"哪一段/哪个块开始不一致"
+   （此前最后一条线索是"BN 跑的那份 spad 输入缺 slot 0"，本轮换了缓冲地址，需重测）；
+2. 判据稳定后再把 `ITERS` 调回 8（长目标，不进 `verify.sh quick`）；
+3. CPU 侧 gather/scatter 的取模与内存访问是主要开销，必要时用"预旋转索引表"消掉 `% ZC`。

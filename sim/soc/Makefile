@@ -116,6 +116,13 @@ run-pdsch-bn1: all
 		--dump $(ROOT)/$(OBJ)/pdsch_bn1_dump.txt
 	python3 $(ROOT)/tools/check_pdsch_bn1.py $(ROOT)/$(OBJ)/pdsch_bn1_dump.txt
 
+# P1: full BG2 LDPC iteration (52 variable blocks x 8) on the generated microcode
+run-pdsch-iter: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_iter_bm.bin@0x80000000 --results 0x80010000 --nwords 530 \
+		--dump $(ROOT)/$(OBJ)/pdsch_iter_dump.txt
+	python3 $(ROOT)/tools/check_pdsch_iter.py $(ROOT)/$(OBJ)/pdsch_iter_dump.txt
+
 # Debug: per-edge reconstruction + 24-slot gather for variable block 0
 run-pdsch-gather: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
