@@ -50,6 +50,7 @@ python3 tools/sym_pc.py build/linux_boot.log                   # 用 vmlinux 给
 env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 
 # 4) PPA：综合 + STA/功耗（Nangate45，~2 分钟；结果进 build/syn/<design>-<freq>MHz）
+env -u LD_LIBRARY_PATH make -C syn tools                 # 一次性：拉本项目自己的 iEDA + Nangate45
 env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 ```
 
