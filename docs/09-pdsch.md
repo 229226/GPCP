@@ -127,6 +127,16 @@ python3 tools/pdsch_plan.py --snr -10 -8 -6 -4 -2 0 --seeds 4
 所以问题落在"提升移位（lift shift）在校验坐标 ↔ 变量坐标的转换，以及块内原地回写"
 这一层——目前 gather/scatter 用的是 `j = (i − sh) mod Zc`，仍与模型对不上。
 
-该基准（`pdsch_dec_bm.c` / `check_pdsch_dec.py` / `run-pdsch-dec`）**已回退**，不留在仓库里；
-上面的数字与结论保留在此，下一轮从"只跑 1 个变量块、把它 24 槽的输入/输出逐值打出来"
-继续定位（预计一轮可收敛）。
+按"只跑 1 个变量块"的办法做了隔离实验（`sw/soc/pdsch_bn1_bm.c` +
+`tools/check_pdsch_bn1.py`，`make -C sim/soc run-pdsch-bn1`）：
+
+- 24 个消息槽 + LLR（bank 24）+ 硬判决（bank 25）共 **520 个值**，随意输入下
+  硬件输出**逐值**等于黄金模型（`v = llr + Σm`、`m' = v − m`、`hard = sign(v)`），
+  2 次阵列运行、2 次 DMA、0 错误。
+
+**结论：BN 微码本身正确，问题在整条调度里**——即"变量块按提升移位 gather/scatter 到
+`msg[r][k][·]`"这一步，或 CPU 侧逐边重构的循环。这个隔离基准保留在仓库里（`run-pdsch-bn1`），
+下一轮把 gather 后的 24 槽输入再和模型比一次即可定位。
+
+完整迭代的基准（`pdsch_dec_bm.c` / `check_pdsch_dec.py` / `run-pdsch-dec`）**已回退**，
+不留在仓库里；上面的数字与结论保留在此。
