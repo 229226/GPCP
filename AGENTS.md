@@ -19,6 +19,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | M1/B2 CVA6 驱动 CGRA（真 SoC + AXI4 突发） | ✅ |
 | M2/B2.5 L1 数据面（spad 双页、DMA+描述符环、PLIC、接收链） | ✅ |
 | M2.5 FFT 256/1024/4096 + slot 时基 | ✅ |
+| P2 第一步 PDSCH SISO（模型级，LDPC BG2） | ✅ 模型：TB 80 bit → CRC24A → BG2(Zc=20) → 速率匹配/加扰/QPSK → AWGN/两径 → min-sum 译码 → CRC；−6 dB 起 4/4 全过（`docs/09`）。硬件 kernel + `run-pdsch` 待做 |
 | B4-SSB 频域链（PSS/SSS/DMRS/QPSK/Polar/MIB） | ✅ |
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
