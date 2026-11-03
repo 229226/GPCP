@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<!--
+  GPCP CGRA 3x3 mesh —— **切块映射专用的小阵列**（PE 定义与 gpcp-8x8-mesh.xml 完全一致）
+
+  为什么需要它：CGRA-ME 的 ILP（SCIP）在"大而对称"的阵列上很难找到第一个可行解——
+  同一个 7 算子子图，3x3 上 1.8~24.8 s 出解，4x4 上 45 s 仍 0 个解，8x8 上 60 s 仍 0 个解
+  （实测见 docs/10 §10）。所以做法是：**先在最小可容纳的阵列上映射单个子块，
+  再把子块整体摆到 8x8 的实际位置**（tile-and-place）。
+-->
+<cgra>
+  <module name="pe">
+    <input name="in0"/> <!-- north -->
+    <input name="in1"/> <!-- east  -->
+    <input name="in2"/> <!-- west  -->
+    <input name="in3"/> <!-- south -->
+    <output name="out"/>
+    <inst name="func" module="FuncUnit" if="(empty (mode))"/>
+    <inst name="func" module="FuncUnit" if="(not (empty (mode)))" op="(mode)"/>
+    <inst name="register" module="Register"/>
+    <wire name="in_a"/> <wire name="in_b"/> <wire name="func_out"/>
+    <connection select-from="this.in0 this.in1 this.in2 this.in3 register.out" to="in_a in_b"/>
+    <connection from="in_a" to="func.in_a"/>
+    <connection from="in_b" to="func.in_b"/>
+    <connection select-from="in_a in_b func.out" to="func_out"/>
+    <connection from="func_out" to="register.in"/>
+    <!-- 关键：输出只能来自寄存器（1 拍），不能是 func_out 的直通。
+         本项目的 PE 只有 1 拍延迟的 link 寄存器（docs/02 §1.1），
+         若保留直通，CGRA-ME 会给出"同一拍跨 PE 组合直连"的映射，真机做不出来
+         （实测见 docs/10 §10.3）。 -->
+    <connection from="register.out" to="this.out"/>
+  </module>
+
+  <architecture col="5" row="5" cgra-cols="3" cgra-rows="3">
+    <mesh out-north=".out"
+          out-east=".out"
+          out-west=".out"
+          out-south=".out"
+          in-north=".in0"
+          in-east=".in1"
+          in-west=".in2"
+          in-south=".in3"
+          io="every-side-port">
+      <interior row="1">
+        <block module="pe" mode="add sub mul and or xor shl shr"/>
+      </interior>
+    </mesh>
+  </architecture>
+</cgra>

@@ -61,6 +61,27 @@ int main(int argc, char** argv)
         use_ilp ? MapperType::ILPMapper : MapperType::AnnealMapper, arch, timelimit, args);
     Mapping m = mapper->mapOpGraph(opgraph, II);
     std::cout << "[map] mapped=" << (m.isMapped() ? "yes" : "no") << " II=" << m.getII() << "\n";
-    if (m.isMapped()) m.outputMapping();
+
+    // 自己打印"算子 -> 拍:PE"表：CGRA-ME 的 outputMapping() 对多扇出 val 会抛
+    // map::at（实测，docs/10 §10），所以关键信息走 getMapping() 自己取。
+    if (m.isMapped()) {
+        const auto& mm = m.getMapping();
+        std::cout << "[map] placement:\n";
+        for (auto* op : opgraph->op_nodes) {
+            auto it = mm.find(op);
+            std::cout << "[map] op " << op->name << " " << op->opcode << " ";
+            if (it == mm.end() || it->second.empty()) {
+                std::cout << "unmapped\n";
+                continue;
+            }
+            for (auto* n : it->second) std::cout << n->cycle << ":" << n->name << " ";
+            std::cout << "\n";
+        }
+        try {
+            m.outputMapping();
+        } catch (const std::exception& e) {
+            std::cout << "[map] outputMapping() 失败: " << e.what() << "\n";
+        }
+    }
     return m.isMapped() ? 0 : 1;
 }
