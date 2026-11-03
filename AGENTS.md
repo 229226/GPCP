@@ -71,9 +71,9 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-ssb-fid` | **N_ID2=1、N_ID1=200、i_SSB=3、n_hf=0、DMRS `c_init`=0x12e101、MIB 32/32**，1907 runs，4,411,511 周期（真 38.211 布局：PSS 符号 0 / SSS 符号 2、CP=288、DC 空在 RE 24、72 个导频、38.212 速率匹配 720→512） |
 | `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
-| `run-pdsch-bn1` | 单个变量块过 BN 微码：24 个消息槽 + LLR + 硬判决共 **520 个值**逐值等于黄金模型（**1 次阵列运行 / 155 拍 / 2 次 DMA**）。微码不再手写，由 `cgra/tools/gen_bn_prog.py`（规则映射器 link 版）生成 `sw/soc/pdsch_bn_prog.h`，`make` 会自动重生成 |
+| `run-pdsch-bn1` | 单个变量块过 BN 微码：24 个消息槽 + LLR + 硬判决共 **520 个值**逐值等于黄金模型（**1 次阵列运行 / 155 拍 / 2 次 DMA**，仿真总周期 **11,916**）。微码由 `cgra/tools/gen_bn_prog.py`（规则映射器 link 版）生成，**IMEM 走拷贝引擎批量装载**（`gpcp_cgra_imem_load`，逐字写时总周期 25,558，2.15×） |
 | `run-pdsch-gather` | 真实块的 CN→重构→gather→**BN→硬判决** 全链逐值对齐（含 spad 对照）；修掉 `V % Zc` 下溢与 `emit` 目标数组两个 bug |
-| `run-pdsch-bg2` | **真实 BG2 块**的检查节点全遍历（42 行 × 20 提升行），DMA 分块流式进出：`min1/min2/sign` 与黄金模型逐位一致，**42 次阵列运行 / 84 次 DMA / 20,946 周期**（微码由 `cgra/tools/gen_cn_prog.py` 生成、程序只装一次；原来 84 次运行 / 631,360 周期） |
+| `run-pdsch-bg2` | **真实 BG2 块**的检查节点全遍历（42 行 × 20 提升行），DMA 分块流式进出：`min1/min2/sign` 与黄金模型逐位一致，**42 次阵列运行 / 84 次 DMA / 20,946 拍（仿真总周期 165,088）**（微码由 `gen_cn_prog.py` 生成 + IMEM 批量装载；原来是 84 次运行 / 631,360 周期） |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |

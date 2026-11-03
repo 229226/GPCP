@@ -9,7 +9,8 @@
 #define CN_PROG_CYCLES 172
 #define CN_PROG_PES    16
 
-static const unsigned int cn_prog[172 * 16] = {
+static const unsigned int cn_prog[172 * 16]
+    __attribute__((aligned(8))) = {
 0x766303c0u,0x766303c1u,0x766303c2u,0x766303c3u,0x766303c4u,0x766303c5u,0x766303c6u,0x766303c7u,
 0x766303c8u,0x766303c9u,0x766303cau,0x766303cbu,0x766303ccu,0x766303cdu,0x766303ceu,0x766303cfu,
 0x766403c0u,0x766403c1u,0x766403c2u,0x766403c3u,0x766403c4u,0x766403c5u,0x766403c6u,0x766403c7u,

@@ -38,7 +38,8 @@ def main():
         f.write("#ifndef PDSCH_BN_PROG_H\n#define PDSCH_BN_PROG_H\n\n")
         f.write(f"#define BN_PROG_CYCLES {mc.cycles}\n")
         f.write(f"#define BN_PROG_PES    {rm.NPES}\n\n")
-        f.write(f"static const unsigned int bn_prog[{mc.cycles} * {rm.NPES}] = {{\n")
+        f.write(f"static const unsigned int bn_prog[{mc.cycles} * {rm.NPES}]\n"
+                f"    __attribute__((aligned(8))) = {{\n")
         for i, w in enumerate(words):
             f.write(f"0x{w:08x}u,")
             if (i + 1) % 8 == 0:

@@ -36,8 +36,9 @@ static uint32_t runs, dmas, errs;
 
 static void load_prog(void)
 {
-    for (uint32_t i = 0; i < CYC_BN * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, bn_prog[i]);
+    /* 拷贝引擎直接写 IMEM（8B/beat），比逐字 AXI-Lite 写快一个数量级 */
+    if (gpcp_cgra_imem_load(CGRA_BASE, bn_prog, CYC_BN * NPES) != 0)
+        errs++;
 }
 
 static void array_run(void)

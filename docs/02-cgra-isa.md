@@ -90,7 +90,7 @@
 | `0x0010` | W | `DMA_SRC`：RAM 源/目的字节地址（32 bit） |
 | `0x0014` | W | `DMA_DST`：scratchpad 起始索引（页内 `bank*32 + word`） |
 | `0x0018` | W | `DMA_LEN`：传输字数（≤ 1024，超出被截断） |
-| `0x001C` | W | `DMA_CTRL`：`[0]` start，`[1]` dir（1 = spad→RAM），`[2]` clear done |
+| `0x001C` | W | `DMA_CTRL`：`[0]` start，`[1]` dir（1 = spad→RAM），`[2]` clear done，`[3]` **目标 = IMEM**（批量装程序） |
 | `0x001C` | R | DMA 状态：`[0]` busy，`[1]` done |
 | `0x0020` | W | `BUF_PAGE`：阵列使用的 scratchpad 页（0/1） |
 | `0x0024` | W | `DMA_PAGE`：拷贝引擎写入/读出用的页（0/1） |
@@ -115,6 +115,11 @@
 
 - PE 编号：`pe = row*N + col`（行优先，`(0,0)` 为左上）。
 - AXI 写为单 outstanding；`wr_en` 在总线握手后一拍产生脉冲。
+- **IMEM 批量装载**：`DMA_CTRL[3]=1` 时拷贝引擎把 8B beat 直接写进指令存储器
+  （`word index = DMA_DST + n`，`row = idx>>4`、`lane = idx&15`），一个 beat 两条指令；
+  宿主用 `gpcp_cgra_imem_load(base, prog, words)`（内部按 1024 字分块）。
+  程序数组必须 **8 字节对齐**（AXI 拍宽）。实测每字比逐字 AXI-Lite 写省 ~5.5 周期
+  （`docs/10` §14 有 A/B 数据）。
 - **启动一律用 `RUN`（0x0004）一次写**：`cycles | page<<16 | start<<31`；写 `CTRL.start`
   仍然可用，但必须先单独写 `NUM_CYCLES` 并插入 `fence`（原因见下）。
 - 运行中读 PE 窗口返回当前值（调试用）；建议仅在 idle 时预装载。

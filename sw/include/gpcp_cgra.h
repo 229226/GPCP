@@ -46,6 +46,7 @@
 #define GPCP_CGRA_DMA_START    (1u << 0)
 #define GPCP_CGRA_DMA_DIR_OUT  (1u << 1)   /* spad -> RAM */
 #define GPCP_CGRA_DMA_CLRDONE  (1u << 2)
+#define GPCP_CGRA_DMA_TGT_IMEM (1u << 3)   /* 目标改成 IMEM（批量装程序） */
 
 #define GPCP_CGRA_DMA_BUSY     (1u << 0)
 #define GPCP_CGRA_DMA_DONE     (1u << 1)
@@ -234,6 +235,44 @@ static inline void gpcp_cgra_dma_start(uintptr_t base, uintptr_t ram_addr,
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     gpcp_cgra_write(base, GPCP_CGRA_DMA_CTRL,
                     GPCP_CGRA_DMA_START | (dir_out ? GPCP_CGRA_DMA_DIR_OUT : 0u));
+}
+
+/* ------------------------------------------------------ IMEM bulk load (DMA) */
+/* 把 RAM 里的程序直接打进指令存储器：拷贝引擎以 8B/beat 读 RAM，一个 beat
+ * 写两条指令（word index = 0..8191，行 = idx>>4、lane = idx&15）。
+ * 一次最多 1024 字（DMA_LEN 上限），超过的分块；每块都要等 done + 清 done。
+ * 相比逐字 AXI-Lite 写（~4 拍/字），这是 2 字/beat 的突发，快一个数量级。 */
+static inline int gpcp_cgra_imem_load(uintptr_t base, const uint32_t *prog,
+                                      uint32_t words)
+{
+    uint32_t off = 0;
+    if (!prog || words == 0u || words > GPCP_CGRA_IMEM_WORDS)
+        return -1;
+    while (off < words) {
+        uint32_t n = words - off;
+        uint32_t guard = 0;
+        if (n > 1024u)
+            n = 1024u;
+        while (gpcp_cgra_read(base, GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_BUSY)
+            if (++guard > 100000u)
+                return -2;
+        gpcp_cgra_write(base, GPCP_CGRA_DMA_SRC,
+                        (uint32_t)(uintptr_t)(prog + off));
+        gpcp_cgra_write(base, GPCP_CGRA_DMA_DST, off);      /* IMEM word index */
+        gpcp_cgra_write(base, GPCP_CGRA_DMA_LEN, n);
+        gpcp_cgra_write(base, GPCP_CGRA_DMA_STRIDE, 0);
+        gpcp_cgra_write(base, GPCP_CGRA_DMA_ROW, 0);
+        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+        gpcp_cgra_write(base, GPCP_CGRA_DMA_CTRL,
+                        GPCP_CGRA_DMA_START | GPCP_CGRA_DMA_TGT_IMEM);
+        guard = 0;
+        while (!(gpcp_cgra_read(base, GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE))
+            if (++guard > 100000u)
+                return -3;
+        gpcp_cgra_write(base, GPCP_CGRA_DMA_CTRL, GPCP_CGRA_DMA_CLRDONE);
+        off += n;
+    }
+    return 0;
 }
 
 /* -------------------------------------------------- completion interrupt (CGRA) */

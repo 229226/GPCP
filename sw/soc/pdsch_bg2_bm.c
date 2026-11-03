@@ -60,12 +60,12 @@ static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t errs, runs, dmas;
 
-/* 微码不再手写：`cgra/tools/gen_cn_prog.py`（规则映射器）生成 pdsch_cn_prog.h，
- * 一次装进 IMEM，之后每个检查节点行只做 DMA + 一次 array_run。 */
+/* 微码不再手写：`cgra/tools/gen_cn_prog.py`（规则映射器）生成 pdsch_cn_prog.h。
+ * 装载走拷贝引擎（DMA 直接写 IMEM，8B/beat），不再逐字 AXI-Lite 写。 */
 static void load_prog(void)
 {
-    for (uint32_t i = 0; i < CYC_TOTAL * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, cn_prog[i]);
+    if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CYC_TOTAL * NPES) != 0)
+        errs++;
 }
 
 static void array_run(void)

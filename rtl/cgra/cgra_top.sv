@@ -145,6 +145,7 @@ module cgra_top #(
   logic [15:0] dma_row_cnt;
   logic [15:0] dma_idx;      // word index inside the transfer
   logic        dma_busy, dma_done, dma_dir, dma_irq_evt;
+  logic        dma_tgt;      // 1 = write IMEM instead of the scratchpad
   logic        buf_page, dma_page;
 
   // descriptor ring: descriptors live in SoC RAM (32 bytes each)
@@ -257,14 +258,23 @@ module cgra_top #(
   logic [31:0] spad_rd_data0, spad_rd_data1;
 
   // the beat is consumed only on the handshake (valid && ready), never on valid alone
-  assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready;
+  // dma_tgt = IMEM: the same beat stream feeds the instruction memory instead of
+  // the scratchpad (bulk program load; see docs/02 §3.1).
+  assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && !dma_tgt;
   assign spad_dma_addr0  = dma_cur[9:0];
   assign spad_dma_wdata0 = m_axi_rdata[31:0];
-  assign spad_dma_we1    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && !dma_last_odd;
+  assign spad_dma_we1    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && !dma_tgt && !dma_last_odd;
   assign spad_dma_addr1  = dma_nxt_cur[9:0];
   assign spad_dma_wdata1 = m_axi_rdata[63:32];
   assign spad_rd_addr0   = dma_cur[9:0];
   assign spad_rd_addr1   = dma_nxt_cur[9:0];
+
+  // IMEM side of the copy engine: one 8-byte beat carries two instruction words
+  logic        dma_imem_we;
+  logic [15:0] dma_imem_idx, dma_imem_nidx;
+  assign dma_imem_we   = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && dma_tgt;
+  assign dma_imem_idx  = dma_cur;       // word index 0..8191 (row = idx>>4)
+  assign dma_imem_nidx = dma_nxt_cur;
 
   // ---------------- AXI4 master ----------------
   always_comb begin
@@ -304,6 +314,7 @@ module cgra_top #(
       dma_busy    <= 1'b0;
       dma_done    <= 1'b0;
       dma_irq_evt <= 1'b0;
+      dma_tgt     <= 1'b0;
       dma_idx     <= 16'd0;
       dma_src     <= 32'b0;
       dma_dst     <= 16'b0;
@@ -505,6 +516,7 @@ module cgra_top #(
             dma_beat   <= 2'd0;
             dma_bcnt   <= 8'd0;
             dma_dir    <= wr_data[1];
+            dma_tgt    <= wr_data[3];   // [3] = 1: 目标是 IMEM（批量装程序）
             ring_mode  <= 1'b0;
             rd_desc    <= 1'b0;
             wr_status  <= 1'b0;
@@ -562,9 +574,16 @@ module cgra_top #(
         end else if ((wr_addr >= REG_IMEM_BASE) &&
                      (wr_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
           // word index w = (wr_addr - base) >> 2 -> row w >> 4, lane w[3:0]
-          imem[(wr_addr - REG_IMEM_BASE) >> 6][((wr_addr - REG_IMEM_BASE) >> 2) & 16'hF]
+          imem[((wr_addr - REG_IMEM_BASE) >> 6)][((wr_addr - REG_IMEM_BASE) >> 2) & 16'hF]
               <= wr_data;
         end
+      end else if (dma_imem_we) begin
+        // 拷贝引擎直接写 IMEM：一个 8B beat 装两条指令（cur 与 cur+1）
+        if (DBG) $display("[cgra-imem] dma idx=%0d lo=%h hi=%h", dma_imem_idx,
+                          m_axi_rdata[31:0], m_axi_rdata[63:32]);
+        imem[dma_imem_idx[12:4]][dma_imem_idx[3:0]] <= m_axi_rdata[31:0];
+        if (!dma_last_odd)
+          imem[dma_imem_nidx[12:4]][dma_imem_nidx[3:0]] <= m_axi_rdata[63:32];
       end else if (busy) begin
         if (cycle_cnt == num_cycles - 16'd1) begin
           busy <= 1'b0;
