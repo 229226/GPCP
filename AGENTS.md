@@ -84,7 +84,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `python3 cgra/tools/bn_chunks.py --arch cgra/arch/gpcp-3x3-mesh.xml --out build/bn_chunks3` | 24 槽 BN 切成 **18 片全部 mapped**（3×3、II=1，合计 48 s），见 `docs/10` §10 |
 | `python3 cgra/tools/rule_map.py --bn` + `python3 cgra/tools/check_rule_bn.py` | 规则映射器自动生成 BN 微码 **118 拍 × 16 PE**，Verilator 台架 **384 个值 0 差异**（手写是 125 拍）；18 个切块也全部模型自检通过，见 `docs/10` §11 |
 | `python3 cgra/tools/rule_map.py --bn-split` + `check_rule_bn.py --split` | **link 版**：4 PE/行、消息常驻寄存器，**31 拍/4 行**；Zc=20 行 = 5×31 = **155 拍**（手写是 250，1.61×），台架 500 个值 0 差异，见 `docs/10` §12 |
-| `python3 cgra/tools/rule_map.py --cn` + `check_rule_cn.py` | CN（min1/min2/sign）：单程序 **172 拍一次跑完 20 行**，台架 60 个值 0 差异；`run-pdsch-bg2` 从 84 次运行 / 631,360 周期降到 **42 次 / 20,946 周期**，见 `docs/10` §13 |
+| `python3 cgra/tools/rule_map.py --cn` + `check_rule_cn.py` | CN（min1/min2/sign）：单程序 **172 拍一次跑完 20 行**，台架 60 个值 0 差异；`run-pdsch-bg2` 从 84 次运行 / 631,360 周期降到 **42 次 / 19,097 周期**（M1 运行时双页重叠后），见 `docs/10` §13~§15 |
 
 ---
 
@@ -96,7 +96,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `rtl/soc/` | `gpcp_soc.sv`：CVA6 + RAM + CGRA 窗口 + PLIC + CLINT + UART | `R_CGRA` 分支、64-bit store 拆分 |
 | `sim/cgra/` | 纯 CGRA 台架（AXI 从机模型） | `tb_cgra.cpp`：`--prog/--dma-mem/--dma-ops/--ring-desc/--spad-dump` |
 | `sim/soc/` | SoC 台架 + 所有 `run-*` 目标 | `Makefile`（每个目标 = 一条 load + dump + check） |
-| `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `ring_*` |
+| `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
 | `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
 | `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 14 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`check_*.py`（每个基准的验收器）、`verify.sh` |

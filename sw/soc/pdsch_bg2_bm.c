@@ -26,6 +26,7 @@
  * against the Python model (same LLR stream, same base graph).
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
+#include "../include/gpcp_cgra_rt.h"
 #include "pdsch_cn_prog.h"
 #include "../include/ldpc_bg2.h"
 
@@ -68,41 +69,26 @@ static void load_prog(void)
         errs++;
 }
 
-static void array_run(void)
+static void array_run(uint32_t page)
 {
-    gpcp_cgra_array_start(CGRA_BASE, 0, CYC_TOTAL);
-    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-    uint32_t spins = 0;
-    while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_BUSY) {
-        if (++spins > 200000u) { errs++; break; }
-    }
+    if (rt_array_run(CGRA_BASE, page, CYC_TOTAL) != 0)
+        errs++;
     runs++;
 }
 
-static int dma_idle(void)
+/* M1 运行时（sw/include/gpcp_cgra_rt.h）：发起与等待分开，让拷贝引擎与阵列重叠 */
+static void dma_begin(uintptr_t src, uint32_t dst, uint32_t len, uint32_t dir,
+                      uint32_t page, uint32_t stride, uint32_t row)
 {
-    uint32_t guard = 0;
-    while (mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_BUSY)
-        if (++guard > 200000u) { errs++; return -1; }
-    return 0;
-}
-
-static int dma_wait(void)
-{
-    uint32_t guard = 0;
-    while (!(mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE))
-        if (++guard > 200000u) { errs++; return -1; }
-    return 0;
-}
-
-static void dma_2d(uintptr_t src, uint32_t dst, uint32_t len, uint32_t dir,
-                   uint32_t stride, uint32_t row)
-{
-    if (dma_idle())
-        return;
-    gpcp_cgra_dma_start(CGRA_BASE, src, dst, len, 0, dir, stride, row);
-    dma_wait();
+    if (rt_dma_begin(CGRA_BASE, src, dst, len, page, dir, stride, row) != 0)
+        errs++;
     dmas++;
+}
+
+static void dma_wait(void)
+{
+    if (rt_dma_wait(CGRA_BASE) != 0)
+        errs++;
 }
 
 /* --------------------------------------------------------------- payload */
@@ -131,17 +117,42 @@ int main(void)
 
     load_prog();          /* 两个半镜像合成一个程序，只装一次 */
 
-    /* the sentinel constant lives in bank 30 (one word per lifted row) */
-    for (uint32_t i = 0; i < ZC; i++)
+    /* the sentinel constant must exist in BOTH pages: the array indexes it
+     * page-relative (bank 30 of buf_page = absolute bank 30 or 62) */
+    for (uint32_t i = 0; i < ZC; i++) {
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + 32, i), (uint32_t)SENTINEL);
+    }
 
+    /* -------- M1 运行时：双页 ping-pong，DMA 与阵列重叠 --------
+     * 行 r 的阵列用页 r&1，同时把行 r+1 预取到另一页；
+     * 阵列结束后再从页 r&1 把结果搬出（此时阵列空闲，页可以复用给 r+2）。 */
     uint32_t t0 = mtime();
+    uint32_t acc_in = 0, acc_arr = 0, acc_out = 0;
+    dma_begin((uintptr_t)&msg[0][0][0], 0, NBANKS_IN * ZC, 0, 0, 32, ZC);
+    dma_wait();
     for (uint32_t r = 0; r < BG2_ROWS; r++) {
-        dma_2d((uintptr_t)&msg[r][0][0], 0, NBANKS_IN * ZC, 0, 32, ZC);
-        array_run();      /* 一次跑完 20 个提升行（16 + 4） */
-        dma_2d((uintptr_t)&res[r][0][0], 10 * 32, 3 * ZC, 1, 32, ZC);
+        uint32_t ta = mtime();
+        if (r + 1 < BG2_ROWS)
+            dma_begin((uintptr_t)&msg[r + 1][0][0], 0, NBANKS_IN * ZC, 0,
+                      (r + 1) & 1u, 32, ZC);
+        array_run(r & 1u);                 /* 与预取并行 */
+        acc_arr += mtime() - ta;
+        ta = mtime();
+        if (r + 1 < BG2_ROWS)
+            dma_wait();                    /* 预取还没完就等它 */
+        acc_in += mtime() - ta;
+        ta = mtime();
+        dma_begin((uintptr_t)&res[r][0][0], 10 * 32, 3 * ZC, 1, r & 1u, 32, ZC);
+        dma_wait();
+        acc_out += mtime() - ta;
     }
     uint32_t cyc = mtime() - t0;
+
+    /* 分项计时（放在结果区之后的空位，判据不读这里）：DMA 进 / 阵列 / DMA 出 */
+    out[2528] = acc_in;
+    out[2529] = acc_arr;
+    out[2530] = acc_out;
 
     out[0] = 0xCAFEBABEu;
     out[1] = BG2_ROWS;
