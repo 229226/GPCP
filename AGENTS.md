@@ -15,7 +15,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 
 | 里程碑 | 状态 |
 |---|---|
-| M0 CGRA 微架构 + 微码工具链（13 kernel） | ✅ |
+| M0 CGRA 微架构 + 微码工具链（14 kernel） | ✅ |
 | M1/B2 CVA6 驱动 CGRA（真 SoC + AXI4 突发） | ✅ |
 | M2/B2.5 L1 数据面（spad 双页、DMA+描述符环、PLIC、接收链） | ✅ |
 | M2.5 FFT 256/1024/4096 + slot 时基 | ✅ |
@@ -36,8 +36,8 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用都这样跑
 
 # 1) 一条命令全量验收（推荐先跑这个，确认基线）
-bash tools/verify.sh quick            # 实测 ~288 s：13 kernel + 6 个 SoC 目标（含 run-ssb-fid / run-ssb-slot）
-bash tools/verify.sh full             # 实测 ~370 s：13 kernel + 全部 16 个 SoC 基准（17 步全 PASS）
+bash tools/verify.sh quick            # 实测 ~288 s：14 kernel + 6 个 SoC 目标（含 run-ssb-fid / run-ssb-slot）
+bash tools/verify.sh full             # 实测 ~370 s：14 kernel + 全部 16 个 SoC 基准（17 步全 PASS）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 make verify / make verify-full        # 同上两个的 make 包装
 
@@ -59,7 +59,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 | 目标 | 关键期望 |
 |---|---|
-| `make test`（= `tools/cgra.py test --rebuild`） | `ALL TESTS PASSED`，13 个 kernel 逐位 |
+| `make test`（= `tools/cgra.py test --rebuild`） | `ALL TESTS PASSED`，14 个 kernel 逐位（含 LDPC 的 `ldpc_cn` 52 拍 / `ldpc_bn` 19 拍） |
 | `run` | matmul 逐位，≈2059 周期 |
 | `run-dma` / `run-irq` | 3 / 2 个 slot 的 H 值一致；中断数 4 |
 | `run-ring` | 4 个描述符消费、head=4、**0.70 周期/字** |
@@ -90,7 +90,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `ring_*` |
 | `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
-| `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 13 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`check_*.py`（每个基准的验收器）、`verify.sh` |
+| `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 14 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`check_*.py`（每个基准的验收器）、`verify.sh` |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
 

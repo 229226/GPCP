@@ -539,6 +539,58 @@ def kernel_ldpc_cn(a, b, c, d) -> Kernel:
                   spad_dump=(spad_addr(0, 0), 16 * 32))
 
 
+def kernel_ldpc_bn(ch, msgs) -> Kernel:
+    """LDPC variable (bit) node: v = ch + sum(m_cv); m_vc = v - m_cv.
+
+    Per PE = one variable node:
+        bank i word 0        channel LLR
+        bank i words 1..4    four incoming check-node messages
+        bank i words 8..11   four outgoing messages
+        bank i word 12       hard decision (-1 = bit 1, 0 = bit 0)
+    One PE therefore mirrors one lifted variable node (Zc parallel nodes map to
+    the 16 PEs by running the kernel once per Zc/16 block).
+    """
+    prog = Program()
+    for i in range(16):
+        prog.set(0, i, "ld", dst=0, imm=spad_idx(i, 0))
+        for k in range(4):
+            prog.set(1 + k, i, "ld", dst=1 + k, imm=spad_idx(i, 1 + k))
+        prog.set(5, i, "add", a=0, b=1, dst=5)
+        prog.set(6, i, "add", a=5, b=2, dst=5)
+        prog.set(7, i, "add", a=5, b=3, dst=5)
+        prog.set(8, i, "add", a=5, b=4, dst=5)          # v = ch + sum
+        for k in range(4):
+            prog.set(9 + 2 * k, i, "sub", a=5, b=1 + k, dst=6)
+            prog.set(10 + 2 * k, i, "st", a=6, imm=spad_idx(i, 8 + k))
+        prog.set(17, i, "shr", a=5, dst=6, imm=31)      # -1 if the bit is 1
+        prog.set(18, i, "st", a=6, imm=spad_idx(i, 12))
+    cycles = 19
+
+    preload = []
+    for i in range(16):
+        preload.append((spad_addr(i, 0), sx16(ch[i]) & 0xFFFFFFFF))
+        for k in range(4):
+            preload.append((spad_addr(i, 1 + k), sx16(msgs[k][i]) & 0xFFFFFFFF))
+
+    def check(st):
+        errs = []
+        for i in range(16):
+            v = sx16(ch[i]) + sum(sx16(msgs[k][i]) for k in range(4))
+            for k in range(4):
+                exp = v - sx16(msgs[k][i])
+                got = st.get(("spad", spad_addr(i, 8 + k)))
+                if got != (exp & 0xFFFFFFFF):
+                    errs.append(f"BN{i} m{k}: got 0x{got:08x} want 0x{exp & 0xFFFFFFFF:08x}")
+            exp = -1 if v < 0 else 0
+            got = st.get(("spad", spad_addr(i, 12)))
+            if got != (exp & 0xFFFFFFFF):
+                errs.append(f"BN{i} hard: got 0x{got:08x} want 0x{exp & 0xFFFFFFFF:08x}")
+        return errs
+
+    return Kernel("ldpc_bn", cycles, prog.build(cycles), preload, [], check,
+                  spad_dump=(spad_addr(0, 0), 16 * 32))
+
+
 def kernel_dma_pingpong() -> Kernel:
     """Copy engine fills both scratchpad pages; the array runs LS on page 1.
 
@@ -807,6 +859,13 @@ def build_mmse_kernel() -> Kernel:
     return kernel_mmse(hr, hi, yr, yi)
 
 
+def build_ldpc_bn_kernel() -> Kernel:
+    rnd = random.Random(43)
+    ch = [rnd.randint(-800, 800) for _ in range(16)]
+    msgs = [[rnd.randint(-400, 400) for _ in range(16)] for _ in range(4)]
+    return kernel_ldpc_bn(ch, msgs)
+
+
 def build_ldpc_kernel() -> Kernel:
     rnd = random.Random(41)
     a = [rnd.randint(-300, 300) for _ in range(16)]
@@ -969,6 +1028,7 @@ def kernel_registry():
            "fft_block": build_fft_block_kernel,
            "chnest16": build_chnest_kernel,
            "mmse16": build_mmse_kernel, "ldpc_cn": build_ldpc_kernel,
+           "ldpc_bn": build_ldpc_bn_kernel,
            "dma_pingpong": kernel_dma_pingpong}
 
 

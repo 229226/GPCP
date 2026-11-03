@@ -42,7 +42,17 @@ TB(80 bit) → CRC24A → 38.212 LDPC(BG2, Kb=6, Zc=20, N=1040)
    已验证的那套，留到硬件步骤一起换。
 
 **尚未实现（下一步清单）**：38.212 §5.4.2.2 比特交织、HARQ 软合并与 RV、PDCCH/DCI 与
-MCS 表、层映射/预编码（SISO）、CGRA kernel（CN/BN/解速率匹配/LLR）与 `run-pdsch` 基准。
+MCS 表、层映射/预编码（SISO）、解速率匹配/LLR 的微码、以及 `run-pdsch` 基准。
+
+**已经落到 CGRA 上的部分**（本轮）：
+
+| kernel | 拍数 | 内容 |
+|---|---|---|
+| `ldpc_cn`（已有） | 52 | 4 入 min-sum 检查节点：`min1`/`min2`/符号积 |
+| `ldpc_bn`（新增） | 19 | 变量节点：`v = ch + Σm`，`m' = v − m`，并输出硬判决（−1 = 1） |
+
+一个 kernel 覆盖 **16 个提升后的节点**（Zc/16 次运行覆盖一个编码块），两者都已进入
+`python3 tools/cgra.py test` 的逐位回归（14/14，`ALL TESTS PASSED`）。
 
 ## 3. 实测（`tools/pdsch_plan.py`）
 
