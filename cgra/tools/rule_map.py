@@ -309,6 +309,10 @@ def simulate(mc, spad, n=4):
                     v = _s32(_s32(x) >> (imm & 31))
                 elif op == "shl":
                     v = _s32(x << (imm & 31))
+                elif op == "max":
+                    v = x if _s32(x) > _s32(y) else y
+                elif op == "min":
+                    v = x if _s32(x) < _s32(y) else y
                 else:
                     raise SystemExit(f"仿真器不支持 op {op}")
             regs[pe][dst] = v & 0xFFFFFFFF
@@ -384,6 +388,85 @@ def check_bn_split(mc, rows=20, nmsg=24, seed=1234):
     return errs, len(exp)
 
 
+# ---------------------------------------------------------------- CN（min1/min2/sign）
+CN_EDGES = 10            # BG2 最大检查节点度数（不足补 sentinel）
+CN_SENTINEL_BANK = 30
+CN_CYC_HALF = 86         # 3 初始化 + 10 边 × 8 拍 + 3 写回 = 86
+CN_CYC_TOTAL = 2 * CN_CYC_HALF
+
+
+def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK):
+    """一次程序跑完 20 个提升行（PE0..15 处理 0..15，PE0..3 处理 16..19）。
+
+    每个 PE / 提升行：对 10 条边（不足补 +32767）算 min1、min2、sign。
+    每条边 8 拍：`LD / SHR(符号位) / XOR / SUB（|x|）/ XOR(sign 累加) /
+    MIN / MAX / MIN（min1/min2 更新）`；两个 min 值成对更新只是把 lo/hi
+    先算出来，**并不省指令**（插入 (min1,min2) 本身就要 4 拍）—— 真正省的是
+    "20 行一次跑完、程序只装一次"（见 docs/10 §13）。
+    寄存器：r3=min1, r4=min2, r5=sign；r0/r1/r2 与 r6/r7 是两条边的临时量。
+    """
+    if edges % 2:
+        raise SystemExit("schedule_cn 要求偶数条边（成对处理）")
+    mc = Microcode()
+    for half, (npe, word_base) in enumerate(((16, 0), (4, 16))):
+        base = half * CN_CYC_HALF
+        for pe in range(npe):
+            w = word_base + pe
+            cyc = base
+            mc.put(cyc, pe, "ld", dst=3, imm=spad_idx(sentinel_bank, w)); cyc += 1
+            mc.put(cyc, pe, "ld", dst=4, imm=spad_idx(sentinel_bank, w)); cyc += 1
+            mc.put(cyc, pe, "xor", a=5, b=5, dst=5); cyc += 1
+            for p in range(edges // 2):
+                ka, kb = 2 * p, 2 * p + 1
+                # 边 a：r0 = x, r1 = 符号位, r2 = |x|
+                mc.put(cyc, pe, "ld", dst=0, imm=spad_idx(ka, w)); cyc += 1
+                mc.put(cyc, pe, "shr", a=0, dst=1, imm=31); cyc += 1
+                mc.put(cyc, pe, "xor", a=0, b=1, dst=2); cyc += 1
+                mc.put(cyc, pe, "sub", a=2, b=1, dst=2); cyc += 1
+                mc.put(cyc, pe, "xor", a=5, b=1, dst=5); cyc += 1
+                # 边 b：r6 = x, r7 = 符号位, r0 = |x|
+                mc.put(cyc, pe, "ld", dst=6, imm=spad_idx(kb, w)); cyc += 1
+                mc.put(cyc, pe, "shr", a=6, dst=7, imm=31); cyc += 1
+                mc.put(cyc, pe, "xor", a=6, b=7, dst=0); cyc += 1
+                mc.put(cyc, pe, "sub", a=0, b=7, dst=0); cyc += 1
+                mc.put(cyc, pe, "xor", a=5, b=7, dst=5); cyc += 1
+                # {lo,hi} 插入 (min1,min2)
+                mc.put(cyc, pe, "min", a=2, b=0, dst=1); cyc += 1     # lo
+                mc.put(cyc, pe, "max", a=2, b=0, dst=6); cyc += 1     # hi
+                mc.put(cyc, pe, "min", a=4, b=6, dst=7); cyc += 1     # min(min2,hi)
+                mc.put(cyc, pe, "max", a=3, b=1, dst=2); cyc += 1     # max(min1,lo)
+                mc.put(cyc, pe, "min", a=2, b=7, dst=4); cyc += 1     # min2'
+                mc.put(cyc, pe, "min", a=3, b=1, dst=3); cyc += 1     # min1'
+            mc.put(cyc, pe, "st", a=3, imm=spad_idx(10, w)); cyc += 1
+            mc.put(cyc, pe, "st", a=4, imm=spad_idx(11, w)); cyc += 1
+            mc.put(cyc, pe, "st", a=5, imm=spad_idx(12, w)); cyc += 1
+    return mc
+
+
+def cn_case(rows=20, edges=CN_EDGES, sentinel=32767, seed=99):
+    """CN 激励（spad 索引口径）+ 黄金 min1/min2/sign。"""
+    rnd = random.Random(seed)
+    spad, exp = {}, {}
+    for w in range(rows):
+        for k in range(edges):
+            spad[spad_idx(k, w)] = rnd.randint(-512, 512) & 0xFFFFFFFF
+        spad[spad_idx(CN_SENTINEL_BANK, w)] = sentinel
+        col = [_s32(spad[spad_idx(k, w)]) for k in range(edges)]
+        ab = sorted(abs(x) for x in col)
+        exp[spad_idx(10, w)] = ab[0] & 0xFFFFFFFF
+        exp[spad_idx(11, w)] = ab[1] & 0xFFFFFFFF
+        neg = sum(1 for x in col if x < 0)
+        exp[spad_idx(12, w)] = (-1 if neg % 2 else 0) & 0xFFFFFFFF
+    return spad, exp
+
+
+def check_cn(mc, rows=20, seed=99):
+    spad, exp = cn_case(rows=rows, seed=seed)
+    simulate(mc, spad)
+    errs = [(i, spad.get(i), w) for i, w in exp.items() if spad.get(i) != w]
+    return errs, len(exp)
+
+
 def bn_case(rows=16, nmsg=23, seed=1234):
     """BN 的随机激励 + 黄金结果（spad 索引口径，和微码里的 imm 一致）。"""
     rnd = random.Random(seed)
@@ -426,6 +509,8 @@ def main():
     ap.add_argument("--bn", action="store_true", help="整条 BN（24 槽）")
     ap.add_argument("--bn-split", action="store_true",
                     help="BN 拆成 4 个 PE/行（消息常驻寄存器 + link 广播 acc）")
+    ap.add_argument("--cn", action="store_true",
+                    help="CN 的 min1/min2/sign（成对归约，20 个提升行一次跑完）")
     ap.add_argument("--dfg", help="任意 dot（叶子 m<k>/llr 沿用 BN 布局，其余从 bank 26 起）")
     ap.add_argument("--instances", type=int, default=16)
     ap.add_argument("--rows", type=int, default=20, help="--bn-split 处理多少行（Zc=20）")
@@ -433,6 +518,21 @@ def main():
     ap.add_argument("--emit-hex", metavar="PREFIX",
                     help="写成台架可读的 PREFIX.prog.hex / PREFIX.preload.hex")
     a = ap.parse_args()
+
+    if a.cn:
+        mc = schedule_cn()
+        errs, nvals = check_cn(mc)
+        print(f"ldpc_cn: 成对 min1/min2 归约，20 个提升行一次跑完；"
+              f"微码 {mc.cycles} 拍 × {NPES} PE")
+        print(f"  自检：{nvals} 个 spad 值，差异 {len(errs)} 个")
+        for idx, got, want in errs[:6]:
+            print(f"    idx={idx} got=0x{(got or 0):08x} want=0x{want:08x}")
+        print(f"  对照：手写 CN 每行 2 × 90 = 180 拍（本版 {mc.cycles} 拍）")
+        if a.emit_hex:
+            spad, _exp = cn_case()
+            write_hex(a.emit_hex, mc, spad)
+            print(f"  台架激励写入 {a.emit_hex}.prog.hex / .preload.hex")
+        return 0 if not errs else 1
 
     if a.bn_split:
         rows = min(a.rows, 20)

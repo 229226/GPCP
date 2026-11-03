@@ -22,11 +22,15 @@ $(BUILD)/%.elf: %.c start.S link.ld | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S $< -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/$*.dis
 
-# BN 微码由规则映射器生成（pdsch_bn1_bm.c 只 include 它）；改了映射器就重新生成
+# BN/CN 微码由规则映射器生成（对应 .c 只 include 它）；改了映射器就重新生成
 pdsch_bn_prog.h: ../../cgra/tools/gen_bn_prog.py ../../cgra/tools/rule_map.py
 	python3 ../../cgra/tools/gen_bn_prog.py
 
+pdsch_cn_prog.h: ../../cgra/tools/gen_cn_prog.py ../../cgra/tools/rule_map.py
+	python3 ../../cgra/tools/gen_cn_prog.py
+
 $(BUILD)/pdsch_bn1_bm.elf: pdsch_bn_prog.h
+$(BUILD)/pdsch_bg2_bm.elf: pdsch_cn_prog.h
 
 # interrupt test: needs the trap-vector startup instead of the plain one
 $(BUILD)/irq_bm.elf: irq_bm.c start_irq.S link.ld | $(BUILD)
