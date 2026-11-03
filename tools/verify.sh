@@ -64,8 +64,8 @@ run kernels make -C "$ROOT" test
 # expected numbers are tied to the SSB_RE layout (SSB_K0, NPILOT, DMRS c_init),
 # so it silently went stale once when the layout changed and only `full` caught
 # it.  It is one of the longer benchmarks, but still worth the coverage.
-SOCCORE="run-ring run-rxchain run-fft run-ssbfft run-ssb-fid run-ssb-slot"
-[ "$MODE" = full ] && SOCCORE="run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-fftprobe run-slot"
+SOCCORE="run-ring run-rxchain run-pdsch run-fft run-ssbfft run-ssb-fid run-ssb-slot"
+[ "$MODE" = full ] && SOCCORE="run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-fftprobe run-slot"
 for t in $SOCCORE; do
     run "$t" make -C "$ROOT/sim/soc" "$t"
 done
