@@ -25,7 +25,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
 | PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 54,148 µm²、**Fmax 1.05 GHz**（0.911 ns pre-layout，1 GHz +0.05 ns slack）、23.8/28.7/32.1 mW @500/800/1000 MHz；IMEM 已重构为 512×512 宽字 1R1W；**spad 实测每 bank 需 16R/16W（~2.6 mm²，bank 化必须先改 kernel 数据布局）**（`docs/08` §3.2、§4.1） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
-| M3 规模扩展（8×8）+ 自动映射 + LDPC | ⬜ 未开始 |
+| M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`）+ CGRA-ME 库驱动/DFG 生成已打通：`fir4`/`fir6` 映射成功（7~11 算子，10~20 s），`fir8` 以上 ILP 求不出首个可行解；退火不可用（悬空 val 段错误、8×8 不收敛）。见 `docs/10` §7.3/§7.4 |
 
 ---
 
@@ -80,6 +80,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `make snr-sweep` / `make snr-sweep-hw` | SNR 瀑布：模型 −8/−9 dB 0 误比特、−10 dB 1.5、−12 dB 5.4、−14 dB 7.3（8 seed）；硬件 −8/−10 dB 0、−12 dB 7.2（6 seed）、−14 dB 10.2（6 seed）、−16 dB 15.7（3 seed），周期 4,378,71x；`--csv` 可分批累计（`docs/07` §4.16） |
 | `make -C sim/soc linux-status` | 分级评分：stage 0..8（OpenSBI→kernel→initramfs→/init→uname→/proc→CGRA 用户态→干净退出），并要求 16 个累加器值正确 |
 | `make -C syn sta` | **逻辑面积 54,148 µm²**（5,072 个 flop 占 49.6%）、**Fmax 1.05 GHz**（0.911 ns，pre-layout；1 GHz 下 +0.05 ns slack）、**23.8 mW@500 MHz**（28.7@800、32.1@1000）；存储另算：IMEM 0.138 mm²（512×512 1R1W）、spad ~2.6（现状 16R16W 交叉开关）⇒ 合计 ~2.8 mm²；0.27~0.35 mm² 需先重排 kernel 数据布局，`docs/08` §3 |
+| `bash cgra/tools/map.sh cgra/arch/gpcp-8x8-mesh.xml cgra/dfg/fir4.dot 1 ilp 60` | `[map] mapped=yes II=1`（8×8 上 7 个算子各占一个 PE，cost 95 / 下界 72，约 10~20 s）；`fir8` 会超时，见 `docs/10` §7.4 |
 
 ---
 
