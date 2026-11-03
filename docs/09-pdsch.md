@@ -138,5 +138,14 @@ python3 tools/pdsch_plan.py --snr -10 -8 -6 -4 -2 0 --seeds 4
 `msg[r][k][·]`"这一步，或 CPU 侧逐边重构的循环。这个隔离基准保留在仓库里（`run-pdsch-bn1`），
 下一轮把 gather 后的 24 槽输入再和模型比一次即可定位。
 
-完整迭代的基准（`pdsch_dec_bm.c` / `check_pdsch_dec.py` / `run-pdsch-dec`）**已回退**，
-不留在仓库里；上面的数字与结论保留在此。
+进一步按"验证 gather 后的 24 槽输入"做了一次隔离（`sw/soc/pdsch_gather_bm.c` +
+`tools/check_pdsch_gather.py`，`make -C sim/soc run-pdsch-gather`）：
+
+- **逐边重构完全正确**：22 条边的 22×20 个重构消息与模型逐值一致；
+- **gather 正确**，但前提是先把提升移位对 Zc 取模：`j = (i − (V % Zc)) mod Zc`。
+  直接用表里的 V（最大 175）做 `i + Zc − V` 会**无符号下溢**，20 个值全错——这就是
+  完整迭代里 28% 不一致的主要原因（只有 V > Zc 的边出错）。
+
+修好后的完整迭代基准仍然不通过（约 50% 硬判决不同），已再次回退；剩余待查点集中在
+BN 回写/散布（scatter 的逆映射与 `emit` 目标数组都改过，但未收敛）。本轮的**已修bug**
+（V % Zc、`emit` 目标数组）与隔离基准都保留在仓库里，`run-pdsch-gather` 进入回归。
