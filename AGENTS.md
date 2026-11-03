@@ -25,7 +25,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
 | PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 54,148 µm²、**Fmax 1.05 GHz**（0.911 ns pre-layout，1 GHz +0.05 ns slack）、23.8/28.7/32.1 mW @500/800/1000 MHz；IMEM 已重构为 512×512 宽字 1R1W；**spad 实测每 bank 需 16R/16W（~2.6 mm²，bank 化必须先改 kernel 数据布局）**（`docs/08` §3.2、§4.1） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
-| M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`，每跳 1 拍）+ CGRA-ME 库驱动/DFG 生成/自动切块（`cgra/tools/`）已打通：24 槽 BN 切成 18 片在 3×3 上 **18/18 mapped**（48 s）；但 CGRA-ME 给不出可靠落点、整图 ILP 只到 ~7 算子，退火不可用。见 `docs/10` §7.3/§7.4/§10 |
+| M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`，每跳 1 拍）+ CGRA-ME 库驱动/自动切块（`cgra/tools/`）已打通：24 槽 BN 切成 18 片在 3×3 上 **18/18 mapped**（48 s）。**规则映射器 v0** 已能 DFG→微码：BN **118 拍 × 16 PE** 在 Verilator 上 **0 差异**（手写 125 拍）。CGRA-ME 仍给不出可靠落点，退火不可用。见 `docs/10` §7.3/§7.4/§10/§11 |
 
 ---
 
@@ -82,6 +82,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `make -C syn sta` | **逻辑面积 54,148 µm²**（5,072 个 flop 占 49.6%）、**Fmax 1.05 GHz**（0.911 ns，pre-layout；1 GHz 下 +0.05 ns slack）、**23.8 mW@500 MHz**（28.7@800、32.1@1000）；存储另算：IMEM 0.138 mm²（512×512 1R1W）、spad ~2.6（现状 16R16W 交叉开关）⇒ 合计 ~2.8 mm²；0.27~0.35 mm² 需先重排 kernel 数据布局，`docs/08` §3 |
 | `bash cgra/tools/map.sh cgra/arch/gpcp-8x8-mesh.xml cgra/dfg/fir4.dot 1 ilp 60` | `[map] mapped=yes II=1`（约 3.4 s，cost 279，7 个算子落在 5 个 PE）；`fir8` 会超时，见 `docs/10` §7.4 |
 | `python3 cgra/tools/bn_chunks.py --arch cgra/arch/gpcp-3x3-mesh.xml --out build/bn_chunks3` | 24 槽 BN 切成 **18 片全部 mapped**（3×3、II=1，合计 48 s），见 `docs/10` §10 |
+| `python3 cgra/tools/rule_map.py --bn` + `python3 cgra/tools/check_rule_bn.py` | 规则映射器自动生成 BN 微码 **118 拍 × 16 PE**，Verilator 台架 **384 个值 0 差异**（手写是 125 拍）；18 个切块也全部模型自检通过，见 `docs/10` §11 |
 
 ---
 
@@ -97,6 +98,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
 | `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 14 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`check_*.py`（每个基准的验收器）、`verify.sh` |
+| `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**）、`tools/bn_chunks.py`（BN 切块）、`tools/map.sh`（调 CGRA-ME）、`tools/check_rule_bn.py`（台架对账） |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
 
