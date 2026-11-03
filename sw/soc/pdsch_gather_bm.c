@@ -42,6 +42,7 @@
 #define LCG_SEED         7u
 #define CYC_BN           130
 #define BN_SLOTS         24
+#define SENTINEL_BANK    30   /* outside the BN slots (0..23) and results (10..12) */
 
 /* fixed buffers outside .bss (the linker would otherwise put them on top of
  * the result area at 0x8001_0000) */
@@ -85,7 +86,7 @@ static void build_half(uint32_t which, uint32_t word_base)
         emit(prog_half[which], cyc++, pe, GPCP_OP_XOR, 0, 1, 2, 0);
         emit(prog_half[which], cyc++, pe, GPCP_OP_SUB, 2, 1, 3, 0);
         emit(prog_half[which], cyc++, pe, GPCP_OP_MOV, 3, 0, 5, 0);          /* min1 */
-        emit(prog_half[which], cyc++, pe, GPCP_OP_LD, 0, 0, 6, SPAD_IDX(13, w)); /* +inf */
+        emit(prog_half[which], cyc++, pe, GPCP_OP_LD, 0, 0, 6, SPAD_IDX(SENTINEL_BANK, w)); /* +inf */
         emit(prog_half[which], cyc++, pe, GPCP_OP_SHR, 1, 0, 7, 0);          /* sign = x0>>31 */
         for (uint32_t k = 1; k < NBANKS_IN; k++) {
             emit(prog_half[which], cyc++, pe, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(k, w));
@@ -217,7 +218,7 @@ int main(void)
     build_half(0, 0);
     build_half(1, 16);
     for (uint32_t i = 0; i < ZC; i++)
-        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(13, i), (uint32_t)SENTINEL);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
 
     uint32_t t0 = mtime();
     for (uint32_t r = 0; r < BG2_ROWS; r++) {

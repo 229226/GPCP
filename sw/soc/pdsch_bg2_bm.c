@@ -36,6 +36,7 @@
 #define NPES             16
 #define NBANKS_IN        10        /* 10 edges, sentinel-padded */
 #define SENTINEL         32767
+#define SENTINEL_BANK    30   /* outside the BN slots (0..23) and results (10..12) */
 #define CYC_HALF         90
 #define LCG_SEED         1u
 
@@ -79,7 +80,7 @@ static void build_half(uint32_t which, uint32_t word_base)
         emit(which, cyc++, pe, GPCP_OP_XOR, 0, 1, 2, 0);
         emit(which, cyc++, pe, GPCP_OP_SUB, 2, 1, 3, 0);
         emit(which, cyc++, pe, GPCP_OP_MOV, 3, 0, 5, 0);          /* min1 */
-        emit(which, cyc++, pe, GPCP_OP_LD, 0, 0, 6, SPAD_IDX(13, w)); /* +inf */
+        emit(which, cyc++, pe, GPCP_OP_LD, 0, 0, 6, SPAD_IDX(SENTINEL_BANK, w)); /* +inf */
         emit(which, cyc++, pe, GPCP_OP_SHR, 1, 0, 7, 0);          /* sign = x0>>31 */
         for (uint32_t k = 1; k < NBANKS_IN; k++) {
             emit(which, cyc++, pe, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(k, w));
@@ -170,7 +171,7 @@ int main(void)
 
     /* the sentinel constant lives in bank 13 (one word per lifted row) */
     for (uint32_t i = 0; i < ZC; i++)
-        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(13, i), (uint32_t)SENTINEL);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
 
     uint32_t t0 = mtime();
     for (uint32_t r = 0; r < BG2_ROWS; r++) {
