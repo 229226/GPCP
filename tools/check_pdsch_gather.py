@@ -96,6 +96,29 @@ def main(path):
                 if got != (msg[r][k][fn(sh, i)] & 0xFFFFFFFF):
                     diff += 1
         print(f"[info] gather convention {name}: {diff} differing values")
+    # ---- BN output, signed 32-bit, separate hardware buffers ----
+    # input dump at word 500, output dump at word 1020 (no aliasing)
+    def sx(v):
+        return v - 0x100000000 if v >= 0x80000000 else v
+    n = len(mine)
+    slots = [[msg[r][k][(i - sh) % ZC] for i in range(ZC)] for (r, k, sh) in mine]
+    bad_bn = 0
+    for i in range(ZC):
+        v = llr[TARGET * ZC + i] + sum(slots[k][i] for k in range(n))
+        exp_hard = -1 if v < 0 else 0
+        if sx(words[1020 + 25 * ZC + i]) != exp_hard:
+            bad_bn += 1
+            if bad_bn <= 3:
+                print(f"[diff] hard row {i}: got {sx(words[1020 + 25 * ZC + i])} "
+                      f"want {exp_hard}")
+        for k in range(n):
+            exp = v - slots[k][i]
+            got = sx(words[1020 + k * ZC + i])
+            if got != exp:
+                bad_bn += 1
+                if bad_bn <= 3:
+                    print(f"[diff] BN slot {k} row {i}: got {got} want {exp}")
+    print(f"[info] BN output vs model: {bad_bn} differing values")
     return 0
 
 

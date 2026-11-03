@@ -119,7 +119,7 @@ run-pdsch-bn1: all
 # Debug: per-edge reconstruction + 24-slot gather for variable block 0
 run-pdsch-gather: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
-	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_gather_bm.bin@0x80000000 --results 0x80010000 --nwords 500 \
+	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_gather_bm.bin@0x80000000 --results 0x80010000 --nwords 2060 \
 		--dump $(ROOT)/$(OBJ)/pdsch_gather_dump.txt
 	python3 $(ROOT)/tools/check_pdsch_gather.py $(ROOT)/$(OBJ)/pdsch_gather_dump.txt
 
