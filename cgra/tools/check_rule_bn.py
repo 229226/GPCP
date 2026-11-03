@@ -28,6 +28,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tb", default=os.path.join(ROOT, "sim/cgra/build/Vcgra_axi_lite"))
     ap.add_argument("--out", default=os.path.join(ROOT, "build/rule_bn"))
+    ap.add_argument("--split", action="store_true",
+                    help="用 link 版（4 PE/行）的调度，而不是 v0 的单 PE/行")
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
 
@@ -35,9 +37,14 @@ def main():
         print(f"missing bench {a.tb}（先 `make -C sim/cgra`）", file=sys.stderr)
         return 2
 
-    dfg = rm.build_bn_dfg()
-    mc, _lv, _sink, _banks = rm.schedule(dfg, ROWS)
-    spad, exp = rm.bn_case(rows=ROWS, nmsg=NMSG)
+    if a.split:
+        rows = 4
+        mc = rm.schedule_bn_split(rows=rows)
+    else:
+        rows = ROWS
+        dfg = rm.build_bn_dfg()
+        mc, _lv, _sink, _banks = rm.schedule(dfg, ROWS)
+    spad, exp = rm.bn_case(rows=rows, nmsg=NMSG)
 
     os.makedirs(a.out, exist_ok=True)
     prog = os.path.join(a.out, "bn.prog.hex")

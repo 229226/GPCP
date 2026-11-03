@@ -242,10 +242,28 @@ def _sx16(v):
     return v - 0x10000 if v & 0x8000 else v
 
 
-def simulate(mc, spad):
-    """按 ISA 语义逐拍执行（寄存器堆 + spad；本原型不用 link）。"""
+def _neighbour(pe, d, n=4):
+    """PE 的 N/E/S/W 邻居编号（越界返回 None）。"""
+    r, c = divmod(pe, n)
+    if d == "n":
+        r -= 1
+    elif d == "s":
+        r += 1
+    elif d == "e":
+        c += 1
+    elif d == "w":
+        c -= 1
+    if not (0 <= r < n and 0 <= c < n):
+        return None
+    return r * n + c
+
+
+def simulate(mc, spad, n=4):
+    """按 ISA 语义逐拍执行：寄存器堆 + spad + link（link = 上一拍写出的值，NOP/ST 保持）。"""
     regs = [[0] * 8 for _ in range(NPES)]
+    link = [0] * NPES                        # 本拍邻居可见的 link（上一拍写入值）
     for cyc in range(mc.cycles):
+        nxt = list(link)                     # 默认保持
         for pe in range(NPES):
             w = mc.words.get((cyc, pe))
             if not w:
@@ -253,10 +271,7 @@ def simulate(mc, spad):
             op, a, b, dst, imm = w
             if op == "nop":
                 continue
-            if op == "ld":
-                regs[pe][dst] = spad.get(imm, 0)
-                continue
-            # 源选择器（本原型只用寄存器与 zero/imm）
+
             def val(s):
                 if isinstance(s, int):
                     return regs[pe][s]
@@ -264,31 +279,105 @@ def simulate(mc, spad):
                     return 0
                 if s == "imm":
                     return imm
+                if s == "link":
+                    return link[pe]
+                if s in ("n", "e", "s", "w"):
+                    nb = _neighbour(pe, s, n)
+                    return 0 if nb is None else link[nb]
                 raise SystemExit(f"仿真器不支持源 {s}")
-            x, y = val(a), val(b)
-            if op == "mov":
-                r = x
-            elif op == "add":
-                r = _s32(x + y)
-            elif op == "sub":
-                r = _s32(x - y)
-            elif op == "mul":
-                r = _s32(_sx16(x) * _sx16(y))
-            elif op == "and":
-                r = x & y
-            elif op == "xor":
-                r = x ^ y
-            elif op == "shr":
-                r = _s32(_s32(x) >> (imm & 31))
-            elif op == "shl":
-                r = _s32(x << (imm & 31))
-            elif op == "st":
+
+            if op == "st":
                 spad[imm] = regs[pe][a]
                 continue
+            if op == "ld":
+                v = spad.get(imm, 0)
             else:
-                raise SystemExit(f"仿真器不支持 op {op}")
-            regs[pe][dst] = r & 0xFFFFFFFF
+                x, y = val(a), val(b)
+                if op == "mov":
+                    v = x
+                elif op == "add":
+                    v = _s32(x + y)
+                elif op == "sub":
+                    v = _s32(x - y)
+                elif op == "mul":
+                    v = _s32(_sx16(x) * _sx16(y))
+                elif op == "and":
+                    v = x & y
+                elif op == "xor":
+                    v = x ^ y
+                elif op == "shr":
+                    v = _s32(_s32(x) >> (imm & 31))
+                elif op == "shl":
+                    v = _s32(x << (imm & 31))
+                else:
+                    raise SystemExit(f"仿真器不支持 op {op}")
+            regs[pe][dst] = v & 0xFFFFFFFF
+            nxt[pe] = regs[pe][dst]           # 任何寄存器写都会更新 link
+        link = nxt
     return regs
+
+
+# ---------------------------------------------------------------- BN 拆分成 4 个 PE/行
+#: 24 槽按 4 个 PE 分组（真实最大列度 23：6+6+6+5）
+BN_GROUPS = ((0, 6), (6, 12), (12, 18), (18, 23))
+
+
+def schedule_bn_split(rows=4, nmsg=23):
+    """k=4 的 BN 调度：一行拆到 4 个**横向相邻**的 PE，消息常驻寄存器，
+    部分和与 acc 走 link（1 跳 1 拍，不需要 spad 往返）。
+
+    时间线（j = 0..3，消息组 [0..5][6..11][12..17][18..22]）：
+      c0..5    LD m0..m5 → r1..r6（末组 5 条）
+      c6       MOV  r0 = r1
+      c7..11   ADD  r0 += r_i              → 各组部分和
+      c12      p0: LD llr→r7；p2: ADD r0 += 'e'（p3 的部分和）
+      c13      p0: ADD r0 += r7；p1: ADD r0 += 'e'（p2 合并值）
+      c15      p0: ADD r0 += 'e'（p1 合并值）= acc
+      c16      p0: SHR r7 = r0 >> 31；p1: MOV r7 = 'w'（acc 广播）
+      c17      p0: ST r7 → bank 25；p2: MOV r7 = 'w'
+      c18      p3: MOV r7 = 'w'
+      减法    每个 PE 对自己的 6（末组 5）条边做 SUB + ST（2 拍/边）
+    """
+    if nmsg != 23:
+        raise SystemExit("schedule_bn_split 目前只支持 23 个消息槽")
+    mc = Microcode()
+    start = {0: 18, 1: 17, 2: 18, 3: 19}
+    for r in range(rows):
+        for j, (lo, hi) in enumerate(BN_GROUPS):
+            pe = r * 4 + j
+            size = hi - lo
+            for i, k in enumerate(range(lo, hi)):
+                mc.put(i, pe, "ld", dst=1 + i, imm=spad_idx(k, r))
+            mc.put(size, pe, "mov", a=1, dst=0)
+            for i in range(1, size):
+                mc.put(size + i, pe, "add", a=0, b=1 + i, dst=0)
+            if j == 0:
+                mc.put(12, pe, "ld", dst=7, imm=spad_idx(24, r))
+                mc.put(13, pe, "add", a=0, b=7, dst=0)
+                mc.put(15, pe, "add", a=0, b="e", dst=0)        # acc
+                mc.put(16, pe, "shr", a=0, dst=7, imm=31)
+                mc.put(17, pe, "st", a=7, imm=spad_idx(25, r))
+            elif j == 1:
+                mc.put(13, pe, "add", a=0, b="e", dst=0)
+                mc.put(16, pe, "mov", a="w", dst=7)              # 收到 acc
+            elif j == 2:
+                mc.put(12, pe, "add", a=0, b="e", dst=0)
+                mc.put(17, pe, "mov", a="w", dst=7)
+            else:
+                mc.put(18, pe, "mov", a="w", dst=7)
+            accr, dstr = (0, 7) if j == 0 else (7, 0)
+            for i, k in enumerate(range(lo, hi)):
+                mc.put(start[j] + 2 * i, pe, "sub", a=accr, b=1 + i, dst=dstr)
+                mc.put(start[j] + 2 * i + 1, pe, "st", a=dstr, imm=spad_idx(k, r))
+    return mc
+
+
+def check_bn_split(mc, rows=4, nmsg=23, seed=1234):
+    """拆分成 4 PE/行 的黄金模型自检（激励/期望与 check_bn 相同，行数 = rows）。"""
+    spad, exp = bn_case(rows=rows, nmsg=nmsg, seed=seed)
+    simulate(mc, spad)
+    errs = [(idx, spad.get(idx), want) for idx, want in exp.items() if spad.get(idx) != want]
+    return errs, len(exp)
 
 
 def bn_case(rows=16, nmsg=23, seed=1234):
@@ -316,15 +405,46 @@ def check_bn(mc, rows=16, nmsg=23, seed=1234):
     return errs, len(exp)
 
 
+def write_hex(prefix, mc, spad):
+    """写成台架可读的 PREFIX.prog.hex / PREFIX.preload.hex。"""
+    os.makedirs(os.path.dirname(prefix) or ".", exist_ok=True)
+    with open(prefix + ".prog.hex", "w") as f:
+        for w in mc.build():
+            f.write(f"0x{w:08x}\n")
+    with open(prefix + ".preload.hex", "w") as f:
+        for idx, v in sorted(spad.items()):
+            f.write(f"0x{SPAD_WIN + idx * 4:04x} 0x{v:08x}\n")
+    return prefix + ".prog.hex", prefix + ".preload.hex"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bn", action="store_true", help="整条 BN（24 槽）")
-    ap.add_argument("--dfg", help="任意 dot（叶子必须是 m<k>/llr，汇必须是 S<k>/H0）")
+    ap.add_argument("--bn-split", action="store_true",
+                    help="BN 拆成 4 个 PE/行（消息常驻寄存器 + link 广播 acc）")
+    ap.add_argument("--dfg", help="任意 dot（叶子 m<k>/llr 沿用 BN 布局，其余从 bank 26 起）")
     ap.add_argument("--instances", type=int, default=16)
     ap.add_argument("--emit", help="把微码写成二进制（cycle-major，每字 32 bit）")
     ap.add_argument("--emit-hex", metavar="PREFIX",
-                    help="写成台架可读的 PREFIX.prog.hex / PREFIX.preload.hex（BN 模式）")
+                    help="写成台架可读的 PREFIX.prog.hex / PREFIX.preload.hex")
     a = ap.parse_args()
+
+    if a.bn_split:
+        rows = min(a.instances, 4)
+        mc = schedule_bn_split(rows=rows)
+        errs, nvals = check_bn_split(mc, rows=rows)
+        passes = -(-20 // rows) if rows else 0
+        print(f"ldpc_bn/split4: 每行 4 个 PE、每次 {rows} 行；微码 {mc.cycles} 拍 × {NPES} PE")
+        print(f"  自检：{nvals} 个 spad 值，差异 {len(errs)} 个")
+        for idx, got, want in errs[:8]:
+            print(f"    idx={idx} got=0x{(got or 0):08x} want=0x{want:08x}")
+        print(f"  换算：Zc=20 行 → {passes} 次 × {mc.cycles} 拍 = {passes * mc.cycles} 拍"
+              f"（v0 单 PE/行 是 2 次 × 118 = 236 拍）")
+        if a.emit_hex:
+            spad, _exp = bn_case(rows=rows)
+            write_hex(a.emit_hex, mc, spad)
+            print(f"  台架激励写入 {a.emit_hex}.prog.hex / .preload.hex")
+        return 0 if not errs else 1
 
     if a.bn:
         dfg = build_bn_dfg()

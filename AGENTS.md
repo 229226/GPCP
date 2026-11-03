@@ -25,7 +25,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
 | PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 54,148 µm²、**Fmax 1.05 GHz**（0.911 ns pre-layout，1 GHz +0.05 ns slack）、23.8/28.7/32.1 mW @500/800/1000 MHz；IMEM 已重构为 512×512 宽字 1R1W；**spad 实测每 bank 需 16R/16W（~2.6 mm²，bank 化必须先改 kernel 数据布局）**（`docs/08` §3.2、§4.1） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
-| M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`，每跳 1 拍）+ CGRA-ME 库驱动/自动切块（`cgra/tools/`）已打通：24 槽 BN 切成 18 片在 3×3 上 **18/18 mapped**（48 s）。**规则映射器 v0** 已能 DFG→微码：BN **118 拍 × 16 PE** 在 Verilator 上 **0 差异**（手写 125 拍）。CGRA-ME 仍给不出可靠落点，退火不可用。见 `docs/10` §7.3/§7.4/§10/§11 |
+| M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`，每跳 1 拍）+ CGRA-ME 库驱动/自动切块（`cgra/tools/`）已打通：24 槽 BN 切成 18 片在 3×3 上 **18/18 mapped**（48 s）。**规则映射器**：v0 DFG→微码 BN **118 拍 × 16 PE**（台架 0 差异，手写 125 拍）；v1 link 版 4 PE/行 **30 拍/4 行 → Zc=20 共 150 拍（1.57×）**。CGRA-ME 仍给不出可靠落点，退火不可用。见 `docs/10` §7.3/§7.4/§10/§11/§12 |
 
 ---
 
@@ -83,6 +83,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `bash cgra/tools/map.sh cgra/arch/gpcp-8x8-mesh.xml cgra/dfg/fir4.dot 1 ilp 60` | `[map] mapped=yes II=1`（约 3.4 s，cost 279，7 个算子落在 5 个 PE）；`fir8` 会超时，见 `docs/10` §7.4 |
 | `python3 cgra/tools/bn_chunks.py --arch cgra/arch/gpcp-3x3-mesh.xml --out build/bn_chunks3` | 24 槽 BN 切成 **18 片全部 mapped**（3×3、II=1，合计 48 s），见 `docs/10` §10 |
 | `python3 cgra/tools/rule_map.py --bn` + `python3 cgra/tools/check_rule_bn.py` | 规则映射器自动生成 BN 微码 **118 拍 × 16 PE**，Verilator 台架 **384 个值 0 差异**（手写是 125 拍）；18 个切块也全部模型自检通过，见 `docs/10` §11 |
+| `python3 cgra/tools/rule_map.py --bn-split` + `check_rule_bn.py --split` | **link 版**：4 PE/行、消息常驻寄存器，**30 拍/4 行**；Zc=20 行 = 5×30 = **150 拍**（v0 是 236，1.57×），台架 96 个值 0 差异，见 `docs/10` §12 |
 
 ---
 
