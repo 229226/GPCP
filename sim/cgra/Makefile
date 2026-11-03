@@ -3,7 +3,10 @@
 #   make            build ./build/Vcgra_axi_lite
 #   make clean      remove build products
 
-VERILATOR ?= verilator
+# Prefer the Verilator that ships with this project (third_party/eda, fetched by
+# tools/fetch_eda.sh); fall back to PATH if it is not installed.
+LOCAL_VERILATOR := $(wildcard $(CURDIR)/../../third_party/eda/oss-cad-suite/bin/verilator)
+VERILATOR ?= $(if $(LOCAL_VERILATOR),$(LOCAL_VERILATOR),verilator)
 TOP       := cgra_axi_lite
 
 RTL_DIR := ../../rtl/cgra

@@ -7,7 +7,7 @@
 
 | 环节 | 工具/库 | 说明 |
 |---|---|---|
-| SV 前端 | `yosys -m slang`（oss-cad-suite 自带 `slang.so`） | 我们的 RTL 是 SystemVerilog（`package cgra_pkg` + `import cgra_pkg::*;`），Yosys 自带前端不支持通配 import，必须用 slang |
+| SV 前端 | `yosys -m slang`（`third_party/eda/oss-cad-suite` 自带 `slang.so`） | 我们的 RTL 是 SystemVerilog（`package cgra_pkg` + `import cgra_pkg::*;`），Yosys 自带前端不支持通配 import，必须用 slang |
 | 综合 | Yosys 0.52 `synth -flatten` + `dfflibmap` + `abc -D <ps>` | ABC 用 `ifraig/retime/dch/map` 配方（脚本在 `syn/cgra_syn.tcl`） |
 | 工艺库 | Nangate45（45 nm 开源标准单元，`third_party/pdk/nangate45`） | 来自 OpenROAD-flow-scripts 的 `flow/platforms/nangate45`（Apache-2.0），135 个单元；TT `NangateOpenCellLibrary_typical.lib`；`DFFR_X1` = 5.32 µm²、`MUX2_X1` = 1.862 µm² |
 | 时序/功耗 | iEDA `iSTA`/`iPA`（`third_party/eda/bin/iEDA`） | 开源 OSCC-Project/iEDA 的发布二进制；SDC 只约束一个时钟（`clk`），无 I/O delay；功耗 toggle 0.1（工具默认） |
@@ -350,8 +350,14 @@ sky130 是 `conb_1` 的 `HI/LO`）、以及给 iSTA 一份新的 pdk tcl（tech 
 | 项 | 来源 | 位置 | 体积 |
 |---|---|---|---|
 | PDK | OpenROAD-flow-scripts 的 `flow/platforms/nangate45`（Apache-2.0，sparse clone） | `third_party/pdk/nangate45/` | 11 MB |
+| 综合 + SV 前端 | YosysHQ `oss-cad-suite`（Yosys 0.52 + `slang` 插件；同一套里还有仿真用的 Verilator 5.035），**版本锁在 `2025-04-20`** | `third_party/eda/oss-cad-suite/` | 2.2 GB（下载 525 MB） |
 | STA/功耗 | 开源 iEDA（OSCC-Project/iEDA）的发布二进制 | `third_party/eda/bin/iEDA` | 27 MB（下载 10.8 MB） |
 | Tcl 驱动 | **本项目自己写**（`syn/sta.tcl`，仅 9 行 iEDA 调用） | `syn/sta.tcl` | — |
+
+仿真侧也一起收了进来：`sim/soc/Makefile`、`sim/cgra/Makefile` 与 `tools/cgra.py` 都**优先**
+使用 `third_party/eda/oss-cad-suite/bin/verilator`（与原来 PATH 里的那套版本完全相同，
+`5.035 devel`，所以仿真结果和周期不受影响），只有缺失时才回落到 `PATH`。
+`make -C syn` 里的 Yosys 同理（`LOCAL_YOSYS` 存在就用本地的，否则回落到 `PATH`）。
 
 一条命令拉齐：`make -C syn tools`（= `tools/fetch_eda.sh`，幂等，已存在就跳过）。
 

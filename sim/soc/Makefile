@@ -13,7 +13,10 @@ SHELL     := /bin/bash          # recipes use bash (set -o pipefail in `linux`)
 ROOT      := ../..
 OBJ       := sim/soc/build
 BIN       := $(ROOT)/$(OBJ)/Vgpcp_soc
-VERILATOR ?= verilator
+# Prefer the Verilator that ships with this project (third_party/eda, fetched by
+# tools/fetch_eda.sh); fall back to PATH if it is not installed.
+LOCAL_VERILATOR := $(wildcard $(CURDIR)/../../third_party/eda/oss-cad-suite/bin/verilator)
+VERILATOR ?= $(if $(LOCAL_VERILATOR),$(LOCAL_VERILATOR),verilator)
 
 INC := \
 	-Ithird_party/cva6/core/include \

@@ -6,12 +6,16 @@
 # machine.  iEDA is the open-source OSCC-Project/iEDA binary, the PDK is
 # OpenROAD-flow-scripts' flow/platforms/nangate45 (Apache-2.0).
 #
-#   make tools                     # one-off: fetch iEDA + PDK (~22 MB)
+#   make tools                     # one-off: fetch yosys + iEDA + PDK (~2.3 GB)
 #   make -C syn sta CLK_FREQ_MHZ=500
 
 ROOT      := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 EDA_HOME  ?= $(ROOT)/third_party/eda
 IEDA      ?= $(EDA_HOME)/bin/iEDA
+# Yosys + the slang frontend plugin ship in the project's own oss-cad-suite;
+# fall back to PATH only if that has not been fetched yet.
+LOCAL_YOSYS := $(wildcard $(EDA_HOME)/oss-cad-suite/bin/yosys)
+YOSYS     ?= $(if $(LOCAL_YOSYS),$(LOCAL_YOSYS),yosys)
 PDK       ?= $(ROOT)/third_party/pdk/nangate45
 LIB       ?= $(PDK)/lib/NangateOpenCellLibrary_typical.lib
 DESIGN    ?= cgra_top
@@ -29,7 +33,7 @@ tools:
 
 syn: $(LIB)
 	mkdir -p $(OUT)
-	env -u LD_LIBRARY_PATH yosys -m slang -c $(ROOT)/syn/cgra_syn.tcl -l $(OUT)/yosys.log
+	env -u LD_LIBRARY_PATH $(YOSYS) -m slang -c $(ROOT)/syn/cgra_syn.tcl -l $(OUT)/yosys.log
 
 sta: syn
 	env -u LD_LIBRARY_PATH CLK_FREQ_MHZ=$(CLK_FREQ_MHZ) \

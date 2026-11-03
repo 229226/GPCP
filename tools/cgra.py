@@ -818,8 +818,18 @@ def build_ldpc_kernel() -> Kernel:
 
 # ---------------------------------------------------------------- driver
 def find_verilator() -> str:
+    """Locate Verilator, preferring the copy that belongs to this project.
+
+    third_party/eda/oss-cad-suite (fetched by tools/fetch_eda.sh) is the
+    reproducible choice; the other candidates keep the flow working on machines
+    where someone already has an oss-cad-suite lying around.
+    """
     if os.environ.get("VERILATOR"):
         return os.environ["VERILATOR"]
+    root = Path(__file__).resolve().parent.parent
+    local = root / "third_party/eda/oss-cad-suite/bin/verilator"
+    if local.exists():
+        return str(local)
     for p in sorted(glob.glob(os.path.expanduser("~/Downloads/oss-cad-suite*/oss-cad-suite/bin/verilator"))):
         return p
     for p in glob.glob("/opt/oss-cad-suite/bin/verilator"):
