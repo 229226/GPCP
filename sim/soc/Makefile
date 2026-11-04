@@ -119,7 +119,7 @@ run-pdsch-bn1: all
 # P1: full BG2 LDPC iteration (52 variable blocks x 8) on the generated microcode
 run-pdsch-iter: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
-	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_iter_bm.bin@0x80000000 --results 0x80010000 --nwords 530 \
+	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_iter_bm.bin@0x80000000 --results 0x80010000 --nwords 1060 \
 		--dump $(ROOT)/$(OBJ)/pdsch_iter_dump.txt
 	python3 $(ROOT)/tools/check_pdsch_iter.py $(ROOT)/$(OBJ)/pdsch_iter_dump.txt
 
@@ -167,7 +167,7 @@ run-polar: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/polar_sc_bm.bin@0x80000000 \
-		--results 0x80010000 --nwords 14 \
+		--results 0x80010000 --nwords 135 \
 		--dump $(ROOT)/$(OBJ)/polar_dump.txt \
 		--max-cycles 4000000
 	python3 $(ROOT)/tools/check_sc.py $(ROOT)/$(OBJ)/polar_dump.txt

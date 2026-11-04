@@ -9,8 +9,14 @@
  *
  * 判据：tools/check_pdsch_iter.py（同一份 LLR、同一个基图、纯 min-sum、同一 gather/scatter 约定）
  *
+ * 数据流（CPU 与引擎的交接都在 RAM 里，所以要处理 D$ 一致性）：
+ *   msg —— CPU 写（重构/散射）→ 引擎读（CN 的 DMA 进）。WT 写穿，RAM 天然是新的；
+ *   res —— 引擎写（CN 的 DMA 出）→ CPU 读（重构）。每轮读之前必须 rt_dcache_flush()；
+ *   bout —— 引擎写（BN 的 DMA 出）→ CPU 读（散射/硬判决）。每块独占一段 + 每轮刷新。
+ *
  * 结果区（0x8001_0000）：[0] marker [1] blocks [2] runs [3] dma [4] cycles [5] errs [6] 0x600D
  *                        [8..] 52 × 20 个硬判决（块优先）
+ *                        [1048] CN 累计 [1049] BN 累计 [1050] D$失效+重构 累计（分项计时，判据不读）
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/gpcp_cgra_rt.h"
@@ -26,21 +32,30 @@
 #define MAXD          10
 #define SENTINEL      32767
 #define SENTINEL_BANK 30
-#define ITERS         1
-#define LCG_SEED      7u          /* 与 tools/check_pdsch_gather.py 同一份 LLR */
+#ifndef ITERS
+#define ITERS         8           /* 可用 -DITERS=n 覆盖（调试时 n=1） */
+#endif
+#define LCG_SEED      7u          /* 与 tools/check_pdsch_iter.py 同一份 LLR */
 
-/* 固定缓冲（都在 0x8003_0000 以上，避开 .bss/栈与结果区） */
-#define MSG_BASE   0x80030000ul   /* 42*10*20 = 8400 words */
-#define RES_BASE   0x80039000ul   /* 42*3*20  = 2520 words */
-#define LLR_BASE   0x8003A000ul   /* 52*20    = 1040 words -> 0x8003B03F */
-#define GATH_BASE  0x8003C000ul   /* 26*20    = 520  words */
-#define BOUT_BASE  0x8003D000ul   /* 26*20    = 520  words */
+/* 固定缓冲（都在 0x8003_0000 以上，避开 .bss/栈与结果区）。
+ * 关键约束：**引擎写的缓冲不能和 CPU 写过的缓冲重叠**——CVA6 的 D$ 是 WT
+ * （写穿、写时分配），引擎直接写 RAM 不会让 D$ 失效；一旦两块缓冲落在同一
+ * 条 cache line，CPU 读到的就是自己以前写进去的旧值（本项目在 sss_bm.c 里
+ * 踩过同一个坑）。所以 res / bout 各自独占一段地址，互不重叠。 */
+#define MSG_BASE   0x80030000ul   /* 42*10*20 = 8400 words -> 0x80038340 */
+#define RES_BASE   0x80039000ul   /* 42*3*20  = 2520 words -> 0x8003B760 */
+#define LLR_BASE   0x8003C000ul   /* 52*20    = 1040 words -> 0x8003D040 */
+#define GATH_BASE  0x8003E000ul   /* 26*20    = 520  words -> 0x8003E820 */
+/* bout 每个变量块独占一段：块与块之间也会"引擎写→CPU 读"，共用一个缓冲
+ * 会让块 b 读到块 b-1 的旧值（同一坑）。52 x 520 字 = 108 KiB。 */
+#define BOUT_BASE  0x80040000ul
+#define BOUT_STRIDE (26 * ZC)     /* 每块 520 字 -> 52 块到 0x80056900 */
 
 static int32_t (*msg)[MAXD][ZC] = (int32_t (*)[MAXD][ZC])MSG_BASE;
 static int32_t (*res)[3][ZC] = (int32_t (*)[3][ZC])RES_BASE;
 static int32_t (*llr)[ZC] = (int32_t (*)[ZC])LLR_BASE;
 static int32_t (*gath)[ZC] = (int32_t (*)[ZC])GATH_BASE;
-static int32_t (*bout)[ZC] = (int32_t (*)[ZC])BOUT_BASE;
+static int32_t *bout_all = (int32_t *)BOUT_BASE;   /* 每块一段：bout_all + b*520 */
 
 static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
 static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
@@ -48,6 +63,12 @@ static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 #define SPAD_IDX(bank, word) GPCP_SPAD_IDX((bank), (word))
 
 static uint32_t runs, dmas, errs;
+
+/* --------------------------------------------------------- D$ 一致性
+ * 阵列/拷贝引擎写 RAM，不会让 CVA6 的 D$ 失效（D$ 是 WT：CPU 读命中就返回
+ * 缓存里的旧值）。所以每轮读"引擎刚写的 res / bout"之前，必须先把 D$ 整片
+ * 失效：`rt_dcache_flush()`（CSR_DCACHE 关闭→重新使能，WT missunit 会走
+ * FLUSH 流程，同时排空写缓冲）。实测每轮约 4k 拍。 */
 
 /* 变量块 → 自己的边表，启动时建一次（避免每个块扫 42×10 条边） */
 static uint8_t blk_n[BG2_COLS];
@@ -107,6 +128,7 @@ static void reconstruct(void)
 static void bn_block(uint32_t b, int32_t *hard)
 {
     uint32_t n = blk_n[b];
+    int32_t (*bout)[ZC] = (int32_t (*)[ZC])(bout_all + b * BOUT_STRIDE);
     for (uint32_t e = 0; e < n; e++) {
         uint32_t r = blk_r[b][e], k = blk_k[b][e];
         const uint8_t *rm = rotm[blk_sh[b][e]];
@@ -174,20 +196,20 @@ int main(void)
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + 32, i), (uint32_t)SENTINEL);
     }
+    /* IMEM 只有一份：CN 与 BN 程序必须按阶段重装（这里先装 CN） */
     if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CN_PROG_CYCLES * NPES))
-        errs++;
-    if (gpcp_cgra_imem_load(CGRA_BASE, bn_prog, BN_PROG_CYCLES * NPES))
         errs++;
 
     uint32_t t0 = mtime();
     uint32_t acc_cn = 0, acc_bn = 0, acc_cpu = 0;
     for (uint32_t it = 0; it < ITERS; it++) {
         uint32_t ta = mtime();
-        /* ---- CN：42 行，双页 ping-pong ---- */
+        /* ---- CN：42 行，双页 ping-pong（每轮重装 CN 程序，因为上一轮末尾装的是 BN） ---- */
+        if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CN_PROG_CYCLES * NPES))
+            errs++;
         cn_row_in(0, 0);
         if (rt_dma_wait(CGRA_BASE)) errs++;
         for (uint32_t r = 0; r < BG2_ROWS; r++) {
-            out[7] = 0x100u + r;          /* 进度探针：CN 第 r 行 */
             if (r + 1 < BG2_ROWS) cn_row_in(r + 1, (r + 1) & 1u);
             if (rt_array_run(CGRA_BASE, r & 1u, CN_PROG_CYCLES)) errs++;
             runs++;
@@ -199,16 +221,18 @@ int main(void)
         out[1048] = acc_cn;
 
         ta = mtime();
+        /* 引擎刚写完 res：先整片失效 D$，再让 CPU 读（见上面的注释） */
+        rt_dcache_flush();
         reconstruct();
         acc_cpu += mtime() - ta;
         out[1050] = acc_cpu;
 
         ta = mtime();
-        /* ---- BN：52 个变量块 ---- */
-        for (uint32_t b = 0; b < BG2_COLS; b++) {
-            out[7] = 0x200u + b;          /* 进度探针：BN 第 b 块 */
+        /* ---- BN：52 个变量块（先换装 BN 程序） ---- */
+        if (gpcp_cgra_imem_load(CGRA_BASE, bn_prog, BN_PROG_CYCLES * NPES))
+            errs++;
+        for (uint32_t b = 0; b < BG2_COLS; b++)
             bn_block(b, hard[b]);
-        }
         acc_bn += mtime() - ta;
         out[1049] = acc_bn;
     }

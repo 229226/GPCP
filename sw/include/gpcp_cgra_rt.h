@@ -45,6 +45,22 @@ static inline int rt_wait_array(uintptr_t base)
     return 0;
 }
 
+/* 数据缓存全失效（"引擎写 RAM → CPU 读"必须调用）。
+ *
+ * CVA6 的 D$ 是 WT（写穿）：CPU 写会同时落到 RAM，所以"CPU 写 → 引擎读"天然
+ * 一致；但引擎直接写 RAM **不会**让 D$ 失效，CPU 再读同一行会命中缓存里的旧
+ * 值。本配置 RVZiCbom=0（没有 cbo.inval），DcacheFlushOnFence=0（fence 不刷），
+ * 但 CSR_DCACHE(0x7c1) 的使能位有一个可用语义：WT missunit 里"关闭立即生效、
+ * 重新使能要走 FLUSH 流程"（`enable_i && !enable_q` → FLUSH/DRAIN）。
+ * 所以把使能位写 0 再写 1 = 排空写缓冲 + 整片 D$ 失效（32 KiB 约 4k 拍）。 */
+static inline void rt_dcache_flush(void)
+{
+    uint64_t on = 1;
+    __asm__ __volatile__("csrw 0x7c1, zero" ::: "memory");
+    __asm__ __volatile__("csrw 0x7c1, %0" :: "r"(on) : "memory");
+    __asm__ __volatile__("fence" ::: "memory");
+}
+
 /* 启动阵列（选页）并等它跑完 */
 static inline int rt_array_run(uintptr_t base, uint32_t page, uint32_t cycles)
 {
@@ -53,7 +69,8 @@ static inline int rt_array_run(uintptr_t base, uint32_t page, uint32_t cycles)
     return rt_wait_array(base);
 }
 
-/* 发起一次搬运（不等待）；spad 索引 / 页由调用者选，保证与阵列页不同 */
+/* 发起一次搬运（不等待）。写完 start 后还要确认 start 真的生效
+ * （BUSY 置位 或 done 被清掉），否则调用方无法区分"旧的 done"和"这次的完成"。 */
 static inline int rt_dma_begin(uintptr_t base, uintptr_t ram, uint32_t spad_idx,
                                uint32_t words, uint32_t page, uint32_t dir_out,
                                uint32_t stride, uint32_t row)
@@ -64,21 +81,22 @@ static inline int rt_dma_begin(uintptr_t base, uintptr_t ram, uint32_t spad_idx,
             return -1;
     }
     gpcp_cgra_dma_start(base, ram, spad_idx, words, page, dir_out, stride, row);
-    return 0;
+    g = 0;
+    while (1) {
+        uint32_t s = gpcp_cgra_read(base, GPCP_CGRA_DMA_CTRL);
+        if ((s & GPCP_CGRA_DMA_BUSY) || !(s & GPCP_CGRA_DMA_DONE))
+            return 0;                       /* start 已生效（或已瞬间完成） */
+        if (++g > 4096u)
+            return -1;
+    }
 }
 
-/* 等上一次搬运完成。注意 start 由 RTL 清 done，所以先等"旧 done 消失（start 生效）"，
- * 再等 busy 清零 —— 这样既不用额外写 CLRDONE，也不会被上一次遗留的 done 骗过。 */
+/* 等搬运完成。此时"done=1 且 busy=0"就意味着这次传输已经结束
+ * （不可能再是上一次遗留的 done，因为 begin 已经确认 start 生效）。 */
 static inline int rt_dma_wait(uintptr_t base)
 {
     uint32_t g = 0;
     uint32_t s = gpcp_cgra_read(base, GPCP_CGRA_DMA_CTRL);
-    while ((s & (GPCP_CGRA_DMA_BUSY | GPCP_CGRA_DMA_DONE)) == GPCP_CGRA_DMA_DONE) {
-        if (++g > RT_SPIN_LIMIT)
-            return -1;
-        s = gpcp_cgra_read(base, GPCP_CGRA_DMA_CTRL);
-    }
-    g = 0;
     while (s & GPCP_CGRA_DMA_BUSY) {
         if (++g > RT_SPIN_LIMIT)
             return -1;

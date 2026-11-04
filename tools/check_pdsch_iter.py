@@ -64,10 +64,11 @@ def iterate(llr, msg, edges, iters=ITERS):
             while len(gath) < 24:
                 gath.append([0] * ZC)
             gath.append(llr[b * ZC:(b + 1) * ZC])
-            out = []
+            out = [[0] * ZC for _ in range(24)]
             for i in range(ZC):
                 v = llr[b * ZC + i] + sum(gath[k][i] for k in range(24))
-                out.append([v - gath[k][i] for k in range(24)])
+                for k in range(24):
+                    out[k][i] = v - gath[k][i]
                 hard[b][i] = 1 if v < 0 else 0
             for n, (r, k, sh) in enumerate(mine):
                 for i in range(ZC):

@@ -19,7 +19,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | M1/B2 CVA6 驱动 CGRA（真 SoC + AXI4 突发） | ✅ |
 | M2/B2.5 L1 数据面（spad 双页、DMA+描述符环、PLIC、接收链） | ✅ |
 | M2.5 FFT 256/1024/4096 + slot 时基 | ✅ |
-| P2 第一步 PDSCH SISO（模型级，LDPC BG2） | ✅ 模型：TB 80 bit → CRC24A → BG2(Zc=20) → 速率匹配/加扰/QPSK → AWGN/两径 → min-sum 译码 → CRC；−6 dB 起 4/4 全过（`docs/09`）。硬件 kernel + `run-pdsch` 待做 |
+| P2 第一步 PDSCH SISO（模型级，LDPC BG2） | ✅ 模型：TB 80 bit → CRC24A → BG2(Zc=20) → 速率匹配/加扰/QPSK → AWGN/两径 → min-sum 译码 → CRC；−6 dB 起 4/4 全过（`docs/09`）。硬件：`run-pdsch`（50k 周期）+ **`run-pdsch-iter`：真实 BG2 一个码块 8 次迭代全在 CGRA 上，1040/1040 硬判决对账通过**（3.16 M 周期） |
 | B4-SSB 频域链（PSS/SSS/DMRS/QPSK/Polar/MIB） | ✅ |
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
@@ -37,7 +37,7 @@ env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用�
 
 # 1) 一条命令全量验收（推荐先跑这个，确认基线）
 bash tools/verify.sh quick            # 实测 ~300 s：14 kernel + 8 个 SoC 目标（含 run-ssb-fid / run-ssb-slot）
-bash tools/verify.sh full             # 实测 ~370 s：14 kernel + 全部 16 个 SoC 基准（17 步全 PASS）
+bash tools/verify.sh full             # 实测 ~1230 s：14 kernel + 20 个 SoC 基准（含 6 分钟的 run-pdsch-iter）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 make verify / make verify-full        # 同上两个的 make 包装
 
@@ -65,7 +65,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-ring` | 4 个描述符消费、head=4、**0.70 周期/字** |
 | `run-rxchain` | 4 slot = **2057 周期**（阵列 1220 + ring 546） |
 | `run-fft` | 256/1024/4096 = **4399 / 22956 / 116761** 周期，逐位一致 |
-| `run-sync` / `run-sss` / `run-polar` | N_ID2 / N_ID1=200 / 32 bit 全对，partial 逐位 |
+| `run-sync` / `run-sss` / `run-polar` | N_ID2 / N_ID1=200 / 32 bit 全对，partial 逐位。`run-polar` 的 `--nwords` 原是 14（程序写到下标 134，检查器要 135 字）→ 一直报 `dump too short`，已改成 135 |
 | `run-ssb` | 1459 runs，2,411,649 周期，H=(32,15)，MIB 逐位（导频 28 个、真实 DMRS `c_init`） |
 | `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32，H=(16,0) 四个符号**，1907 runs，4,378,711 周期（SSB 占 bin 480..719，避开 DC） |
 | `run-ssb-fid` | **N_ID2=1、N_ID1=200、i_SSB=3、n_hf=0、DMRS `c_init`=0x12e101、MIB 32/32**，1907 runs，4,411,511 周期（真 38.211 布局：PSS 符号 0 / SSS 符号 2、CP=288、DC 空在 RE 24、72 个导频、38.212 速率匹配 720→512） |
@@ -74,6 +74,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-pdsch-bn1` | 单个变量块过 BN 微码：24 个消息槽 + LLR + 硬判决共 **520 个值**逐值等于黄金模型（**1 次阵列运行 / 155 拍 / 2 次 DMA**，仿真总周期 **11,916**）。微码由 `cgra/tools/gen_bn_prog.py`（规则映射器 link 版）生成，**IMEM 走拷贝引擎批量装载**（`gpcp_cgra_imem_load`，逐字写时总周期 25,558，2.15×） |
 | `run-pdsch-gather` | 真实块的 CN→重构→gather→**BN→硬判决** 全链逐值对齐（含 spad 对照）；修掉 `V % Zc` 下溢与 `emit` 目标数组两个 bug |
 | `run-pdsch-bg2` | **真实 BG2 块**的检查节点全遍历（42 行 × 20 提升行），DMA 分块流式进出：`min1/min2/sign` 与黄金模型逐位一致，**42 次阵列运行 / 84 次 DMA / 20,946 拍（仿真总周期 165,088）**（微码由 `gen_cn_prog.py` 生成 + IMEM 批量装载；原来是 84 次运行 / 631,360 周期） |
+| `run-pdsch-iter` | **P1 整链**：BG2(Zc=20) 一个码块 **8 次迭代全在硬件上**（42 CN + 52 BN/迭代），`check_pdsch_iter.py` **1040/1040 硬判决**与纯 min-sum 一致；**752 次阵列运行 / 1504 次 DMA / 内核 3,108,048 周期**（≈389k/迭代：CN 156k、BN+搬运 2.17M、D$ 失效+重构 777k），仿真总周期 3,437,443（约 6 分钟，只在 `verify.sh full` 里）。坑：`RES`/`LLR` 地址重叠、`bout` 被 52 块共用、D$ 不失效（见 `docs/09` §5） |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
@@ -109,8 +110,11 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 ## 4. 硬规矩（每一条都是踩过的坑，违反就会"悄无声息地错"）
 
 1. **`env -u LD_LIBRARY_PATH`**；Verilator 固定 `--threads 1`（多线程会把这个设计编译错 → CVA6 随机挂死）。
-2. **引擎写 RAM 不使 CPU D$ 失效**：任何"引擎写、CPU 读"的缓冲区**每轮必须换新地址、永不复用**
-   （polar 节点用 2048 块池；SSS 每假设独立块）。否则读到旧缓存行 —— 症状是"流程成功、数据全错"。
+2. **引擎写 RAM 不使 CPU D$ 失效**：任何"引擎写、CPU 读"的缓冲区，两条路任选其一：
+   ① **每轮换新地址、永不复用**（polar 节点用 2048 块池；SSS 每假设独立块；`pdsch_iter` 的 `bout` 每块独占一段）；
+   ② 读完之前调 **`rt_dcache_flush()`**（`CSR_DCACHE` 0x7c1 置 0 再置 1 → WT missunit 走 FLUSH，
+   顺带排空写缓冲，约 4k 拍）。**不要**用"扫大缓冲把旧行挤掉"：D$ 替换是 **LFSR 随机**，不可靠。
+   症状是"流程成功、数据全错"，且错的行窗口正好等于另一块缓冲的 cache 足迹。
 3. **CPU 写后立刻 DMA 读**：`fence iorw, iorw` + 读回一个字排空写缓冲，否则引擎读到旧值。
 4. **CVA6 会把相邻 32-bit store 合并成 64-bit AXI 写**：一次 store 必须表达完整动作
    （用 `NUM_CYCLES` 的 `cycles|page<<16|start<<31`），否则分次写会神秘丢失。
@@ -170,6 +174,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
    已知案例：`build/ssb/td.bin` 曾不依赖 `tools/ssb_plan.py`，改模型后硬件仍在跑旧样本
    （表现为"频谱抽取全读到噪声"）。新增数据镜像规则时，**务必把生成它的脚本列为依赖**。
 5. **失败先分类再动手**：数据错？时序挂死？性能差？—— 三类各有独立的检查表（见 §7）。
+6. **检查器报 `dump too short` / 结果全 0 → 先对"结果区窗口"**：`--nwords` 必须覆盖程序实际写到的最低下标
+   （`run-polar` 就因为窗口只有 14 字、程序写到 134 而长期假失败）；同理结果区不能与 `.bss` 叠。
 
 ---
 
@@ -197,7 +203,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 **P2（M3 主体）**
 6. 8×8 阵列（bank 32→64/页、spad 8→32 KiB）+ 各 kernel 映射重排；给 4×4 vs 8×8 周期对比。
 7. IMEM burst 装载（现在 832 字逐写 ≈ 7k 周期）。
-8. LDPC 全迭代（边消息分页 + 层调度，BG1/Z=64 一个码块），与新建 `tools/nr_ldpc.py` 逐位对齐。
+8. LDPC 全迭代：**BG2(Zc=20) 的 8 次迭代已整链跑通并逐值对账（`run-pdsch-iter`，3.1 M 周期）**；
+   剩下 BG1 / Z=64（边消息分页、层调度），与新建 `tools/nr_ldpc.py` 逐位对齐。
 9. 自动映射第一步：把 `Program.set` 当 IR，做"规整 kernel 的约束映射器"，**与手写微码逐位等价**；
    再谈 MLIR/CGRA-Flow（`docs/01` §2.3）。
 
