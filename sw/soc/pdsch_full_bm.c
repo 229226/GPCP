@@ -7,9 +7,11 @@
  *
  *   TD samples (2 symbols, CP + 4096 IFFT, loaded at 0x8040_0000)
  *     -> 4096-point FFT (ssb_fft.inc, the run-fft verified engine)
- *     -> RE extract (240 REs/symbol, pilots every 4th RE)
- *     -> per-symbol LS channel estimate from the constant +QPSK pilots
- *     -> equalise + QPSK soft LLR (720 LLRs)
+ *     -> RE extract (240 REs/symbol, DMRS every 4th RE)
+ *     -> per-symbol LS estimate against the real 38.211 7.4.1.1 Gold DMRS
+ *        (c_init = 2^17*(14*n_slot+l+1)*(2*N_ID+n_SCID+1) + 2*N_ID + N_CP)
+ *     -> equalise + QPSK soft LLR (720 LLRs, interleaved order)
+ *     -> 38.212 5.4.2.2 de-interleave (Qm = 2)
  *     -> descramble (38.211 Gold, c_init = n_RNTI << 15)
  *     -> rate de-match (720 -> 1040: skipping 16 filler + 40 punctured bits)
  *     -> LLR scaling (>>8, keeps every message well below SENTINEL)
@@ -29,6 +31,8 @@
  *   [1060..1067] first 8 descrambled LLRs
  *   [1068..1075] scaled de-matched LLRs at coded positions 40..47
  *   [1076] CRC ok (duplicate for easy probing)
+ *   [1077..1080] fixed-point FFT gain diagnostics (bin 0)
+ *   [1081] DMRS c_init symbol 0   [1082] DMRS c_init symbol 1
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/gpcp_cgra_rt.h"
@@ -69,6 +73,15 @@
 #define A_TB          80
 #define CRC_LEN       24
 
+/* 38.211 7.4.1.1 PDSCH DMRS + 38.212 5.4.2.2 bit interleaving */
+#define DMRS_NID      1
+#define DMRS_NSCID    0
+#define DMRS_NSLOT    0
+#define DMRS_L0       2
+#define DMRS_NSYMB    14
+#define DMRS_NCP      0
+#define QM            2
+
 /* ---- LDPC engine (same addresses as sw/soc/pdsch_iter_bm.c) ---- */
 #define ZC            20
 #define MAXD          10
@@ -88,6 +101,7 @@
 #define LLRE_BASE     0x80391000ul
 #define DEM_BASE      0x80392000ul
 #define BUF_BASE      0x80393000ul
+#define DEINT_BASE    0x80394000ul
 
 static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
 static uint32_t *gold_x1 = (uint32_t *)GOLD_BASE;
@@ -96,6 +110,8 @@ static int32_t *yw = (int32_t *)YW_BASE;
 static int32_t *llr_e = (int32_t *)LLRE_BASE;
 static int32_t *dem = (int32_t *)DEM_BASE;
 static int32_t *rbuf = (int32_t *)BUF_BASE;
+static int32_t *llr_i = (int32_t *)DEINT_BASE;
+static int32_t dmrs_re[NSYM][NPILOT], dmrs_im[NSYM][NPILOT];
 
 static int32_t (*msg)[MAXD][ZC] = (int32_t (*)[MAXD][ZC])MSG_BASE;
 static int32_t (*res)[3][ZC] = (int32_t (*)[3][ZC])RES_BASE;
@@ -135,6 +151,30 @@ static void gold_init(uint32_t c_init)
 static uint32_t gold_bit(uint32_t n)
 {
     return gold_x1[GOLD_NC + n] ^ gold_x2[GOLD_NC + n];
+}
+
+/* ------------------------------------------------- 38.211 7.4.1.1 PDSCH DMRS */
+static uint32_t dmrs_cinit(int s)
+{
+    uint64_t l = (uint64_t)(DMRS_L0 + s);
+    uint64_t v = ((uint64_t)1 << 17)
+                 * (uint64_t)(DMRS_NSYMB * DMRS_NSLOT + l + 1)
+                 * (uint64_t)(2 * DMRS_NID + DMRS_NSCID + 1)
+                 + (uint64_t)(2 * DMRS_NID + DMRS_NCP);
+    return (uint32_t)(v & 0x7FFFFFFFu);
+}
+
+static void build_dmrs(void)
+{
+    for (int s = 0; s < NSYM; s++) {
+        gold_init(dmrs_cinit(s));
+        for (int p = 0; p < NPILOT; p++) {
+            uint32_t b0 = gold_bit((uint32_t)(2 * p));
+            uint32_t b1 = gold_bit((uint32_t)(2 * p + 1));
+            dmrs_re[s][p] = (int32_t)(1 - 2 * (int)b0) * QPSK;
+            dmrs_im[s][p] = (int32_t)(1 - 2 * (int)b1) * QPSK;
+        }
+    }
 }
 
 /* ------------------------------------------------------------ CRC24A (38.212 7.1) */
@@ -281,6 +321,7 @@ int main(void)
     uint32_t t0 = mtime();
 
     build_tables();
+    build_dmrs();               /* two Gold sequences -> 2 x 60 DMRS symbols */
 
     /* ---- OFDM demodulation: strip CP, FFT each symbol in place ---- */
     for (int s = 0; s < NSYM; s++)
@@ -297,16 +338,19 @@ int main(void)
         }
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
 
-    /* ---- per-symbol LS channel estimate (constant +QPSK pilots) ---- */
+    /* ---- per-symbol LS estimate against the real Gold DMRS ---- */
     int64_t den = (int64_t)NPILOT * 2 * QPSK * QPSK / H_SCALE;
     for (int s = 0; s < NSYM; s++) {
         int64_t accr = 0, acci = 0;
+        int p = 0;
         for (int r = 0; r < NRE; r += 4) {
             int32_t yr = yw[(s * NRE + r) * 2 + 0];
             int32_t yi = yw[(s * NRE + r) * 2 + 1];
-            /* y * conj(pilot), pilot = (QPSK, QPSK) */
-            accr += (int64_t)yr * QPSK + (int64_t)yi * QPSK;
-            acci += (int64_t)yi * QPSK - (int64_t)yr * QPSK;
+            int32_t dr = dmrs_re[s][p], di = dmrs_im[s][p];
+            /* y * conj(DMRS) */
+            accr += (int64_t)yr * dr + (int64_t)yi * di;
+            acci += (int64_t)yi * dr - (int64_t)yr * di;
+            p++;
         }
         hre[s] = floor_div(accr, den);
         him[s] = floor_div(acci, den);
@@ -328,16 +372,25 @@ int main(void)
             }
     }
 
-    /* ---- descramble (38.211 7.3.3.1, c_init = n_RNTI << 15) ---- */
-    int32_t raw0[8];
+    /* ---- 38.212 5.4.2.2 de-interleave (Qm=2, 360 rows) ---- */
+    int32_t raw0[8], descr0[8];
     for (int i = 0; i < 8; i++) raw0[i] = llr_e[i];
+    {
+        int rows = E_BITS / QM;
+        for (int i = 0; i < rows; i++)
+            for (int j = 0; j < QM; j++)
+                llr_i[j * rows + i] = llr_e[QM * i + j];
+    }
+
+    /* ---- descramble (38.211 7.3.3.1, c_init = n_RNTI << 15) ---- */
     gold_init(N_RNTI << 15);
     for (int k = 0; k < E_BITS; k++)
-        if (gold_bit((uint32_t)k)) llr_e[k] = -llr_e[k];
+        if (gold_bit((uint32_t)k)) llr_i[k] = -llr_i[k];
+    for (int i = 0; i < 8; i++) descr0[i] = llr_i[i];
 
     /* ---- rate de-match: 720 E-bits -> 1040 coded LLRs ---- */
     for (int i = 0; i < USABLE; i++) rbuf[i] = 0;
-    for (int k = 0; k < E_BITS; k++) rbuf[k % USABLE] += llr_e[k];
+    for (int k = 0; k < E_BITS; k++) rbuf[k % USABLE] += llr_i[k];
     for (int j = 0; j < PUNCT; j++) dem[j] = 0;
     {
         int u = 0;
@@ -431,7 +484,7 @@ int main(void)
     out[1050] = (uint32_t)hre[1];
     out[1051] = (uint32_t)him[1];
     for (int i = 0; i < 8; i++) out[1052 + i] = (uint32_t)raw0[i];
-    for (int i = 0; i < 8; i++) out[1060 + i] = (uint32_t)llr_e[i];
+    for (int i = 0; i < 8; i++) out[1060 + i] = (uint32_t)descr0[i];
     for (int i = 0; i < 8; i++) out[1068 + i] = (uint32_t)(dem[PUNCT + i] >> LLR_SHIFT);
     out[1076] = (uint32_t)crc_ok;
     /* fixed-point FFT gain diagnostics (bin 0 of symbol 0) */
@@ -439,6 +492,8 @@ int main(void)
     out[1078] = (uint32_t)spec[0][2 * rev4(re_bin(0)) + 1];
     out[1079] = (uint32_t)yw[0];
     out[1080] = (uint32_t)yw[1];
+    out[1081] = dmrs_cinit(0);
+    out[1082] = dmrs_cinit(1);
 
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     *(volatile uint32_t *)EXIT_ADDR = 0x600Du;

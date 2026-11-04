@@ -2,16 +2,19 @@
 """Acceptance check for the PDSCH (SISO) full receive chain on the SoC.
 
 Parses the Verilator --dump output and verifies that the SoC, starting from
-time-domain OFDM samples, produced exactly the same 1040 LDPC hard decisions
-as the golden model, that CRC24A passes, and that the 80-bit transport block
-matches the transmitted payload.
+time-domain OFDM samples, reproduced the real 38.211 DMRS c_init, generated
+the same 1040 LDPC hard decisions as the golden model (which now includes
+38.212 5.4.2.2 bit interleaving), passed CRC24A, and recovered the 80-bit
+transport block.
 
-The fixed-point FFT (ssb_fft.inc, shared with run-ssb-fid) has a different
-amplitude/phase gain than the floating-point golden model, so absolute LLR
-magnitudes are NOT expected to match -- measured ~0.2x on this link.  Absolute
-anchors are printed for visibility, while the strict gates are: the sign of
-every probed soft bit (proves the whole front end is oriented correctly), the
-1040 bit-exact LDPC hard decisions, CRC24A, and the 80-bit transport block.
+The fixed-point FFT (ssb_fft.inc) has no AGC / block-floating-point scaling,
+so its gain depends on the time-domain peak.  With the constant +QPSK pilots
+of the step-1 model that peak was high and the gain dropped to ~0.2x; after
+switching to the real 38.211 Gold DMRS the 20 dB link matches the floating
+point model to <1% (channel estimate is exact).  Low-SNR noise still moves the
+peak, so absolute magnitudes are only gated at high SNR; the universal strict
+gates are the sign of every probed soft bit, the bit-exact 1040 LDPC hard
+decisions, CRC24A, and the 80-bit transport block.
 """
 import argparse
 import os
@@ -44,8 +47,8 @@ def _s32(v):
 
 def main(path, snr, seed):
     vals = parse_dump(path)
-    if len(vals) < 1081:
-        print("  dump too short: %d words (need >= 1081)" % len(vals))
+    if len(vals) < 1083:
+        print("  dump too short: %d words (need >= 1083)" % len(vals))
         return 1
 
     g = P.golden(snr, seed)
@@ -113,6 +116,27 @@ def main(path, snr, seed):
     if sign_bad(dem_hw, g["scaled"][40:48], "de-matched LLR signs"):
         ok = False
 
+    if vals[1081] != P.dmrs_cinit(0) or vals[1082] != P.dmrs_cinit(1):
+        print("  DMRS c_init mismatch: hw=(0x%x,0x%x) model=(0x%x,0x%x)" % (
+            vals[1081], vals[1082], P.dmrs_cinit(0), P.dmrs_cinit(1)))
+        ok = False
+
+    # At high SNR the real Gold DMRS keeps the time-domain peak low enough that
+    # the fixed-point FFT tracks the floating model closely: gate magnitude too.
+    if snr >= 15.0:
+        hh = [_s32(v) for v in h_hw]
+        hm = [int(g["h"][0].real), int(g["h"][0].imag),
+              int(g["h"][1].real), int(g["h"][1].imag)]
+        if max(abs(a - b) for a, b in zip(hh, hm)) > 2:
+            print("  high-SNR channel estimate out of tolerance: hw=%s model=%s" % (hh, hm))
+            ok = False
+        for i in range(8):
+            a, b = _s32(raw_hw[i]), int(g["raw"][i])
+            if b and abs(a - b) > abs(b) * 0.10:
+                print("  high-SNR raw LLR[%d] magnitude off: %d vs %d" % (i, a, b))
+                ok = False
+                break
+
     h_model = [int(g["h"][0].real), int(g["h"][0].imag),
                int(g["h"][1].real), int(g["h"][1].imag)]
     print("  probe: %d errors, %d cycles, %d array runs, %d DMAs" % (
@@ -128,6 +152,8 @@ def main(path, snr, seed):
     print("  probe: FFT bin0 spec hw=(%d,%d) yw=(%d,%d) model=(%d,%d)" % (
         _s32(vals[1077]), _s32(vals[1078]), _s32(vals[1079]), _s32(vals[1080]),
         int(yq0.real), int(yq0.imag)))
+    print("  probe: DMRS c_init hw=(0x%x,0x%x) model=(0x%x,0x%x)" % (
+        vals[1081], vals[1082], P.dmrs_cinit(0), P.dmrs_cinit(1)))
     print("  probe: CRC24A ok=%d, TB %d/%d bits, hard decisions %d/%d" % (
         crc_ok, P.M.A_TB - len(tbbad), P.M.A_TB, NHARD - len(bad), NHARD))
     print("  probe: TB = %s" % "".join(str(b) for b in tb))

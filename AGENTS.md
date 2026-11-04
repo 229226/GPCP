@@ -19,7 +19,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | M1/B2 CVA6 驱动 CGRA（真 SoC + AXI4 突发） | ✅ |
 | M2/B2.5 L1 数据面（spad 双页、DMA+描述符环、PLIC、接收链） | ✅ |
 | M2.5 FFT 256/1024/4096 + slot 时基 | ✅ |
-| P2 第一步 PDSCH SISO（LDPC BG2，模型 + 硬件整链） | ✅ 模型：TB 80 bit → CRC24A → BG2(Zc=20) → 速率匹配/加扰/QPSK → AWGN/两径 → min-sum 译码 → CRC；−6 dB 起 4/4 全过（`docs/09`）。硬件：`run-pdsch`（50k 周期）+ **`run-pdsch-iter`：真实 BG2 一个码块 8 次迭代全在 CGRA 上，1040/1040 硬判决对账通过**（内核 1.59 M 周期 / 仿真 2.03 M）+ **`run-pdsch-full`：时域样本 → FFT → LS/均衡 → QPSK LLR → 解扰 → 解速率匹配 → 8 次 LDPC 迭代 → CRC24A → 80 bit TB**，20 dB / 0 dB 两点 **80/80 TB、1040/1040 硬判决**（2.94 M 周期） |
+| P2 第一步 PDSCH SISO（LDPC BG2，模型 + 硬件整链） | ✅ 模型：TB 80 bit → CRC24A → BG2(Zc=20) → 速率匹配/加扰/QPSK → AWGN/两径 → min-sum 译码 → CRC；−6 dB 起 4/4 全过（`docs/09`）。硬件：`run-pdsch`（50k 周期）+ **`run-pdsch-iter`：真实 BG2 一个码块 8 次迭代全在 CGRA 上，1040/1040 硬判决对账通过**（内核 1.59 M 周期 / 仿真 2.03 M）+ **`run-pdsch-full`：时域样本 → FFT → LS/均衡 → QPSK LLR → 解扰 → 解速率匹配 → 8 次 LDPC 迭代 → CRC24A → 80 bit TB**，20 dB / 0 dB 两点 **80/80 TB、1040/1040 硬判决**（3.06 M 周期）；保真度补强：**38.211 7.4.1.1 真 Gold DMRS（`c_init`=0x120002/0x180002）+ 38.212 5.4.2.2 比特交织**，20 dB 下信道估计与软 LLR 与浮点模型逐值对齐 |
 | B4-SSB 频域链（PSS/SSS/DMRS/QPSK/Polar/MIB） | ✅ |
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
@@ -75,7 +75,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-pdsch-gather` | 真实块的 CN→重构→gather→**BN→硬判决** 全链逐值对齐（含 spad 对照）；修掉 `V % Zc` 下溢与 `emit` 目标数组两个 bug |
 | `run-pdsch-bg2` | **真实 BG2 块**的检查节点全遍历（42 行 × 20 提升行），DMA 分块流式进出：`min1/min2/sign` 与黄金模型逐位一致，**42 次阵列运行 / 84 次 DMA / 19,097 周期**（M1 运行时双页 ping-pong 重叠后；微码由 `gen_cn_prog.py` 生成 + IMEM 批量装载，此前 84 次运行 / 631,360 周期） |
 | `run-pdsch-iter` | **P1 整链**：BG2(Zc=20) 一个码块 **8 次迭代全在硬件上**（42 CN + 52 BN/迭代），`check_pdsch_iter.py` **1040/1040 硬判决**与纯 min-sum 一致；**752 次阵列运行 / 1556 次 DMA / 内核 1,585,169 周期**（≈198k/迭代：CN 152k、BN+搬运 589k、D$ 失效+重构 844k），仿真总周期 2,025,561（约 3 分钟，只在 `verify.sh full` 里）。CPU 侧瓶颈是 WT store（≈20 拍/8 字节），三步优化 1.96×（`docs/09` §5.3）；旋转挪不进硬件的原因见 §5.4 |
-| `run-pdsch-full` | **PDSCH 整链（样本进 → TB 出）**：`tools/pdsch_full_plan.py` 生成 2 符号 CP+4096 IFFT 的时域样本（平坦增益 + AWGN），SoC 自己做 FFT → RE 提取 → 逐符号 LS 估计 → 均衡 → 720 个 QPSK 软 LLR → 38.211 Gold 解扰（`c_init` = n_RNTI<<15）→ 解速率匹配（720→1040，跳过 16 filler + 40 打孔）→ `>>8` 定标 → 复用 `run-pdsch-iter` 的 8 次纯 min-sum 迭代 → CRC24A → 80 bit TB。`check_pdsch_full.py` 硬门 = **LLR 符号逐位 + 1040/1040 硬判决 + CRC + 80/80 TB**；20 dB/seed 1 与 0 dB/seed 3 均通过，0 errors、**2,937,224 周期 / 976 次阵列运行 / 1556 次 DMA**。`make -C sim/soc run-pdsch-full SNR=<db> SEED=<n>` 可换 SNR 与种子；只在 `verify.sh full` 里 |
+| `run-pdsch-full` | **PDSCH 整链（样本进 → TB 出）**：`tools/pdsch_full_plan.py` 生成 2 符号 CP+4096 IFFT 的时域样本（平坦增益 + AWGN），SoC 自己做 FFT → RE 提取 → **38.211 7.4.1.1 Gold DMRS 逐符号 LS 估计**（`c_init`=0x120002/0x180002）→ 均衡 → 720 个 QPSK 软 LLR → **38.212 5.4.2.2 反交织** → 38.211 Gold 解扰（`c_init` = n_RNTI<<15）→ 解速率匹配（720→1040，跳过 16 filler + 40 打孔）→ `>>8` 定标 → 复用 `run-pdsch-iter` 的 8 次纯 min-sum 迭代 → CRC24A → 80 bit TB。`check_pdsch_full.py` 硬门 = **DMRS `c_init` + LLR 符号逐位 + 高 SNR 幅值容差 + 1040/1040 硬判决 + CRC + 80/80 TB**；20 dB/seed 1 与 0 dB/seed 3 均通过，0 errors、**3,064,784 / 3,067,508 周期（20 / 0 dB）、976 次阵列运行、1556 次 DMA**。20 dB 下 `chan est` 硬件 `[32,16,31,15]` 与模型逐值相同、bin0 `yw=(2304,6320)` vs 模型 `(2305,6325)`。`make -C sim/soc run-pdsch-full SNR=<db> SEED=<n>` 可换 SNR 与种子；只在 `verify.sh full` 里 |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
@@ -212,16 +212,18 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 7. ✅ IMEM 批量装载 + 运行时重叠已落地：`gpcp_cgra_imem_load` 走拷贝引擎（DMA_CTRL[3]），
    `run-pdsch-bn1` 25,558 → 11,916 周期、`run-pdsch-bg2` 180,191 → 165,088 周期；
    `sw/include/gpcp_cgra_rt.h` 的 M1 双页 ping-pong 再把 bg2 loop 22,562 → 19,097 周期。
-8. ✅ PDSCH 整链已跑通：`run-pdsch-full` 从时域样本一路解到 80 bit TB（20 dB / 0 dB 两点 1040/1040 硬判决、CRC、TB 全对，2.94 M 周期）；`run-pdsch-iter` 的 BG2 8 次迭代（内核 1.59 M 周期）也已逐值对账。**剩下** BG1 / Z=64（边消息分页、层调度），与新建 `tools/nr_ldpc.py` 逐位对齐（该文件尚未创建）。
+8. ✅ PDSCH 整链已跑通且协议保真：`run-pdsch-full` 从时域样本一路解到 80 bit TB，含真 Gold DMRS + 38.212 比特交织（20 dB / 0 dB 两点 1040/1040 硬判决、CRC、TB 全对，3.06 M 周期）；`run-pdsch-iter` 的 BG2 8 次迭代（内核 1.59 M 周期）也已逐值对账。**剩下** BG1 / Z=64（边消息分页、层调度），与新建 `tools/nr_ldpc.py` 逐位对齐（该文件尚未创建）。
 9. 自动映射：**规则映射器已落地**（`cgra/tools/rule_map.py` 的 BN link 版 155 拍 /
    CN 172 拍单程序，台架逐值 0 差异，见 `docs/10` §11~§15）；**剩余**：把 `Program.set`
    当 IR 做"规整 kernel 的约束映射器"，CGRA-ME 仍给不出可靠落点（退火不可用）；
    再谈 MLIR/CGRA-Flow（`docs/01` §2.3）。
-10. **已知限制（定点 FFT 增益）**：`ssb_fft.inc` 定点 FFT 的幅值/相位增益与浮点
-    黄金模型不一致（本链实测 RE 实部约 0.88×、虚部约 0.51×，LLR 幅值约 0.2×）。
-    `run-ssb-fid` 与 `run-pdsch-full` 共用该引擎，两者都只对**软比特符号**做硬门，
-    靠 Polar / LDPC 纠错吸收幅值差。要与参考接收机逐值对齐，需重标定定点 FFT
-    的级间缩放——会影响已验收的 P1，须单独开一轮。
+10. **定点 FFT 增益的真相（已定位，勿再误判）**：`ssb_fft.inc` 没有 AGC / 块浮点
+    缩放，增益取决于**时域波形峰值**。step-1 的恒定 `+QPSK` 导频全同相 → PAPR
+    高 → 触发额外缩放，实测幅值只有浮点模型的 0.2×（曾误判为引擎固有缺陷）。
+    换成 38.211 真 Gold DMRS 后峰值下降，**20 dB 下信道估计逐值相同
+    `[32,16,31,15]`、bin0 `yw=(2304,6320)` vs 模型 `(2305,6325)`、LLR 差 <1%**；
+    0 dB 时噪声抬高峰值仍有幅值差，但软比特符号全对、LDPC 照常收敛。
+    要彻底消除低 SNR 偏差，需给 FFT 加块浮点/AGC，或按峰值归一化 TD 样本。
 
 **P3**：DL-SCH 一条链（LDPC→速率匹配→QAM→层映射→RE→OFDM）、QEMU 设备模型、free5GC 联调。
 

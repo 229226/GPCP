@@ -6,11 +6,13 @@ and ``sw/soc/pdsch_iter_bm.c`` (which feeds LCG-random LLRs into the LDPC
 engine).  Here the stimulus is an actual OFDM waveform that the SoC has to
 demodulate itself:
 
-    TB -> CRC24A -> LDPC BG2 -> rate match -> scramble -> QPSK -> RE grid
+    TB -> CRC24A -> LDPC BG2 -> rate match -> scramble
+       -> 38.212 5.4.2.2 bit interleaving -> QPSK -> RE grid
+          (38.211 7.4.1.1 Gold DMRS on every 4th RE)
        -> flat gain + AWGN -> IFFT + CP -> int32 TD dump
-    [SoC] FFT -> RE extract -> LS channel estimate -> equalise -> QPSK LLR
-       -> descramble -> rate de-match -> LLR scaling -> 8 pure-min-sum LDPC
-          iterations -> CRC24A -> 80-bit TB
+    [SoC] FFT -> RE extract -> Gold-DMRS LS estimate -> equalise
+       -> QPSK LLR -> de-interleave -> descramble -> rate de-match
+       -> LLR scaling -> 8 pure-min-sum LDPC iterations -> CRC24A -> TB
 
 Constants below MUST stay in sync with sw/soc/pdsch_full_bm.c.
 """
@@ -21,6 +23,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pdsch_plan as M
+import ldpc5g as L
 import nr_pbch as NR
 import check_pdsch_iter as CI
 from ssb_plan import _fft
@@ -49,14 +52,96 @@ FILLER_N = 16
 DEFAULT_SNR = 20.0
 DEFAULT_SEED = 1
 
+# ---- 38.211 7.4.1.1 PDSCH DMRS (configuration type 1, one symbol) --------
+DMRS_NID = 1                  # N_ID^SCID (DMRS scrambling identity)
+DMRS_NSCID = 0
+DMRS_NSLOT = 0
+DMRS_L0 = 2                   # first DMRS symbol index inside the slot
+DMRS_NSYMB_SLOT = 14
+DMRS_NCP = 0                  # normal CP
+QM = 2                        # QPSK bits per symbol (38.212 5.4.2.2)
+
 
 def bin_of(r):
     return BIN0 + r
 
 
+def dmrs_cinit(s):
+    """38.211 7.4.1.1: c_init of the PDSCH DMRS Gold sequence r(n)."""
+    l = DMRS_L0 + s
+    return ((1 << 17) * (DMRS_NSYMB_SLOT * DMRS_NSLOT + l + 1)
+            * (2 * DMRS_NID + DMRS_NSCID + 1)
+            + 2 * DMRS_NID + DMRS_NCP) % (1 << 31)
+
+
+def dmrs_seq(s):
+    """NPILOT complex QPSK pilots for OFDM symbol s, from the Gold sequence."""
+    c = NR.gold(dmrs_cinit(s), 2 * NPILOT)
+    return [complex((1 - 2 * c[2 * p]) * M.QPSK,
+                    (1 - 2 * c[2 * p + 1]) * M.QPSK)
+            for p in range(NPILOT)]
+
+
+def interleave(e):
+    """38.212 5.4.2.2 bit interleaving (QPSK, Qm=2: column write / row read)."""
+    rows = len(e) // QM
+    f = [0] * len(e)
+    for i in range(rows):
+        for j in range(QM):
+            f[QM * i + j] = e[j * rows + i]
+    return f
+
+
+def deinterleave(f):
+    """Inverse of interleave(), applied to the LLR vector."""
+    rows = len(f) // QM
+    e = [0] * len(f)
+    for i in range(rows):
+        for j in range(QM):
+            e[j * rows + i] = f[QM * i + j]
+    return e
+
+
+def build_link_fid():
+    """Coding chain of pdsch_plan.build_link + interleaving + Gold DMRS."""
+    tb = M.payload_bits()
+    cw = L.encode(tb + M.crc24a(tb) + [0] * (M.KB * M.ZC - M.A_TB - M.CRC_LEN),
+                  M.KB, M.ZC)
+    e, usable, filler = M.rate_match(cw)
+    M.RM_INFO = (len(usable), filler)
+    scr = M.scrambling_seq()
+    e_sc = [b ^ s for b, s in zip(e, scr)]
+    f = interleave(e_sc)
+    syms = M.qpsk_map(f)
+    grid = [[0j] * NRE for _ in range(NSYM)]
+    for s in range(NSYM):
+        d = dmrs_seq(s)
+        for p, r in enumerate(M.pilot_res()):
+            grid[s][r] = d[p]
+    n = 0
+    for s in range(NSYM):
+        for r in M.data_res():
+            grid[s][r] = syms[n]
+            n += 1
+    return grid
+
+
+def channel_estimate_fid(yq):
+    """Per-symbol LS estimate against the 38.211 Gold DMRS sequence."""
+    h = []
+    den = M.NPILOT * 2 * M.QPSK * M.QPSK // M.H_SCALE
+    for s in range(NSYM):
+        d = dmrs_seq(s)
+        acc = 0j
+        for p, r in enumerate(M.pilot_res()):
+            acc += yq[s][r] * complex(d[p].real, -d[p].imag)
+        h.append(complex(int(acc.real // den), int(acc.imag // den)))
+    return h
+
+
 def build_td(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
     """Transmit grid -> channel -> IFFT+CP -> integer time-domain samples."""
-    grid = M.build_link()                  # also fills M.RM_INFO
+    grid = build_link_fid()                # Gold DMRS + 38.212 bit interleaving
     y = M.add_channel(grid, snr_db, seed)
     td = []
     for s in range(NSYM):
@@ -104,10 +189,11 @@ def golden(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
     """All intermediate anchors of the receive chain, plus the expected TB."""
     td, y = build_td(snr_db, seed)
     yq = quantised_y(td)
-    h = M.channel_estimate(yq)
-    raw = M.extract_llr(yq, h)
+    h = channel_estimate_fid(yq)
+    raw = M.extract_llr(yq, h)             # LLRs in interleaved (f) order
+    llr_e = deinterleave(raw)              # back to rate-match (e) order
     scr = M.scrambling_seq()
-    descr = [-v if scr[k] else v for k, v in enumerate(raw)]
+    descr = [-v if scr[k] else v for k, v in enumerate(llr_e)]
     dem = M.rate_dematch(descr, *M.RM_INFO)
     hard, scaled = hw_decode(dem)
     tb = hard[:M.A_TB]
@@ -151,6 +237,8 @@ def main():
 
     g = golden(a.snr, a.seed)
     print("PDSCH full chain @ %.1f dB / seed %d" % (a.snr, a.seed))
+    print("  DMRS c_init      : sym0=0x%x sym1=0x%x (N_ID=%d, l0=%d)" % (
+        dmrs_cinit(0), dmrs_cinit(1), DMRS_NID, DMRS_L0))
     print("  channel estimate : %s" % g["h"])
     print("  raw LLR min/max  : %d / %d" % (min(g["raw"]), max(g["raw"])))
     print("  scaled LLR range : %d / %d (sentinel %d)" % (
