@@ -3,16 +3,17 @@
  *
  * 每次迭代：
  *   1) CN：42 个检查节点，M1 运行时双页 ping-pong（cn_prog，172 拍/行）；
- *   2) 逐边重构（CPU，纯算术）：m' = sign·mag，mag 取 min1/min2；
- *   3) 每个变量块 b：gather（24 槽 + LLR）→ DMA 进 → BN（bn_prog，155 拍）→ DMA 出 → scatter；
- *   4) 最后一次迭代后把每块的硬判决（BN 的 bank 25）收进结果区。
+ *   2) 重构 + gather 合并（CPU）：m' = sign·mag 按 (i-sh)%Zc 直接落进该边的块缓冲；
+ *   3) 每个变量块 b：DMA 进 → BN（bn_prog，155 拍）→ DMA 出 → scatter 回 msg；
+ *   4) 最后一次迭代把每块的硬判决（BN 的 bank 25）收进结果区。
  *
  * 判据：tools/check_pdsch_iter.py（同一份 LLR、同一个基图、纯 min-sum、同一 gather/scatter 约定）
  *
  * 数据流（CPU 与引擎的交接都在 RAM 里，所以要处理 D$ 一致性）：
- *   msg —— CPU 写（重构/散射）→ 引擎读（CN 的 DMA 进）。WT 写穿，RAM 天然是新的；
- *   res —— 引擎写（CN 的 DMA 出）→ CPU 读（重构）。每轮读之前必须 rt_dcache_flush()；
- *   bout —— 引擎写（BN 的 DMA 出）→ CPU 读（散射/硬判决）。每块独占一段 + 每轮刷新。
+ *   gath —— CPU 写（重构落位）→ 引擎读（BN 搬入）。WT 写穿，RAM 天然是新的；
+ *   msg  —— CPU 写（散射）→ 引擎读（CN 搬入）。同上；
+ *   res  —— 引擎写（CN 搬出）→ CPU 读（重构）。每轮读之前必须 rt_dcache_flush()；
+ *   bout —— 引擎写（BN 搬出）→ CPU 读（散射/硬判决）。每块独占一段 + 每轮刷新。
  *
  * 结果区（0x8001_0000）：[0] marker [1] blocks [2] runs [3] dma [4] cycles [5] errs [6] 0x600D
  *                        [8..] 52 × 20 个硬判决（块优先）
@@ -45,17 +46,19 @@
 #define MSG_BASE   0x80030000ul   /* 42*10*20 = 8400 words -> 0x80038340 */
 #define RES_BASE   0x80039000ul   /* 42*3*20  = 2520 words -> 0x8003B760 */
 #define LLR_BASE   0x8003C000ul   /* 52*20    = 1040 words -> 0x8003D040 */
-#define GATH_BASE  0x8003E000ul   /* 26*20    = 520  words -> 0x8003E820 */
-/* bout 每个变量块独占一段：块与块之间也会"引擎写→CPU 读"，共用一个缓冲
- * 会让块 b 读到块 b-1 的旧值（同一坑）。52 x 520 字 = 108 KiB。 */
-#define BOUT_BASE  0x80040000ul
-#define BOUT_STRIDE (26 * ZC)     /* 每块 520 字 -> 52 块到 0x80056900 */
+/* gath / bout 每个变量块各独占一段：
+ *   - bout 必须独占（引擎写→CPU 读，同一坑）；
+ *   - gath 独占是为了"只写一遍"：每块的零填充槽位和 LLR 槽在启动时就位，
+ *     之后每个块只写自己 n 条边（原来每块要重写 ~270 个零 + 20 个 LLR）。 */
+#define GATH_BASE  0x8003E000ul   /* 52 x 520 字 = 108 KiB -> 0x80058680 */
+#define BOUT_BASE  0x80059000ul   /* 52 x 520 字 = 108 KiB -> 0x80073680 */
+#define GSPAD      (26 * ZC)      /* 每块 26 bank x 20 字（bank 25 不参与搬入） */
 
 static int32_t (*msg)[MAXD][ZC] = (int32_t (*)[MAXD][ZC])MSG_BASE;
 static int32_t (*res)[3][ZC] = (int32_t (*)[3][ZC])RES_BASE;
 static int32_t (*llr)[ZC] = (int32_t (*)[ZC])LLR_BASE;
-static int32_t (*gath)[ZC] = (int32_t (*)[ZC])GATH_BASE;
-static int32_t *bout_all = (int32_t *)BOUT_BASE;   /* 每块一段：bout_all + b*520 */
+static int32_t *g_all = (int32_t *)GATH_BASE;               /* 每块一段：g_all + b*520 */
+static int32_t *b_all = (int32_t *)BOUT_BASE;               /* 每块一段：b_all + b*520 */
 
 static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
 static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
@@ -73,16 +76,11 @@ static uint32_t runs, dmas, errs;
 /* 变量块 → 自己的边表，启动时建一次（避免每个块扫 42×10 条边） */
 static uint8_t blk_n[BG2_COLS];
 static uint8_t blk_r[BG2_COLS][24], blk_k[BG2_COLS][24], blk_sh[BG2_COLS][24];
-/* 预旋转索引表：消掉 gather/scatter 里每个元素的 % ZC */
-static uint8_t rotm[ZC][ZC], rotp[ZC][ZC];
+/* 反向查表：(r,k) 属于哪个变量块、在块内的槽号（重构时直接落位到 gather） */
+static uint8_t edge_b[BG2_ROWS][MAXD], edge_e[BG2_ROWS][MAXD];
 
 static void build_tables(void)
 {
-    for (uint32_t sh = 0; sh < ZC; sh++)
-        for (uint32_t i = 0; i < ZC; i++) {
-            rotm[sh][i] = (uint8_t)((i + ZC - sh) % ZC);   /* gather: (i - sh) */
-            rotp[sh][i] = (uint8_t)((i + sh) % ZC);        /* scatter: (i + sh) */
-        }
     for (uint32_t b = 0; b < BG2_COLS; b++) {
         uint8_t n = 0;
         for (uint32_t r = 0; r < BG2_ROWS; r++)
@@ -91,6 +89,8 @@ static void build_tables(void)
                     blk_r[b][n] = (uint8_t)r;
                     blk_k[b][n] = (uint8_t)k;
                     blk_sh[b][n] = (uint8_t)(bg2_sh[r][k] % ZC);
+                    edge_b[r][k] = (uint8_t)b;
+                    edge_e[r][k] = n;
                     n++;
                 }
         blk_n[b] = n;
@@ -110,60 +110,93 @@ static void cn_row_out(uint32_t r, uint32_t page)
     dmas++;
 }
 
-/* 逐边重构：m' = sign(a)·mag，mag = (|a| == min1) ? min2 : min1 */
-static void reconstruct(void)
+/* 重构 + gather 合并：m' = sign(a)·mag 直接写进**该边所属块**的 gather 缓冲，
+ * 并按 (i-sh)%Zc 落位（gather 那一整趟就不用再做）。
+ *
+ * 为什么合并：本项目 CPU 侧的瓶颈是 "WT store 排队 → AXI 单笔 write"（实测
+ * 约 20 拍/8 字节）。原来每条边要写两次（先 m' 写回 msg，再 gather 搬一遍），
+ * 合并后只写一次；msg 也不必再存 m'（下一轮 CN 读的是 scatter 写回的 BN 输出）。
+ *
+ * 落位用两段连续写（src 顺序 j=0..Zc-1）：
+ *   dst[sh..Zc-1] <- m'(0..Zc-1-sh)，dst[0..sh-1] <- m'(Zc-sh..Zc-1) */
+static void reconstruct_gather(void)
 {
-    for (uint32_t r = 0; r < BG2_ROWS; r++)
-        for (uint32_t k = 0; k < bg2_deg[r]; k++)
-            for (uint32_t i = 0; i < ZC; i++) {
-                int32_t a = msg[r][k][i];
+    for (uint32_t r = 0; r < BG2_ROWS; r++) {
+        uint32_t d = bg2_deg[r];
+        const int32_t *m1p = res[r][0];
+        const int32_t *m2p = res[r][1];
+        const int32_t *sgp = res[r][2];
+        for (uint32_t k = 0; k < d; k++) {
+            uint32_t b = edge_b[r][k], e = edge_e[r][k];
+            uint32_t sh = bg2_sh[r][k] % ZC;
+            const int32_t *src = msg[r][k];
+            int32_t *dst = (int32_t *)(g_all + b * GSPAD) + e * ZC;
+            for (uint32_t j = 0; j < ZC - sh; j++) {
+                int32_t a = src[j];
                 int32_t ab = a < 0 ? -a : a;
-                int32_t mag = (ab == res[r][0][i]) ? res[r][1][i] : res[r][0][i];
-                int32_t neg = (a < 0) ^ (res[r][2][i] != 0);
-                msg[r][k][i] = neg ? -mag : mag;
+                int32_t mag = (ab == m1p[j]) ? m2p[j] : m1p[j];
+                dst[sh + j] = ((a < 0) ^ (sgp[j] != 0)) ? -mag : mag;
             }
+            for (uint32_t j = 0; j < sh; j++) {
+                uint32_t i = ZC - sh + j;
+                int32_t a = src[i];
+                int32_t ab = a < 0 ? -a : a;
+                int32_t mag = (ab == m1p[i]) ? m2p[i] : m1p[i];
+                dst[j] = ((a < 0) ^ (sgp[i] != 0)) ? -mag : mag;
+            }
+        }
+    }
 }
 
-/* 一个变量块：gather → BN → 搬回 → scatter；返回硬判决写进 hard[b] */
-static void bn_block(uint32_t b, int32_t *hard)
+/* ---- 变量块的两段：搬入 / 搬出+scatter，供流水重叠 ---- */
+/* 搬入：banks 0..24（24 个消息槽 + LLR），bank 25 不参与 */
+static void bn_dma_in(uint32_t b)
+{
+    int32_t *gath = g_all + b * GSPAD;
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    if (rt_dma_begin(CGRA_BASE, (uintptr_t)gath, 0, 25 * ZC, 0, 0, 32, ZC))
+        errs++;
+    dmas++;
+}
+
+/* 搬出：只搬用得上的 bank 0..n-1（散射）+ bank 25（硬判决，只有最后一轮要） */
+static void bn_dma_out(uint32_t b, int want_hard)
 {
     uint32_t n = blk_n[b];
-    int32_t (*bout)[ZC] = (int32_t (*)[ZC])(bout_all + b * BOUT_STRIDE);
-    for (uint32_t e = 0; e < n; e++) {
-        uint32_t r = blk_r[b][e], k = blk_k[b][e];
-        const uint8_t *rm = rotm[blk_sh[b][e]];
-        int32_t *dst = gath[e];
-        const int32_t *src = msg[r][k];
-        for (uint32_t i = 0; i < ZC; i++)
-            dst[i] = src[rm[i]];
+    int32_t *bout = b_all + b * GSPAD;
+    if (n) {
+        if (rt_dma_begin(CGRA_BASE, (uintptr_t)bout, 0, n * ZC, 0, 1, 32, ZC))
+            errs++;
+        dmas++;
     }
-    for (uint32_t k = n; k < 24; k++)
-        for (uint32_t i = 0; i < ZC; i++)
-            gath[k][i] = 0;
-    for (uint32_t i = 0; i < ZC; i++)
-        gath[24][i] = llr[b][i];
+    if (want_hard) {
+        if (rt_dma_begin(CGRA_BASE, (uintptr_t)(bout + n * ZC),
+                         SPAD_IDX(25, 0), ZC, 0, 1, 0, 0))
+            errs++;
+        dmas++;
+    }
+}
 
-    if (rt_dma_run(CGRA_BASE, (uintptr_t)&gath[0][0], 0, 26 * ZC, 0, 0, 32, ZC))
-        errs++;
-    dmas++;
-    if (rt_array_run(CGRA_BASE, 0, BN_PROG_CYCLES))
-        errs++;
-    runs++;
-    if (rt_dma_run(CGRA_BASE, (uintptr_t)&bout[0][0], 0, 26 * ZC, 0, 1, 32, ZC))
-        errs++;
-    dmas++;
-
-    /* scatter：msg[r][k][i] = out_k[(i + sh) % Zc]（gather 用 (i-sh)，逆映射是 (i+sh)） */
+/* scatter：msg[r][k][i] = out_k[(i+sh)%Zc]，同样两段连续写回：
+ *   dst[0..Zc-1-sh] <- src[sh..Zc-1]，dst[Zc-sh..Zc-1] <- src[0..sh-1] */
+static void bn_scatter(uint32_t b, int want_hard, int32_t *hard)
+{
+    uint32_t n = blk_n[b];
+    int32_t *bout = b_all + b * GSPAD;
     for (uint32_t e = 0; e < n; e++) {
-        uint32_t r = blk_r[b][e], k = blk_k[b][e];
-        const uint8_t *rp = rotp[blk_sh[b][e]];
-        const int32_t *src = bout[e];
+        uint32_t r = blk_r[b][e], k = blk_k[b][e], sh = blk_sh[b][e];
+        const int32_t *src = bout + e * ZC;
         int32_t *dst = msg[r][k];
-        for (uint32_t i = 0; i < ZC; i++)
-            dst[i] = src[rp[i]];
+        for (uint32_t i = 0; i < ZC - sh; i++)
+            dst[i] = src[sh + i];
+        for (uint32_t i = 0; i < sh; i++)
+            dst[ZC - sh + i] = src[i];
     }
-    for (uint32_t i = 0; i < ZC; i++)
-        hard[i] = bout[25][i];
+    if (want_hard) {
+        const int32_t *hb = bout + n * ZC;
+        for (uint32_t i = 0; i < ZC; i++)
+            hard[i] = hb[i];
+    }
 }
 
 static uint32_t lcg = LCG_SEED;
@@ -190,6 +223,17 @@ int main(void)
                 msg[r][k][i] = (k < bg2_deg[r])
                                ? llr[bg2_col[r][k]][(i + bg2_sh[r][k]) % ZC]
                                : SENTINEL;
+
+    /* 每块自己的 gather 缓冲：零槽位（n..23）和 LLR 槽（24）只在这里写一次；
+     * 之后每个块只覆盖自己 n 条边所在的槽，所以每轮迭代省掉 ~270 字/块的写。 */
+    for (uint32_t b = 0; b < BG2_COLS; b++) {
+        int32_t (*gath)[ZC] = (int32_t (*)[ZC])(g_all + b * GSPAD);
+        for (uint32_t k = 0; k < 24; k++)
+            for (uint32_t i = 0; i < ZC; i++)
+                gath[k][i] = 0;
+        for (uint32_t i = 0; i < ZC; i++)
+            gath[24][i] = llr[b][i];
+    }
 
     /* 两个页都放哨兵；CN 与 BN 各装一次程序 */
     for (uint32_t i = 0; i < ZC; i++) {
@@ -223,16 +267,28 @@ int main(void)
         ta = mtime();
         /* 引擎刚写完 res：先整片失效 D$，再让 CPU 读（见上面的注释） */
         rt_dcache_flush();
-        reconstruct();
+        reconstruct_gather();
         acc_cpu += mtime() - ta;
         out[1050] = acc_cpu;
 
         ta = mtime();
-        /* ---- BN：52 个变量块（先换装 BN 程序） ---- */
+        /* ---- BN：52 个变量块，两段流水（先换装 BN 程序） ----
+         *  阵列(b) 之后发"搬出(b)"；"搬入(b+1)"与 scatter(b) 并行。
+         *  单一 outstanding 的引擎同一时刻只跑一个传输，所以搬出完了再发搬入。 */
         if (gpcp_cgra_imem_load(CGRA_BASE, bn_prog, BN_PROG_CYCLES * NPES))
             errs++;
-        for (uint32_t b = 0; b < BG2_COLS; b++)
-            bn_block(b, hard[b]);
+        int want_hard = (it + 1u == ITERS);      /* 硬判决只有最后一轮要搬 */
+        bn_dma_in(0);
+        if (rt_dma_wait(CGRA_BASE)) errs++;
+        for (uint32_t b = 0; b < BG2_COLS; b++) {
+            if (rt_array_run(CGRA_BASE, 0, BN_PROG_CYCLES)) errs++;
+            runs++;
+            bn_dma_out(b, want_hard);
+            if (rt_dma_wait(CGRA_BASE)) errs++;
+            if (b + 1 < BG2_COLS) bn_dma_in(b + 1);
+            bn_scatter(b, want_hard, hard[b]);
+            if (b + 1 < BG2_COLS) { if (rt_dma_wait(CGRA_BASE)) errs++; }
+        }
         acc_bn += mtime() - ta;
         out[1049] = acc_bn;
     }

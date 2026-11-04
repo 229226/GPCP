@@ -37,7 +37,7 @@ env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用�
 
 # 1) 一条命令全量验收（推荐先跑这个，确认基线）
 bash tools/verify.sh quick            # 实测 ~300 s：14 kernel + 8 个 SoC 目标（含 run-ssb-fid / run-ssb-slot）
-bash tools/verify.sh full             # 实测 ~1230 s：14 kernel + 20 个 SoC 基准（含 6 分钟的 run-pdsch-iter）
+bash tools/verify.sh full             # 实测 ~1230 s（run-pdsch-iter 优化后约少 4 分钟）：14 kernel + 20 个 SoC 基准
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 make verify / make verify-full        # 同上两个的 make 包装
 
@@ -74,7 +74,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-pdsch-bn1` | 单个变量块过 BN 微码：24 个消息槽 + LLR + 硬判决共 **520 个值**逐值等于黄金模型（**1 次阵列运行 / 155 拍 / 2 次 DMA**，仿真总周期 **11,916**）。微码由 `cgra/tools/gen_bn_prog.py`（规则映射器 link 版）生成，**IMEM 走拷贝引擎批量装载**（`gpcp_cgra_imem_load`，逐字写时总周期 25,558，2.15×） |
 | `run-pdsch-gather` | 真实块的 CN→重构→gather→**BN→硬判决** 全链逐值对齐（含 spad 对照）；修掉 `V % Zc` 下溢与 `emit` 目标数组两个 bug |
 | `run-pdsch-bg2` | **真实 BG2 块**的检查节点全遍历（42 行 × 20 提升行），DMA 分块流式进出：`min1/min2/sign` 与黄金模型逐位一致，**42 次阵列运行 / 84 次 DMA / 20,946 拍（仿真总周期 165,088）**（微码由 `gen_cn_prog.py` 生成 + IMEM 批量装载；原来是 84 次运行 / 631,360 周期） |
-| `run-pdsch-iter` | **P1 整链**：BG2(Zc=20) 一个码块 **8 次迭代全在硬件上**（42 CN + 52 BN/迭代），`check_pdsch_iter.py` **1040/1040 硬判决**与纯 min-sum 一致；**752 次阵列运行 / 1504 次 DMA / 内核 3,108,048 周期**（≈389k/迭代：CN 156k、BN+搬运 2.17M、D$ 失效+重构 777k），仿真总周期 3,437,443（约 6 分钟，只在 `verify.sh full` 里）。坑：`RES`/`LLR` 地址重叠、`bout` 被 52 块共用、D$ 不失效（见 `docs/09` §5） |
+| `run-pdsch-iter` | **P1 整链**：BG2(Zc=20) 一个码块 **8 次迭代全在硬件上**（42 CN + 52 BN/迭代），`check_pdsch_iter.py` **1040/1040 硬判决**与纯 min-sum 一致；**752 次阵列运行 / 1556 次 DMA / 内核 1,585,169 周期**（≈198k/迭代：CN 152k、BN+搬运 589k、D$ 失效+重构 844k），仿真总周期 2,025,561（约 3 分钟，只在 `verify.sh full` 里）。CPU 侧瓶颈是 WT store（≈20 拍/8 字节），三步优化 1.96×（`docs/09` §5.3）；旋转挪不进硬件的原因见 §5.4 |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
