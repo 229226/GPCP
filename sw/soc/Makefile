@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -74,3 +74,8 @@ $(BUILD)/ssb_fid_bm.elf: ssb_fid_bm.c start.S link.ld | $(BUILD)
 
 # PDSCH full receive chain: needs the generated CN/BN microcode headers
 $(BUILD)/pdsch_full_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h
+
+# HARQ: same full-chain source, compiled for two RV transmissions
+$(BUILD)/pdsch_harq_bm.elf: pdsch_full_bm.c start.S link.ld pdsch_cn_prog.h pdsch_bn_prog.h | $(BUILD)
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DHARQ_TX=2 $(LDFLAGS) start.S pdsch_full_bm.c -o $@
+	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/pdsch_harq_bm.dis

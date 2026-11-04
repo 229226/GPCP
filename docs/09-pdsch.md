@@ -43,8 +43,13 @@ TB(80 bit) → CRC24A → 38.212 LDPC(BG2, Kb=6, Zc=20, N=1040)
    （38.211 7.4.1.1，`c_init`=0x120002/0x180002），并同时补上 38.212 §5.4.2.2
    比特交织；本文件其余部分描述的仍是 step-1 简化模型，作为 `pdsch_plan.py` 的基准。
 
-**尚未实现（下一步清单）**：HARQ 软合并与 RV、PDCCH/DCI 与
-MCS 表、层映射/预编码（SISO）、解速率匹配/LLR 的微码、以及 `run-pdsch` 基准。
+**尚未实现（下一步清单）**：PDCCH/DCI 的硬件基准与 MCS 表、层映射/预编码的
+硬件化、解速率匹配/LLR 的微码。
+
+**后续已落地**：HARQ/RV 软合并（`run-pdsch-harq`，两次传输 Chase 合并）、
+38.212 §5.4.2.2 比特交织、真 38.211 Gold DMRS（均在 `pdsch_full_plan.py` /
+`pdsch_full_bm.c`）；控制信道、大提升值 LDPC、MIMO 与 MAC 的**模型级**版本见
+`tools/nr_*.py`，尚未落到 CGRA。
 
 **已经落到 CGRA 上的部分**（step 2a，`make -C sim/soc run-pdsch`）：
 

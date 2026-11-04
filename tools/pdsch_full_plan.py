@@ -52,6 +52,11 @@ FILLER_N = 16
 DEFAULT_SNR = 20.0
 DEFAULT_SEED = 1
 
+# ---- HARQ / redundancy versions (38.212 5.4.2.1) ----
+RV_K0 = {0: 0, 1: USABLE // 4, 2: USABLE // 2, 3: 3 * USABLE // 4}
+RV_SEQ = (0, 2)                  # two transmissions: rv=0 then rv=2
+NTX = len(RV_SEQ)
+
 # ---- 38.211 7.4.1.1 PDSCH DMRS (configuration type 1, one symbol) --------
 DMRS_NID = 1                  # N_ID^SCID (DMRS scrambling identity)
 DMRS_NSCID = 0
@@ -102,15 +107,22 @@ def deinterleave(f):
     return e
 
 
-def build_link_fid():
-    """Coding chain of pdsch_plan.build_link + interleaving + Gold DMRS."""
+def rate_select(usable, rv):
+    """38.212 5.4.2.1 bit selection with the redundancy-version offset k0."""
+    k0 = RV_K0[rv]
+    return [usable[(k0 + j) % len(usable)] for j in range(E_BITS)], k0
+
+
+def build_link_fid(rv=0):
+    """Coding chain + interleaving + Gold DMRS for one RV transmission."""
     tb = M.payload_bits()
     cw = L.encode(tb + M.crc24a(tb) + [0] * (M.KB * M.ZC - M.A_TB - M.CRC_LEN),
                   M.KB, M.ZC)
-    e, usable, filler = M.rate_match(cw)
+    _, usable, filler = M.rate_match(cw)
     M.RM_INFO = (len(usable), filler)
+    e_rv, _ = rate_select(usable, rv)
     scr = M.scrambling_seq()
-    e_sc = [b ^ s for b, s in zip(e, scr)]
+    e_sc = [b ^ s for b, s in zip(e_rv, scr)]
     f = interleave(e_sc)
     syms = M.qpsk_map(f)
     grid = [[0j] * NRE for _ in range(NSYM)]
@@ -139,10 +151,8 @@ def channel_estimate_fid(yq):
     return h
 
 
-def build_td(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
-    """Transmit grid -> channel -> IFFT+CP -> integer time-domain samples."""
-    grid = build_link_fid()                # Gold DMRS + 38.212 bit interleaving
-    y = M.add_channel(grid, snr_db, seed)
+def td_from_y(y):
+    """Frequency-domain RE grid -> integer TD symbols with CP."""
     td = []
     for s in range(NSYM):
         freq = [0j] * NFFT
@@ -151,7 +161,37 @@ def build_td(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
         sig = _fft(freq, inverse=True)     # normalised IFFT (1/N)
         samples = [complex(int(round(c.real)), int(round(c.imag))) for c in sig]
         td.append(NR.add_cp(samples, CP_LEN))
-    return td, y
+    return td
+
+
+def build_td(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
+    """Single transmission (rv=0)."""
+    grid = build_link_fid()                # Gold DMRS + 38.212 bit interleaving
+    y = M.add_channel(grid, snr_db, seed)
+    return td_from_y(y), y
+
+
+def harq_grids(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
+    """Two RV transmissions, each with its own noise realisation."""
+    ys = []
+    for tx, rv in enumerate(RV_SEQ):
+        grid = build_link_fid(rv)
+        ys.append(M.add_channel(grid, snr_db, seed + tx))
+    return ys
+
+
+def dump_td_bin_harq(path, snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
+    """Binary TD dump: NSYM*NTX symbols, transmission-major order."""
+    ys = harq_grids(snr_db, seed)
+    n = 0
+    with open(path, "wb") as f:
+        for y in ys:
+            for blk in td_from_y(y):
+                for c in blk:
+                    f.write(struct.pack("<I", (int(c.real) * TD_SCALE) & 0xFFFFFFFF))
+                    f.write(struct.pack("<I", (int(c.imag) * TD_SCALE) & 0xFFFFFFFF))
+                    n += 8
+    return n
 
 
 def quantised_y(td):
@@ -207,6 +247,47 @@ def golden(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
     )
 
 
+def soft_combine(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
+    """Golden anchors for the two-transmission Chase combiner."""
+    buf = [0] * USABLE
+    hs, raws, descrs = [], [], []
+    yq0 = None
+    for tx, y in enumerate(harq_grids(snr_db, seed)):
+        yq = quantised_y(td_from_y(y))
+        if tx == 0:
+            yq0 = yq
+        h = channel_estimate_fid(yq)
+        raw = M.extract_llr(yq, h)
+        llr_e = deinterleave(raw)
+        scr = M.scrambling_seq()
+        descr = [-v if scr[k] else v for k, v in enumerate(llr_e)]
+        k0 = RV_K0[RV_SEQ[tx]]
+        for k, v in enumerate(descr):
+            buf[(k0 + k) % USABLE] += v
+        hs.append(h); raws.append(raw); descrs.append(descr)
+    dem = [0] * PUNCT
+    u = 0
+    for i in range(NCODED - PUNCT):
+        if FILLER0 <= i < FILLER0 + FILLER_N:
+            dem.append(0)
+        else:
+            dem.append(buf[u]); u += 1
+    return dem, hs, raws, descrs, yq0
+
+
+def golden_harq(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
+    """Expected hard decisions / TB after Chase combining."""
+    dem, hs, raws, descrs, yq0 = soft_combine(snr_db, seed)
+    hard, scaled = hw_decode(dem)
+    tb = hard[:M.A_TB]
+    crc = hard[M.A_TB:M.A_TB + M.CRC_LEN]
+    want = M.payload_bits()
+    return dict(dem=dem, h=hs[0], raw=raws[0], descr=descrs[0], yq=yq0, hard=hard,
+                scaled=scaled, tb=tb, crc=crc, want=want,
+                crc_ok=(M.crc24a(tb) == crc),
+                tb_errors=sum(a != b for a, b in zip(tb, want)))
+
+
 def dump_td_bin(path, snr_db=DEFAULT_SNR, seed=DEFAULT_SEED):
     """Binary int32 TD dump: NSYM x SYM_LEN complex samples, re/im interleaved."""
     td, _ = build_td(snr_db, seed)
@@ -225,15 +306,41 @@ def main():
     d.add_argument("out")
     d.add_argument("--snr", type=float, default=DEFAULT_SNR)
     d.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    dh = sub.add_parser("dump-harq")
+    dh.add_argument("out")
+    dh.add_argument("--snr", type=float, default=DEFAULT_SNR)
+    dh.add_argument("--seed", type=int, default=DEFAULT_SEED)
     s = sub.add_parser("selftest")
     s.add_argument("--snr", type=float, default=DEFAULT_SNR)
     s.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    sh = sub.add_parser("selftest-harq")
+    sh.add_argument("--snr", type=float, default=DEFAULT_SNR)
+    sh.add_argument("--seed", type=int, default=DEFAULT_SEED)
     a = ap.parse_args()
 
     if a.cmd == "dump":
         n = dump_td_bin(a.out, a.snr, a.seed)
         print("wrote %s (%d bytes, snr=%.1f dB, seed=%d)" % (a.out, n, a.snr, a.seed))
         return 0
+
+    if a.cmd == "dump-harq":
+        n = dump_td_bin_harq(a.out, a.snr, a.seed)
+        print("wrote %s (%d bytes, %d RV transmissions %s, snr=%.1f dB, seed=%d)"
+              % (a.out, n, NTX, RV_SEQ, a.snr, a.seed))
+        return 0
+
+    if a.cmd == "selftest-harq":
+        g = golden_harq(a.snr, a.seed)
+        one = golden(a.snr, a.seed)
+        print("PDSCH HARQ @ %.1f dB / seed %d, RV offsets %s" % (
+            a.snr, a.seed, [RV_K0[r] for r in RV_SEQ]))
+        print("  single tx : crc_ok=%s tb_errors=%d" % (one["crc_ok"], one["tb_errors"]))
+        print("  combined  : crc_ok=%s tb_errors=%d" % (g["crc_ok"], g["tb_errors"]))
+        print("  combined scaled LLR: %d / %d" % (min(g["scaled"]), max(g["scaled"])))
+        good = g["crc_ok"] and g["tb_errors"] == 0
+        if good:
+            print("[ OK ] HARQ model: rv=0/2 Chase combining -> 80/80 TB")
+        return 0 if good else 1
 
     g = golden(a.snr, a.seed)
     print("PDSCH full chain @ %.1f dB / seed %d" % (a.snr, a.seed))

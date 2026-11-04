@@ -45,13 +45,13 @@ def _s32(v):
     return v - 0x100000000 if v & 0x80000000 else v
 
 
-def main(path, snr, seed):
+def main(path, snr, seed, harq=False):
     vals = parse_dump(path)
-    if len(vals) < 1083:
-        print("  dump too short: %d words (need >= 1083)" % len(vals))
+    if len(vals) < 1084:
+        print("  dump too short: %d words (need >= 1084)" % len(vals))
         return 1
 
-    g = P.golden(snr, seed)
+    g = P.golden_harq(snr, seed) if harq else P.golden(snr, seed)
     hard = vals[8:8 + NHARD]
     tb = hard[:P.M.A_TB]
     crc_ok = vals[5]
@@ -116,6 +116,11 @@ def main(path, snr, seed):
     if sign_bad(dem_hw, g["scaled"][40:48], "de-matched LLR signs"):
         ok = False
 
+    want_tx = 2 if harq else 1
+    if vals[1083] != want_tx:
+        print("  HARQ_TX mismatch: hw=%d want=%d" % (vals[1083], want_tx))
+        ok = False
+
     if vals[1081] != P.dmrs_cinit(0) or vals[1082] != P.dmrs_cinit(1):
         print("  DMRS c_init mismatch: hw=(0x%x,0x%x) model=(0x%x,0x%x)" % (
             vals[1081], vals[1082], P.dmrs_cinit(0), P.dmrs_cinit(1)))
@@ -171,5 +176,6 @@ if __name__ == "__main__":
     ap.add_argument("dump")
     ap.add_argument("--snr", type=float, default=P.DEFAULT_SNR)
     ap.add_argument("--seed", type=int, default=P.DEFAULT_SEED)
+    ap.add_argument("--harq", action="store_true")
     a = ap.parse_args()
-    sys.exit(main(a.dump, a.snr, a.seed))
+    sys.exit(main(a.dump, a.snr, a.seed, a.harq))

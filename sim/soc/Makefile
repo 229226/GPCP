@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -315,3 +315,20 @@ run-pdsch-full: all
 		--dump $(ROOT)/$(OBJ)/pdsch_full_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_pdsch_full.py $(ROOT)/$(OBJ)/pdsch_full_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+
+# ---- PDSCH HARQ: two RV transmissions Chase-combined before LDPC ----
+PDSCHHARQ_TD = $(ROOT)/build/soc/pdsch_harq.td
+
+run-pdsch-harq: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PDSCHHARQ_TD))
+	python3 $(ROOT)/tools/pdsch_full_plan.py dump-harq $(PDSCHHARQ_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pdsch_harq_bm.bin@0x80000000 \
+		--load $(PDSCHHARQ_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80010000 --nwords 544 \
+		--dump $(ROOT)/$(OBJ)/pdsch_harq_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_pdsch_full.py $(ROOT)/$(OBJ)/pdsch_harq_dump.txt --harq --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)

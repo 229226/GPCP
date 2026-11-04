@@ -82,6 +82,17 @@
 #define DMRS_NCP      0
 #define QM            2
 
+/* HARQ: compile with -DHARQ_TX=2 to demodulate two RV transmissions and
+ * Chase-combine their LLRs in the circular buffer before LDPC decoding. */
+#ifndef HARQ_TX
+#define HARQ_TX       1
+#endif
+#if HARQ_TX == 2
+static const uint32_t rv_k0[HARQ_TX] = { 0u, (uint32_t)(USABLE / 2) };
+#else
+static const uint32_t rv_k0[HARQ_TX] = { 0u };
+#endif
+
 /* ---- LDPC engine (same addresses as sw/soc/pdsch_iter_bm.c) ---- */
 #define ZC            20
 #define MAXD          10
@@ -316,81 +327,97 @@ int main(void)
     uint32_t *out = RESULT_BASE;
     static int32_t hard[BG2_COLS][ZC] __attribute__((aligned(8)));
     int32_t *td = (int32_t *)TD_RAM;
-    int32_t *spec[NSYM];
     int32_t hre[NSYM], him[NSYM];
     uint32_t t0 = mtime();
 
     build_tables();
-    build_dmrs();               /* two Gold sequences -> 2 x 60 DMRS symbols */
 
-    /* ---- OFDM demodulation: strip CP, FFT each symbol in place ---- */
-    for (int s = 0; s < NSYM; s++)
-        spec[s] = td + (size_t)s * SYM_WORDS + 2 * CP_LEN;
-    for (int s = 0; s < NSYM; s++)
-        fft4096(spec[s]);
-
-    /* ---- RE extraction: X[k] lives at data[rev4(k)] ---- */
-    for (int s = 0; s < NSYM; s++)
-        for (int r = 0; r < NRE; r++) {
-            uint32_t idx = rev4(re_bin((uint32_t)r));
-            yw[(s * NRE + r) * 2 + 0] = spec[s][2 * idx] << 4;
-            yw[(s * NRE + r) * 2 + 1] = spec[s][2 * idx + 1] << 4;
-        }
-    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-
-    /* ---- per-symbol LS estimate against the real Gold DMRS ---- */
     int64_t den = (int64_t)NPILOT * 2 * QPSK * QPSK / H_SCALE;
-    for (int s = 0; s < NSYM; s++) {
-        int64_t accr = 0, acci = 0;
-        int p = 0;
-        for (int r = 0; r < NRE; r += 4) {
-            int32_t yr = yw[(s * NRE + r) * 2 + 0];
-            int32_t yi = yw[(s * NRE + r) * 2 + 1];
-            int32_t dr = dmrs_re[s][p], di = dmrs_im[s][p];
-            /* y * conj(DMRS) */
-            accr += (int64_t)yr * dr + (int64_t)yi * di;
-            acci += (int64_t)yi * dr - (int64_t)yr * di;
-            p++;
-        }
-        hre[s] = floor_div(accr, den);
-        him[s] = floor_div(acci, den);
-    }
+    int32_t raw0[8], descr0[8];
+    int32_t dbg_spec_re = 0, dbg_spec_im = 0, dbg_yw_re = 0, dbg_yw_im = 0;
+    int32_t dbg_h[4] = { 0, 0, 0, 0 };
+    for (int i = 0; i < 8; i++) { raw0[i] = 0; descr0[i] = 0; }
+    for (int i = 0; i < USABLE; i++) rbuf[i] = 0;
 
-    /* ---- equalise + QPSK soft demodulation (180 data REs per symbol) ---- */
-    {
-        int m = 0;
-        for (int s = 0; s < NSYM; s++)
+    /* ---- one demodulation pass per HARQ transmission (RV offset differs) ---- */
+    for (int tx = 0; tx < HARQ_TX; tx++) {
+        build_dmrs();           /* two Gold sequences -> 2 x 60 DMRS symbols */
+        for (int s = 0; s < NSYM; s++) {
+            int32_t *sp = td + ((size_t)tx * NSYM + s) * SYM_WORDS + 2 * CP_LEN;
+            fft4096(sp);       /* in place; X[k] lives at sp[rev4(k)] */
             for (int r = 0; r < NRE; r++) {
-                if (r % 4 == 0) continue;          /* pilot RE */
+                uint32_t idx = rev4(re_bin((uint32_t)r));
+                int32_t vr = sp[2 * idx] << 4;
+                int32_t vi = sp[2 * idx + 1] << 4;
+                yw[(s * NRE + r) * 2 + 0] = vr;
+                yw[(s * NRE + r) * 2 + 1] = vi;
+                if (tx == 0 && s == 0 && r == 0) {
+                    dbg_spec_re = sp[2 * idx];  dbg_spec_im = sp[2 * idx + 1];
+                    dbg_yw_re = vr;             dbg_yw_im = vi;
+                }
+            }
+        }
+        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+
+        /* ---- per-symbol LS estimate against the real Gold DMRS ---- */
+        for (int s = 0; s < NSYM; s++) {
+            int64_t accr = 0, acci = 0;
+            int p = 0;
+            for (int r = 0; r < NRE; r += 4) {
                 int32_t yr = yw[(s * NRE + r) * 2 + 0];
                 int32_t yi = yw[(s * NRE + r) * 2 + 1];
-                int64_t er = (int64_t)yr * hre[s] + (int64_t)yi * him[s];
-                int64_t ei = (int64_t)yi * hre[s] - (int64_t)yr * him[s];
-                llr_e[2 * m + 0] = (int32_t)er;
-                llr_e[2 * m + 1] = (int32_t)ei;
-                m++;
+                int32_t dr = dmrs_re[s][p], di = dmrs_im[s][p];
+                accr += (int64_t)yr * dr + (int64_t)yi * di;   /* y*conj(DMRS) */
+                acci += (int64_t)yi * dr - (int64_t)yr * di;
+                p++;
             }
+            hre[s] = floor_div(accr, den);
+            him[s] = floor_div(acci, den);
+        }
+        if (tx == 0) {
+            dbg_h[0] = hre[0]; dbg_h[1] = him[0];
+            dbg_h[2] = hre[1]; dbg_h[3] = him[1];
+        }
+
+        /* ---- equalise + QPSK soft demodulation (180 data REs/symbol) ---- */
+        {
+            int m = 0;
+            for (int s = 0; s < NSYM; s++)
+                for (int r = 0; r < NRE; r++) {
+                    if (r % 4 == 0) continue;      /* DMRS RE */
+                    int32_t yr = yw[(s * NRE + r) * 2 + 0];
+                    int32_t yi = yw[(s * NRE + r) * 2 + 1];
+                    int64_t er = (int64_t)yr * hre[s] + (int64_t)yi * him[s];
+                    int64_t ei = (int64_t)yi * hre[s] - (int64_t)yr * him[s];
+                    llr_e[2 * m + 0] = (int32_t)er;
+                    llr_e[2 * m + 1] = (int32_t)ei;
+                    m++;
+                }
+        }
+        if (tx == 0)
+            for (int i = 0; i < 8; i++) raw0[i] = llr_e[i];
+
+        /* ---- 38.212 5.4.2.2 de-interleave (Qm=2, 360 rows) ---- */
+        {
+            int rows = E_BITS / QM;
+            for (int i = 0; i < rows; i++)
+                for (int j = 0; j < QM; j++)
+                    llr_i[j * rows + i] = llr_e[QM * i + j];
+        }
+
+        /* ---- descramble (38.211 7.3.3.1, c_init = n_RNTI << 15) ---- */
+        gold_init(N_RNTI << 15);
+        for (int k = 0; k < E_BITS; k++)
+            if (gold_bit((uint32_t)k)) llr_i[k] = -llr_i[k];
+        if (tx == 0)
+            for (int i = 0; i < 8; i++) descr0[i] = llr_i[i];
+
+        /* ---- Chase combining in circular-buffer coordinates ---- */
+        for (int k = 0; k < E_BITS; k++)
+            rbuf[(rv_k0[tx] + (uint32_t)k) % USABLE] += llr_i[k];
     }
 
-    /* ---- 38.212 5.4.2.2 de-interleave (Qm=2, 360 rows) ---- */
-    int32_t raw0[8], descr0[8];
-    for (int i = 0; i < 8; i++) raw0[i] = llr_e[i];
-    {
-        int rows = E_BITS / QM;
-        for (int i = 0; i < rows; i++)
-            for (int j = 0; j < QM; j++)
-                llr_i[j * rows + i] = llr_e[QM * i + j];
-    }
-
-    /* ---- descramble (38.211 7.3.3.1, c_init = n_RNTI << 15) ---- */
-    gold_init(N_RNTI << 15);
-    for (int k = 0; k < E_BITS; k++)
-        if (gold_bit((uint32_t)k)) llr_i[k] = -llr_i[k];
-    for (int i = 0; i < 8; i++) descr0[i] = llr_i[i];
-
-    /* ---- rate de-match: 720 E-bits -> 1040 coded LLRs ---- */
-    for (int i = 0; i < USABLE; i++) rbuf[i] = 0;
-    for (int k = 0; k < E_BITS; k++) rbuf[k % USABLE] += llr_i[k];
+    /* ---- rate de-match: combined LLRs -> 1040 coded LLRs ---- */
     for (int j = 0; j < PUNCT; j++) dem[j] = 0;
     {
         int u = 0;
@@ -479,21 +506,22 @@ int main(void)
     out[5] = (uint32_t)crc_ok;
     out[6] = 0x600Du;
     out[7] = 0;
-    out[1048] = (uint32_t)hre[0];
-    out[1049] = (uint32_t)him[0];
-    out[1050] = (uint32_t)hre[1];
-    out[1051] = (uint32_t)him[1];
+    out[1048] = (uint32_t)dbg_h[0];
+    out[1049] = (uint32_t)dbg_h[1];
+    out[1050] = (uint32_t)dbg_h[2];
+    out[1051] = (uint32_t)dbg_h[3];
     for (int i = 0; i < 8; i++) out[1052 + i] = (uint32_t)raw0[i];
     for (int i = 0; i < 8; i++) out[1060 + i] = (uint32_t)descr0[i];
     for (int i = 0; i < 8; i++) out[1068 + i] = (uint32_t)(dem[PUNCT + i] >> LLR_SHIFT);
     out[1076] = (uint32_t)crc_ok;
     /* fixed-point FFT gain diagnostics (bin 0 of symbol 0) */
-    out[1077] = (uint32_t)spec[0][2 * rev4(re_bin(0))];
-    out[1078] = (uint32_t)spec[0][2 * rev4(re_bin(0)) + 1];
-    out[1079] = (uint32_t)yw[0];
-    out[1080] = (uint32_t)yw[1];
+    out[1077] = (uint32_t)dbg_spec_re;
+    out[1078] = (uint32_t)dbg_spec_im;
+    out[1079] = (uint32_t)dbg_yw_re;
+    out[1080] = (uint32_t)dbg_yw_im;
     out[1081] = dmrs_cinit(0);
     out[1082] = dmrs_cinit(1);
+    out[1083] = (uint32_t)HARQ_TX;
 
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     *(volatile uint32_t *)EXIT_ADDR = 0x600Du;
