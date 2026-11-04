@@ -33,7 +33,7 @@ DEPTH = 9
 E_BITS = 432                        # aggregation level 4: 4 * 108 QPSK bits
 QPSK = 2000
 N_RNTI = 0x1234
-N_ID = 0                            # scrambling identity (pdcch-DMRS-ScramblingID)
+N_ID = 200                          # scrambling identity (pdcch-DMRS-ScramblingID)
 DEFAULT_SNR = 12.0
 CRC_POLY = 0xB2B117                 # gCRC24C, 38.212 7.2
 
@@ -129,9 +129,14 @@ def sc_decode_k(llr, n=NPOL, k=K, depth=DEPTH):
 
 
 # ---- transmit / receive ---------------------------------------------------
-def scrambling_seq(rnti, length=E_BITS):
-    """38.211 7.3.2.3: c_init = n_RNTI*2^15 + n_ID (n_ID = 0 here)."""
-    return NR.gold(((rnti & 0xFFFF) << 15) + N_ID, length)
+def scrambling_seq(length=E_BITS):
+    """38.211 7.3.2.3 common search space: c_init = n_ID (cell ID).
+
+    The RNTI is NOT in the scrambling seed here -- it only masks the CRC parity
+    bits.  That is what makes blind detection a single Polar decode followed by
+    a cheap CRC check per candidate, exactly as a real UE receiver does it.
+    """
+    return NR.gold(N_ID, length)
 
 
 def qpsk_map(bits):
@@ -145,7 +150,7 @@ def transmit(fields, rnti=N_RNTI):
     info = dci + rnti_scramble_crc(crc24c(dci), rnti)
     d = polar_encode_k(info)
     e = NR.rate_match_pbch(d, E_BITS)
-    scr = scrambling_seq(rnti, E_BITS)
+    scr = scrambling_seq(E_BITS)
     e_sc = [b ^ s for b, s in zip(e, scr)]
     return qpsk_map(e_sc), dci
 
@@ -158,36 +163,99 @@ def add_awgn(syms, snr_db, seed=1):
             for v in syms]
 
 
-def decode_once(llr_e, rnti):
-    scr = scrambling_seq(rnti, E_BITS)
+def decode_info(llr_e):
+    """One Polar decode; deliberately RNTI-independent (see scrambling_seq)."""
+    scr = scrambling_seq(E_BITS)
     descr = [-v if scr[k] else v for k, v in enumerate(llr_e)]
     z = NR.rate_recover_pbch(descr, NPOL)
-    info = sc_decode_k(z)
-    dci, crc_scr = info[:A_DCI], info[A_DCI:]
-    crc = rnti_scramble_crc(crc_scr, rnti)
-    return (crc24c(dci) == crc), unpack_dci(dci), dci
+    return sc_decode_k(z), z, descr
 
 
 def receive(y, candidates, rnti=N_RNTI):
-    """RNTI blind detection: only the matching RNTI passes CRC24C."""
+    """Blind detect: one Polar decode, then a CRC24C check per RNTI candidate."""
     llr = []
     for v in y:
         llr += [int(v.real), int(v.imag)]
+    info, z, descr = decode_info(llr)
+    dci, crc_scr = info[:A_DCI], info[A_DCI:]
     tried = []
+    hit = None
     for cand in candidates:
-        ok, fields, dci = decode_once(llr, cand)
+        ok = crc24c(dci) == rnti_scramble_crc(crc_scr, cand)
         tried.append((cand, ok))
-        if ok:
-            return dict(rnti=cand, ok=True, fields=fields, dci=dci, tried=tried)
-    return dict(rnti=None, ok=False, fields=None, dci=None, tried=tried)
+        if ok and hit is None:
+            hit = cand
+    if hit is not None:
+        return dict(rnti=hit, ok=True, fields=unpack_dci(dci), dci=dci,
+                    tried=tried, info=info, z=z, descr=descr)
+    return dict(rnti=None, ok=False, fields=None, dci=None, tried=tried,
+                info=info, z=z, descr=descr)
 
 
 CANDIDATES = [0x1111, 0x5678, N_RNTI, 0x9ABC, 0xDEF0]
+DEFAULT_FIELDS = dict(mcs=17, rv=2, ndi=1, harq_pid=3, rb_start=5, rb_len=8,
+                      tpc=1, reserved=0)
+
+# ---- OFDM stimulus for the SoC benchmark -----------------------------------
+NFFT = 4096
+CP_LEN = 288
+TD_SCALE = 256
+BIN0 = NFFT // 2 + 1
+NRE = E_BITS // 2                  # 216 QPSK symbols / resource elements
+
+
+def td_from_syms(syms, snr_db=DEFAULT_SNR, seed=1):
+    """Map 216 QPSK symbols onto one OFDM symbol; return TD samples + noisy REs."""
+    from ssb_plan import _fft
+    y = add_awgn(syms, snr_db, seed)
+    freq = [0j] * NFFT
+    for r in range(NRE):
+        freq[BIN0 + r] = y[r]
+    sig = _fft(freq, inverse=True)   # normalised IFFT (1/N)
+    samples = [complex(int(round(c.real)), int(round(c.imag))) for c in sig]
+    return NR.add_cp(samples, CP_LEN), y
+
+
+def quantised_syms(td):
+    """Ideal FFT of the integer TD block: what the SoC sees at those REs."""
+    from ssb_plan import _fft
+    spec = _fft(td[CP_LEN:CP_LEN + NFFT], inverse=False)
+    return [spec[BIN0 + r] for r in range(NRE)]
+
+
+def dump_td_bin(path, fields=None, rnti=N_RNTI, snr_db=DEFAULT_SNR, seed=1):
+    """Binary int32 TD dump (one symbol) for --load at 0x8040_0000."""
+    import struct
+    if fields is None:
+        fields = DEFAULT_FIELDS
+    syms, _ = transmit(fields, rnti)
+    td, _ = td_from_syms(syms, snr_db, seed)
+    with open(path, "wb") as f:
+        for c in td:
+            f.write(struct.pack("<I", (int(c.real) * TD_SCALE) & 0xFFFFFFFF))
+            f.write(struct.pack("<I", (int(c.imag) * TD_SCALE) & 0xFFFFFFFF))
+    return len(td) * 8
+
+
+def golden(fields=None, rnti=N_RNTI, snr_db=DEFAULT_SNR, seed=1):
+    """All golden anchors the SoC acceptance checker needs."""
+    if fields is None:
+        fields = DEFAULT_FIELDS
+    syms, dci = transmit(fields, rnti)
+    td, _ = td_from_syms(syms, snr_db, seed)
+    q = quantised_syms(td)
+    r = receive(q, CANDIDATES, rnti)
+    llr = []
+    for v in q:
+        llr += [int(v.real), int(v.imag)]
+    return dict(syms=syms, dci=dci, td=td, q=q, llr=llr,
+                info=r["info"], z=r["z"], descr=r["descr"],
+                rnti=r["rnti"], fields=r["fields"], tried=r["tried"],
+                ok=r["ok"])
 
 
 def main():
-    fields = dict(mcs=17, rv=2, ndi=1, harq_pid=3, rb_start=5, rb_len=8,
-                  tpc=1, reserved=0)
+    fields = dict(DEFAULT_FIELDS)
     print("PDCCH/DCI: A=%d K=%d N=%d E=%d (AL=4), RNTI=0x%04x" % (
         A_DCI, K, NPOL, E_BITS, N_RNTI))
     print("  TX DCI: %s" % fields)
@@ -211,4 +279,11 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "dump":
+        out = sys.argv[2]
+        snr = float(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_SNR
+        seed = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+        n = dump_td_bin(out, DEFAULT_FIELDS, N_RNTI, snr, seed)
+        print("wrote %s (%d bytes, snr=%.1f dB, seed=%d)" % (out, n, snr, seed))
+        sys.exit(0)
     sys.exit(main())

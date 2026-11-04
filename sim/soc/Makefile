@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -332,3 +332,20 @@ run-pdsch-harq: all
 		--dump $(ROOT)/$(OBJ)/pdsch_harq_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_pdsch_full.py $(ROOT)/$(OBJ)/pdsch_harq_dump.txt --harq --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+
+# ---- PDCCH / DCI blind detection (38.211 7.3 + 38.212 7.3) ----
+PDCCH_TD = $(ROOT)/build/soc/pdcch.td
+
+run-pdcch: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PDCCH_TD))
+	python3 $(ROOT)/tools/nr_pdcch.py dump $(PDCCH_TD) $(if $(SNR),$(SNR),12) $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pdcch_bm.bin@0x80000000 \
+		--load $(PDCCH_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80010000 --nwords 72 \
+		--dump $(ROOT)/$(OBJ)/pdcch_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_pdcch.py $(ROOT)/$(OBJ)/pdcch_dump.txt --snr $(if $(SNR),$(SNR),12) --seed $(if $(SEED),$(SEED),1)
