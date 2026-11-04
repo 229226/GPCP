@@ -19,13 +19,13 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | M1/B2 CVA6 驱动 CGRA（真 SoC + AXI4 突发） | ✅ |
 | M2/B2.5 L1 数据面（spad 双页、DMA+描述符环、PLIC、接收链） | ✅ |
 | M2.5 FFT 256/1024/4096 + slot 时基 | ✅ |
-| P2 第一步 PDSCH SISO（模型级，LDPC BG2） | ✅ 模型：TB 80 bit → CRC24A → BG2(Zc=20) → 速率匹配/加扰/QPSK → AWGN/两径 → min-sum 译码 → CRC；−6 dB 起 4/4 全过（`docs/09`）。硬件：`run-pdsch`（50k 周期）+ **`run-pdsch-iter`：真实 BG2 一个码块 8 次迭代全在 CGRA 上，1040/1040 硬判决对账通过**（3.16 M 周期） |
+| P2 第一步 PDSCH SISO（模型级，LDPC BG2） | ✅ 模型：TB 80 bit → CRC24A → BG2(Zc=20) → 速率匹配/加扰/QPSK → AWGN/两径 → min-sum 译码 → CRC；−6 dB 起 4/4 全过（`docs/09`）。硬件：`run-pdsch`（50k 周期）+ **`run-pdsch-iter`：真实 BG2 一个码块 8 次迭代全在 CGRA 上，1040/1040 硬判决对账通过**（内核 1.59 M 周期 / 仿真 2.03 M） |
 | B4-SSB 频域链（PSS/SSS/DMRS/QPSK/Polar/MIB） | ✅ |
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
 | PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 54,148 µm²、**Fmax 1.05 GHz**（0.911 ns pre-layout，1 GHz +0.05 ns slack）、23.8/28.7/32.1 mW @500/800/1000 MHz；IMEM 已重构为 512×512 宽字 1R1W；**spad 实测每 bank 需 16R/16W（~2.6 mm²，bank 化必须先改 kernel 数据布局）**（`docs/08` §3.2、§4.1） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
-| M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`，每跳 1 拍）+ CGRA-ME 库驱动/自动切块（`cgra/tools/`）已打通：24 槽 BN 切成 18 片在 3×3 上 **18/18 mapped**（48 s）。**规则映射器**：BN 118 拍（v0）/ **155 拍（4 PE/行 link 版，1.61×）**；**CN 172 拍单程序跑完 20 行 → `run-pdsch-bg2` 631,360 → 20,946 周期（30×）**。微码改由 `gen_bn_prog.py` / `gen_cn_prog.py` 生成，bench 只 include 头文件。CGRA-ME 仍给不出可靠落点，退火不可用。见 `docs/10` §7.3~§13 |
+| M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`，每跳 1 拍）+ CGRA-ME 库驱动/自动切块（`cgra/tools/`）已打通：24 槽 BN 切成 18 片在 3×3 上 **18/18 mapped**（48 s）。**规则映射器**：BN 118 拍（v0）/ **155 拍（4 PE/行 link 版，1.61×）**；**CN 172 拍单程序跑完 20 行 → `run-pdsch-bg2` 631,360 → 19,097 周期（≈33×，M1 双页重叠后）**。微码改由 `gen_bn_prog.py` / `gen_cn_prog.py` 生成，bench 只 include 头文件。CGRA-ME 仍给不出可靠落点，退火不可用。见 `docs/10` §7.3~§13 |
 
 ---
 
@@ -36,7 +36,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用都这样跑
 
 # 1) 一条命令全量验收（推荐先跑这个，确认基线）
-bash tools/verify.sh quick            # 实测 ~300 s：14 kernel + 8 个 SoC 目标（含 run-ssb-fid / run-ssb-slot）
+bash tools/verify.sh quick            # 实测 ~320 s（2026-11-04 复验：11 passed / 0 failed）：14 kernel + 8 个 SoC 目标（含 run-ssb-fid / run-ssb-slot）
 bash tools/verify.sh full             # 实测 ~1230 s（run-pdsch-iter 优化后约少 4 分钟）：14 kernel + 20 个 SoC 基准
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 make verify / make verify-full        # 同上两个的 make 包装
@@ -73,7 +73,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
 | `run-pdsch-bn1` | 单个变量块过 BN 微码：24 个消息槽 + LLR + 硬判决共 **520 个值**逐值等于黄金模型（**1 次阵列运行 / 155 拍 / 2 次 DMA**，仿真总周期 **11,916**）。微码由 `cgra/tools/gen_bn_prog.py`（规则映射器 link 版）生成，**IMEM 走拷贝引擎批量装载**（`gpcp_cgra_imem_load`，逐字写时总周期 25,558，2.15×） |
 | `run-pdsch-gather` | 真实块的 CN→重构→gather→**BN→硬判决** 全链逐值对齐（含 spad 对照）；修掉 `V % Zc` 下溢与 `emit` 目标数组两个 bug |
-| `run-pdsch-bg2` | **真实 BG2 块**的检查节点全遍历（42 行 × 20 提升行），DMA 分块流式进出：`min1/min2/sign` 与黄金模型逐位一致，**42 次阵列运行 / 84 次 DMA / 20,946 拍（仿真总周期 165,088）**（微码由 `gen_cn_prog.py` 生成 + IMEM 批量装载；原来是 84 次运行 / 631,360 周期） |
+| `run-pdsch-bg2` | **真实 BG2 块**的检查节点全遍历（42 行 × 20 提升行），DMA 分块流式进出：`min1/min2/sign` 与黄金模型逐位一致，**42 次阵列运行 / 84 次 DMA / 19,097 周期**（M1 运行时双页 ping-pong 重叠后；微码由 `gen_cn_prog.py` 生成 + IMEM 批量装载，此前 84 次运行 / 631,360 周期） |
 | `run-pdsch-iter` | **P1 整链**：BG2(Zc=20) 一个码块 **8 次迭代全在硬件上**（42 CN + 52 BN/迭代），`check_pdsch_iter.py` **1040/1040 硬判决**与纯 min-sum 一致；**752 次阵列运行 / 1556 次 DMA / 内核 1,585,169 周期**（≈198k/迭代：CN 152k、BN+搬运 589k、D$ 失效+重构 844k），仿真总周期 2,025,561（约 3 分钟，只在 `verify.sh full` 里）。CPU 侧瓶颈是 WT store（≈20 拍/8 字节），三步优化 1.96×（`docs/09` §5.3）；旋转挪不进硬件的原因见 §5.4 |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
@@ -181,6 +181,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 ## 6. 当前缺口与下一步（按性价比，详见 `docs/03`）
 
+> 已完成项见 §1 里程碑表与 §2 验收指标；本节只列**还没做完**的。标 ✅ 的条目已关闭，保留编号以免 `docs/` 里的引用失效。
+
 **P0（最近）**
 1. **B3 Linux — 已冻结（时间盒到期）**：`tools/check_linux.py`（stage 0..8 + 16 个累加器）、
    `make -C sim/soc linux[-status]`、`LINUX_TRACE` + `tools/sym_pc.py` 都已就绪。
@@ -191,21 +193,30 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
    已排除 8250 驱动注册、UART 中断冲突、deferred-probe 超时、定时器。**冻结**，解冻动作见
    `docs/06` §10 末尾（内置 initramfs + dyndbg，约 20 分钟编译 + 40 分钟仿真）。
    剩余：UART 输入、真 PLIC 中断、把 stage 7 纳入 `verify.sh --linux`。
-2. **采样级链接入 slot 时基**：4 个符号按 tick 流水（复用 `slot_rtos.c`），SSS 假设按批分摊，
-   使"每 SSB"落在 20 ms 预算内（当前 4.34 M 周期 @100 MHz ≈ 43 ms，差 ~2.2×）。
+2. **采样级链 20 ms 预算**：时基接入**已完成**（`run-ssb-slot`：CLINT slot tick 驱动、
+   SSS 336 假设按 14 个 tick 分摊、无 overrun、MIB 32/32，见 §2）。**剩余**只是算力缺口：
+   单 SSB 约 4.34 M 周期 @100 MHz ≈ 43 ms，超 20 ms 预算 ~2.2×，
+   `tools/check_ssb_slot.py` 会打 `[warn]`；需把计算压进预算（或提高时钟），不必再接线。
 
-**P1（协议保真度）**
-3. 38.211/38.212 真实化：PSS/SSS 的真实 k 映射（含 DC 空洞/保护带，现在 `subcarriers()=r→r` 是简化）、
-   PBCH DMRS 的 `c_init`（含 `i_ssb`/`n_hf`）、速率匹配、CP 加入。
-4. AWGN + SNR–BER 曲线（`ssb_plan.py` 注噪 → 硬件跑同一批样本 → `tools/sweep_snr.py`）。
-5. CFO/TA 估计骨架（先用纯模型，再落到一个 kernel）。
+**P1（协议保真度）— 主体已完成**
+3. ✅ 38.211/38.212 真实化：`run-ssb-fid`（PSS 符号 0 / SSS 符号 2、CP=288、DC 空在 RE 24、
+   PBCH DMRS `c_init` 含 `i_SSB`/`n_hf`、38.212 速率匹配 720→512），32/32 MIB、4.41 M 周期。
+4. ✅ AWGN + SNR–BER 曲线：`ssb_plan_p1.py` 频域注噪 → `make snr-sweep` / `snr-sweep-hw`
+   → `tools/sweep_snr.py`，模型与硬件瀑布已对齐（数字见 §2）。
+5. **CFO/TA 估计骨架**：**未做**（先用纯模型，再落到一个 kernel）；仓库里尚无相关文件。
 
 **P2（M3 主体）**
 6. 8×8 阵列（bank 32→64/页、spad 8→32 KiB）+ 各 kernel 映射重排；给 4×4 vs 8×8 周期对比。
-7. IMEM burst 装载（现在 832 字逐写 ≈ 7k 周期）。
-8. LDPC 全迭代：**BG2(Zc=20) 的 8 次迭代已整链跑通并逐值对账（`run-pdsch-iter`，3.1 M 周期）**；
-   剩下 BG1 / Z=64（边消息分页、层调度），与新建 `tools/nr_ldpc.py` 逐位对齐。
-9. 自动映射第一步：把 `Program.set` 当 IR，做"规整 kernel 的约束映射器"，**与手写微码逐位等价**；
+   **前置**：spad 实测每 bank 需 16R/16W（~2.6 mm²），必须先重排 kernel 数据布局（`docs/08` §3.2）。
+7. ✅ IMEM 批量装载 + 运行时重叠已落地：`gpcp_cgra_imem_load` 走拷贝引擎（DMA_CTRL[3]），
+   `run-pdsch-bn1` 25,558 → 11,916 周期、`run-pdsch-bg2` 180,191 → 165,088 周期；
+   `sw/include/gpcp_cgra_rt.h` 的 M1 双页 ping-pong 再把 bg2 loop 22,562 → 19,097 周期。
+8. LDPC 全迭代：**BG2(Zc=20) 的 8 次迭代已整链跑通并逐值对账（`run-pdsch-iter`，
+   1040/1040 硬判决，内核 1.59 M 周期）**；剩下 BG1 / Z=64（边消息分页、层调度），
+   与新建 `tools/nr_ldpc.py` 逐位对齐（该文件尚未创建）。
+9. 自动映射：**规则映射器已落地**（`cgra/tools/rule_map.py` 的 BN link 版 155 拍 /
+   CN 172 拍单程序，台架逐值 0 差异，见 `docs/10` §11~§15）；**剩余**：把 `Program.set`
+   当 IR 做"规整 kernel 的约束映射器"，CGRA-ME 仍给不出可靠落点（退火不可用）；
    再谈 MLIR/CGRA-Flow（`docs/01` §2.3）。
 
 **P3**：DL-SCH 一条链（LDPC→速率匹配→QAM→层映射→RE→OFDM）、QEMU 设备模型、free5GC 联调。
