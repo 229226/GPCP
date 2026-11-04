@@ -52,9 +52,16 @@ static uint32_t runs, dmas, errs;
 /* 变量块 → 自己的边表，启动时建一次（避免每个块扫 42×10 条边） */
 static uint8_t blk_n[BG2_COLS];
 static uint8_t blk_r[BG2_COLS][24], blk_k[BG2_COLS][24], blk_sh[BG2_COLS][24];
+/* 预旋转索引表：消掉 gather/scatter 里每个元素的 % ZC */
+static uint8_t rotm[ZC][ZC], rotp[ZC][ZC];
 
-static void build_block_tables(void)
+static void build_tables(void)
 {
+    for (uint32_t sh = 0; sh < ZC; sh++)
+        for (uint32_t i = 0; i < ZC; i++) {
+            rotm[sh][i] = (uint8_t)((i + ZC - sh) % ZC);   /* gather: (i - sh) */
+            rotp[sh][i] = (uint8_t)((i + sh) % ZC);        /* scatter: (i + sh) */
+        }
     for (uint32_t b = 0; b < BG2_COLS; b++) {
         uint8_t n = 0;
         for (uint32_t r = 0; r < BG2_ROWS; r++)
@@ -101,9 +108,12 @@ static void bn_block(uint32_t b, int32_t *hard)
 {
     uint32_t n = blk_n[b];
     for (uint32_t e = 0; e < n; e++) {
-        uint32_t r = blk_r[b][e], k = blk_k[b][e], sh = blk_sh[b][e];
+        uint32_t r = blk_r[b][e], k = blk_k[b][e];
+        const uint8_t *rm = rotm[blk_sh[b][e]];
+        int32_t *dst = gath[e];
+        const int32_t *src = msg[r][k];
         for (uint32_t i = 0; i < ZC; i++)
-            gath[e][i] = msg[r][k][(i + ZC - sh) % ZC];
+            dst[i] = src[rm[i]];
     }
     for (uint32_t k = n; k < 24; k++)
         for (uint32_t i = 0; i < ZC; i++)
@@ -123,9 +133,12 @@ static void bn_block(uint32_t b, int32_t *hard)
 
     /* scatter：msg[r][k][i] = out_k[(i + sh) % Zc]（gather 用 (i-sh)，逆映射是 (i+sh)） */
     for (uint32_t e = 0; e < n; e++) {
-        uint32_t r = blk_r[b][e], k = blk_k[b][e], sh = blk_sh[b][e];
+        uint32_t r = blk_r[b][e], k = blk_k[b][e];
+        const uint8_t *rp = rotp[blk_sh[b][e]];
+        const int32_t *src = bout[e];
+        int32_t *dst = msg[r][k];
         for (uint32_t i = 0; i < ZC; i++)
-            msg[r][k][i] = bout[e][(i + sh) % ZC];
+            dst[i] = src[rp[i]];
     }
     for (uint32_t i = 0; i < ZC; i++)
         hard[i] = bout[25][i];
@@ -143,7 +156,7 @@ int main(void)
     uint32_t *out = RESULT_BASE;
     static int32_t hard[BG2_COLS][ZC] __attribute__((aligned(8)));
 
-    build_block_tables();
+    build_tables();
 
     for (uint32_t b = 0; b < BG2_COLS; b++)
         for (uint32_t i = 0; i < ZC; i++)
@@ -174,6 +187,7 @@ int main(void)
         cn_row_in(0, 0);
         if (rt_dma_wait(CGRA_BASE)) errs++;
         for (uint32_t r = 0; r < BG2_ROWS; r++) {
+            out[7] = 0x100u + r;          /* 进度探针：CN 第 r 行 */
             if (r + 1 < BG2_ROWS) cn_row_in(r + 1, (r + 1) & 1u);
             if (rt_array_run(CGRA_BASE, r & 1u, CN_PROG_CYCLES)) errs++;
             runs++;
@@ -182,16 +196,21 @@ int main(void)
             if (rt_dma_wait(CGRA_BASE)) errs++;
         }
         acc_cn += mtime() - ta;
+        out[1048] = acc_cn;
 
         ta = mtime();
         reconstruct();
         acc_cpu += mtime() - ta;
+        out[1050] = acc_cpu;
 
         ta = mtime();
         /* ---- BN：52 个变量块 ---- */
-        for (uint32_t b = 0; b < BG2_COLS; b++)
+        for (uint32_t b = 0; b < BG2_COLS; b++) {
+            out[7] = 0x200u + b;          /* 进度探针：BN 第 b 块 */
             bn_block(b, hard[b]);
+        }
         acc_bn += mtime() - ta;
+        out[1049] = acc_bn;
     }
     uint32_t cyc = mtime() - t0;
 
