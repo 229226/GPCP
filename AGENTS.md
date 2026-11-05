@@ -43,11 +43,11 @@ env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用�
 
 # 1) 一条命令全量验收（2026-11-05 起：分档 + 并行 -j6，16 核 VM）
 bash tools/verify.sh quick            # 实测 146 s / 11 passed / 0 failed：kernels + 10 个 SoC 目标
-bash tools/verify.sh full             # 47 门：kernels + 16 模型自检 + 30 个 SoC 基准（不含 run-rach，约 8-9 min）
-bash tools/verify.sh slow             # 48 门（+run-rach）：最近一次 47 门全量 601 s（新增 run-pdsch-64qam 后待复验）
+bash tools/verify.sh full             # 全部非 RACH 门：kernels + 16 模型自检 + 31 个 SoC 基准（当前 48 门，约 9-10 min）
+bash tools/verify.sh slow             # 再加 run-rach（当前 49 门）；最近一次 47 门全量 601 s
 bash tools/verify.sh changed          # 只跑 git diff 触及的门（实测 P4 diff 6 门 / 129 s；空改动直接退出）
-bash tools/verify.sh smart            # **日常默认**：全 48 门覆盖，只重跑输入变化的门（实测二次 47 门全跳过 / 1 s）
-bash tools/verify.sh slow --force     # **阶段末/提交前/发版**：忽略缓存全量 48 门，唯一可作交付证据
+bash tools/verify.sh smart            # **日常默认**：覆盖 slow 档全部门，只重跑输入变化的门（实测全跳过 / 1 s）
+bash tools/verify.sh slow --force     # **阶段末/提交前/发版**：忽略缓存全量（当前 49 门），唯一可作交付证据
 GATES='model-la run-ring' bash tools/verify.sh smart   # 临时人工指定门（不得当全量证据）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 bash tools/verify.sh full --jobs 8    # 改并行度（默认 6，JOBS= 亦可）
@@ -98,6 +98,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-pdcch` | **PDCCH/DCI 盲检（硬件）**：1 符号 TD → 4096 FFT → 216 RE / 432 LLR → 38.211 Gold 解扰（`c_init`=N_ID=200）→ **E=432 逆速率匹配 LUT**（`pdcch_luts.h`）→ **CGRA Polar SC（K=56，复用 22 拍 f/g 节点微码）** → 5 个 RNTI 候选 CRC24C 去掩码盲检 → 32 bit DCI（MCS/RV/NDI/HARQ PID/RB/TPC）。12 dB 与 8 dB 两点均 `[OK]`，0 errors、**1,327,171 周期 / 1232 次阵列运行**，LLR 与浮点模型误差 <1%、56/56 信息位、32/32 DCI。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-pdsch-harq` | **HARQ 两次传输**：同一 `pdsch_full_bm.c` 用 `-DHARQ_TX=2` 编译，rv=0/2 对应 k0=0/492；两传输各自 FFT→LS→LLR→反交织→解扰后按循环缓冲坐标 **Chase 合并**，再喂 LDPC。20 dB 下 0 errors、**4,187,691 周期 / 1200 次阵列运行 / 1556 DMA**，解速率匹配 LLR 从单次的 ±612 变 ±1229，1040/1040 硬判决、80/80 TB；单传输 `run-pdsch-full` 回归不变。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-pusch` | **PUSCH 整链（上行，样本进 → TB 出）**：`tools/nr_pusch.py` 生成 2 符号 CP+4096 IFFT 时域样本（38.211 6.4.1.1 PUSCH Gold DMRS，`c_init`=`0x48d22468`/`0x11a42468`，`n_ID`=n_RNTI），SoC 自己做 FFT → RE → DMRS LS → 均衡 → 720 QPSK LLR → 反交织 → 解扰 → 解速率匹配 → 8 次 min-sum LDPC → CRC24A → 80 bit TB。20 dB/seed 1：0 errors、**3,070,613 周期 / 976 次阵列运行 / 1556 DMA**、1040/1040 硬判决、CRC ok、TB 80/80、DMRS `c_init` 与模型逐值一致。默认无变换预编码（CP-OFDM），TD 布局与 `run-pdsch-full` 同构；结果区在 `0x80070000`（`.bss` 尾部到 0x8001_1638，沿用 0x8001_0000 会压到 FFT 程序尾，属侥幸可用，故主动上移）；`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
+| `run-pusch-tp` | **PUSCH DFT-s-OFDM 落硬件**：`nr_pusch.py dump --tp`（发射端 360 点 DFT 扩展 + 1/√M 功率归一化）→ SoC 用 `-DTP` 编 `pusch_bm.c`：每数据 RE 匹配滤波得 360 点平坦向量 → **Q20 定点 360 点 IDFT**（`pusch_idft_tab.h`，`sin=cos(x−90°)`，int64 累加，误差 <0.2 LSB）→ QPSK LLR → 反交织 / 解扰 / 解速率匹配 / 8 次 LDPC / CRC24A。默认 20 dB / seed 1：**0 errors、7,995,677 周期 / 976 阵列 / 1556 DMA**、1040/1040 硬判、CRC ok、TB 80/80、`out[7]=1` 标志 TP 构建；定点 FFT 无 AGC 使信道估计比模型低 ~10%（幅值门改为 0.6–1.6 比例，符号 / 硬判 / CRC 才是硬门）。单传输版固定 rv=0（rv 由 `-DHARQ_TX=2` 变体覆盖），故目标不再暴露 `RV=`。只在 `verify.sh full` 里 |
+
 | `run-sib1` | **SIB1（Type0-PDCCH + PDSCH）**：`tools/nr_sib1.py` 生成 1 符号 PDCCH（DCI 1_0，SI-RNTI 0xFFFF）+ 2 符号 PDSCH（80-bit 紧凑 SIB1）时域样本；SoC 复用 `link_e2e_bm.c` 整链（`-DSIB1`：单候选 SI-RNTI），解出 DCI → PDSCH → 1040/1040 硬判 → CRC24A → 80-bit SIB1 → 字段。rv=0/2 两点均 `[OK]`，k0=0/492；0 errors、**4.43 M 周期 / 2208 次阵列运行**；SIB1 字段（cell_identity/tac/prach_config_index/msg1_fdm/msg1_freq_start/zero_corr_zone/scs）与配置逐值一致。`RV=`/`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-prach` | **Msg1 PRACH 检测落 CGRA**：`prach_corr` 微码（**128 拍 / 16 PE**，由 `tools/gen_prach_prog.py` 生成 `prach_prog.h`）做 38.211 6.3.3 Zadoff-Chu（`L_RA`=139、root u=25、127 tap）的**循环移位相关搜索**：每个 shift 一次阵列运行，16 个 PE 各出一个 int32 部分和、阵列内 butterfly 归约成 (re,im)，CPU 算 \|C\|² 取峰 → delay → 前导号 + TA。6 dB/seed 1：**139/139 shift 与整数模型逐位一致**，峰 d=39 → **preamble 2 / TA 9**（\|C\|²=2.952e17 对次峰 d=38 的 6.401e15，**16.6 dB** 裕度）、**0 errors / 139 次阵列运行 / 279 次 DMA / 4448 个「部分和 vs 阵列归约」交叉校验 / 128 拍程序**。`PRE=`/`TA=`/`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-rach` | **4 步随机接入全过程 = 一次 SoC 运行**（`sw/soc/rach_bm.c`，复用 `prach_corr` + Polar SC + LDPC CN/BN 三类微码）：同一程序里 Msg1 ZC 相关（同上）→ **SoC 自己按 occasion 算 RA-RNTI**（38.321 6.1.5）→ Msg2 单候选 Polar 盲检（复用 `run-pdcch` 的 SC + E=432 LUT）→ DCI 的 **rv 驱动 PDSCH k0** → CRC24A → **RAR MAC CE 解析**（BI/RAPID/TA command/27-bit UL grant/TC-RNTI，38.321 6.2.3）→ Msg3 **PUSCH**（FFT 窗口 = **Msg1 实测 TA**、DMRS 6.4.1.1、数据用**解码出的 TC-RNTI** 解扰）→ CRC24A → CCCH SDU → Msg4 DCI 用**同一个 TC-RNTI** 做 CRC 掩码盲检 → PDSCH → **UE Contention Resolution Identity CE vs 程序自己塞进 Msg3 的 SDU**（38.321 5.1.5.3）→ 竞争解决、TC-RNTI 升级为 C-RNTI。默认点（p=2 / TA=9 / OCC=1 / 20 dB / seed 1）：**0 errors、11,826,693 周期、5531 次阵列运行、4947 次 DMA**；Msg1 139/139 相关逐位、RA-RNTI 0x003d、DCI 32/32、Msg2/3/4 各 **1040/1040 硬判决** + CRC24A + TB 全对、TA 命令 9、RAR grant 四字段（rb_start 1 / rb_len 5 / tda 2 / mcs 10）、TC-RNTI=C-RNTI 0x07002、`resolved=1`。第二点 `MSG4_RV=2` 亦 `[OK]`（硬件解出 rv=2 → **k0=492**，11,830,616 周期）。`PRE=`/`TA=`/`OCC=`（换 occasion ⇒ 换 RA-RNTI，二进制按 OCC 命名，不会误用旧构建）/`MSG4_RV=2`（硬编码 k0 过不了）/`SEED=` 可换点；**全套最慢的基准（~9 min）**，为把默认 `full` 压到 ~10 min，已移到 `verify.sh slow`（或 `full --slow`）档 |
@@ -345,7 +347,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 | 层 | 变更文件 | 影响范围 | 处理 |
 |---|---|---|---|
-| **L0 架构 / ABI / 工具链** | `rtl/**`、`sim/**` 源、`cgra/**`、`tools/cgra.py`、`sw/soc/*_prog.h`、`pdcch_luts.h`、`link.ld`、`start.S`、`sw/soc/Makefile`、`sim/soc/Makefile`、顶层 `Makefile`、`tools/verify.sh`、`sim/soc/build/Vgpcp_soc`、`build/fft/twiddle.bin` | **全部 48 门** | 指纹自动全失效 → 全量，不可跳过 |
+| **L0 架构 / ABI / 工具链** | `rtl/**`、`sim/**` 源、`cgra/**`、`tools/cgra.py`、`sw/soc/*_prog.h`、`pdcch_luts.h`、`link.ld`、`start.S`、`sw/soc/Makefile`、`sim/soc/Makefile`、顶层 `Makefile`、`tools/verify.sh`、`sim/soc/build/Vgpcp_soc`、`build/fft/twiddle.bin` | **全部门（当前 49 门）** | 指纹自动全失效 → 全量，不可跳过 |
 | **L1 裸机基准** | `sw/soc/*_bm.c` | 由它编译的门（含 `-D` 变体） | 自动 |
 | **L2 激励 / 黄金模型** | `tools/nr_*.py`、`dump_*.py`、公共 `pdsch_plan.py` / `ldpc5g.py` 等 | 引用它的门（含 import 闭包） | 自动 |
 | **L3 验收器** | `tools/check_*.py` | 对应 `run-*` | 自动 |
@@ -359,11 +361,11 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 ### 三条硬规则
 
-1. **日常**：`make verify-smart` —— 声明覆盖全部 48 门，只重跑输入变化的门。
+1. **日常**：`make verify-smart` —— 声明覆盖 slow 档全部门，只重跑输入变化的门。
    输出里 `SKIP` 必须显式打印并单独计数，**绝不冒充 `PASS`**；汇总形如
    `X passed, Y skipped (cached), Z failed`。
 2. **留档**：阶段末 / 提交前 / 发版必须 `bash tools/verify.sh slow --force`
-   （忽略缓存、全量 48 门）。这是**唯一**可作为"基线完好"证据的运行；
+   （忽略缓存、全量）。这是**唯一**可作为"基线完好"证据的运行；
    缓存结果不得写进交付结论。
 3. **可审计**：缓存只记 `rc=0`，失败门下次必跑；`--force` 永远绕过缓存；
    `GATES=...` 与 `changed` 属临时人工手段，不算全量证据。缓存在
@@ -372,7 +374,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 **为什么不用"按测试名分类省跑"**：分类表靠人工维护，新增目标 / 新依赖极易漏；
 输入指纹从 Makefile 配方与 import 闭包自动派生，新增依赖会自动进入闭包。
-`smart` 依旧声明 48 门覆盖，只是跳过未变的 —— 比手工挑几个测试跑更安全。
+`smart` 依旧声明 slow 全部门覆盖，只是跳过未变的 —— 比手工挑几个测试跑更安全。
 
 实测：3 门首次 1 s；二次 `0 passed, 3 skipped, 0 s`；改 `tools/nr_la.py` 只让
 `model-la` 重跑（其余含 `run-rach` 全 SKIP），恢复文件后又回到 SKIP；

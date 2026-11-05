@@ -39,6 +39,9 @@
 #include "../include/ldpc_bg2.h"
 #include "pdsch_cn_prog.h"
 #include "pdsch_bn_prog.h"
+#ifdef TP
+#include "pusch_idft_tab.h"
+#endif
 
 #define CGRA_BASE     0x50000000ul
 #define EXIT_ADDR     0x40010000ul
@@ -134,6 +137,26 @@ static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t errs, runs, dmas;
+
+#ifdef TP
+/* 360-point IDFT of the equalised data REs (DFT-s-OFDM deprecoding).
+   Q20 cosine table; sin(x) = cos(x - 90 deg).  Integer only. */
+static void idft360(const int32_t *ar, const int32_t *ai, int32_t *out_iq)
+{
+    for (int m = 0; m < IDFT_N; m++) {
+        int64_t sr = 0, si = 0;
+        for (int k = 0; k < IDFT_N; k++) {
+            int idx = (int)(((int64_t)m * k) % IDFT_N);
+            int64_t c = idft_cos[idx];
+            int64_t s = idft_cos[(idx + 270) % IDFT_N];
+            sr += (int64_t)ar[k] * c - (int64_t)ai[k] * s;
+            si += (int64_t)ar[k] * s + (int64_t)ai[k] * c;
+        }
+        out_iq[2 * m + 0] = (int32_t)(sr / ((int64_t)IDFT_N * IDFT_SCALE));
+        out_iq[2 * m + 1] = (int32_t)(si / ((int64_t)IDFT_N * IDFT_SCALE));
+    }
+}
+#endif
 
 static void wait_desc(uint32_t want)
 {
@@ -379,7 +402,27 @@ int main(void)
             dbg_h[2] = hre[1]; dbg_h[3] = him[1];
         }
 
-        /* ---- equalise + QPSK soft demodulation (180 data REs/symbol) ---- */
+        /* ---- equalise + soft demodulation (180 data REs/symbol) ---- */
+#ifdef TP
+        /* DFT-s-OFDM: matched-filter every data RE into a flat vector, then
+           one 360-point IDFT recovers the QAM symbols (nr_pusch.idft). */
+        {
+            static int32_t ar[E_BITS / 2], ai[E_BITS / 2];
+            int m = 0;
+            for (int s = 0; s < NSYM; s++)
+                for (int r = 0; r < NRE; r++) {
+                    if (r % 4 == 0) continue;      /* DMRS RE */
+                    int32_t yr = yw[(s * NRE + r) * 2 + 0];
+                    int32_t yi = yw[(s * NRE + r) * 2 + 1];
+                    int64_t er = (int64_t)yr * hre[s] + (int64_t)yi * him[s];
+                    int64_t ei = (int64_t)yi * hre[s] - (int64_t)yr * him[s];
+                    ar[m] = (int32_t)er;
+                    ai[m] = (int32_t)ei;
+                    m++;
+                }
+            idft360(ar, ai, llr_e);
+        }
+#else
         {
             int m = 0;
             for (int s = 0; s < NSYM; s++)
@@ -394,6 +437,7 @@ int main(void)
                     m++;
                 }
         }
+#endif
         if (tx == 0)
             for (int i = 0; i < 8; i++) raw0[i] = llr_e[i];
 
@@ -505,7 +549,11 @@ int main(void)
     out[4] = dmas;
     out[5] = (uint32_t)crc_ok;
     out[6] = 0x600Du;
-    out[7] = 0;
+#ifdef TP
+    out[7] = 1u;      /* DFT-s-OFDM (transform precoding) build */
+#else
+    out[7] = 0u;      /* CP-OFDM build */
+#endif
     out[1048] = (uint32_t)dbg_h[0];
     out[1049] = (uint32_t)dbg_h[1];
     out[1050] = (uint32_t)dbg_h[2];
