@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch run-link-e2e run-pusch run-sib1 run-prach run-rach
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch run-link-e2e run-pusch run-sib1 run-pucch run-prach run-rach
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -349,6 +349,21 @@ run-pusch: all
 		--dump $(ROOT)/$(OBJ)/pusch_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+
+# ---- PUCCH format 0: 1-bit SR / HARQ-ACK on the CGRA ----
+PUCCH_TD = $(ROOT)/build/soc/pucch.td
+
+run-pucch: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PUCCH_TD))
+	python3 $(ROOT)/tools/nr_pucch.py dump $(PUCCH_TD) --ack $(if $(ACK),$(ACK),1) --snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pucch_bm.bin@0x80000000 \
+		--load $(PUCCH_TD)@0x80400000 \
+		--results 0x80070000 --nwords 128 \
+		--dump $(ROOT)/$(OBJ)/pucch_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_pucch.py $(ROOT)/$(OBJ)/pucch_dump.txt --ack $(if $(ACK),$(ACK),1) --snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
 
 # ---- SIB1: Type0-PDCCH (SI-RNTI) + PDSCH -> SIB1 ----
 SIB1_TD = $(ROOT)/build/soc/sib1.td
