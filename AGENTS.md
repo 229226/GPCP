@@ -44,7 +44,7 @@ env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用�
 # 1) 一条命令全量验收（2026-11-05 起：分档 + 并行 -j6，16 核 VM）
 bash tools/verify.sh quick            # 实测 146 s / 11 passed / 0 failed：kernels + 10 个 SoC 目标
 bash tools/verify.sh full             # 全部非 RACH 门：kernels + 16 模型自检 + 31 个 SoC 基准（约 10 min）
-bash tools/verify.sh slow             # 再加 run-rach；最近一次 47 门全量 601 s
+bash tools/verify.sh slow             # 再加 run-rach；最近一次 50 门全量 787 s（2026-11-06 00:04，与 nightly 并行）
 bash tools/verify.sh changed          # 只跑 git diff 触及的门（实测 P4 diff 6 门 / 129 s；空改动直接退出）
 bash tools/verify.sh smart            # **日常默认**：覆盖 slow 档全部门，只重跑输入变化的门（实测全跳过 / 1 s）
 bash tools/verify.sh slow --force     # **阶段末/提交前/发版**：忽略缓存全量，唯一可作交付证据
