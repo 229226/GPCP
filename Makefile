@@ -1,12 +1,16 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-full verify-slow verify-changed snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam
+.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam
 
 all: test
 
 # One-command acceptance: kernels + a quick SoC subset
 verify:
 	bash tools/verify.sh quick
+
+# RECOMMENDED for daily work: all 47 gates, only re-run changed inputs
+verify-smart:
+	bash tools/verify.sh smart
 
 # Full SoC benchmark matrix (parallel -j6, ~10-12 min)
 verify-full:

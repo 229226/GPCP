@@ -46,9 +46,12 @@ bash tools/verify.sh quick            # 实测 146 s / 11 passed / 0 failed：ke
 bash tools/verify.sh full             # 46 门：kernels + 16 模型自检 + 29 个 SoC 基准（不含 run-rach，约 8-9 min）
 bash tools/verify.sh slow             # 47 门（+run-rach）：**实测 601 s / 47 passed / 0 failed**（2026-11-05 全量复验）
 bash tools/verify.sh changed          # 只跑 git diff 触及的门（实测 P4 diff 6 门 / 129 s；空改动直接退出）
+bash tools/verify.sh smart            # **日常默认**：全 47 门覆盖，只重跑输入变化的门（实测二次 1 s / 47 skipped）
+bash tools/verify.sh slow --force     # **阶段末/提交前/发版**：忽略缓存全量 47 门，唯一可作交付证据
+GATES='model-la run-ring' bash tools/verify.sh smart   # 临时人工指定门（不得当全量证据）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 bash tools/verify.sh full --jobs 8    # 改并行度（默认 6，JOBS= 亦可）
-make verify / verify-full / verify-slow / verify-changed   # make 包装
+make verify / verify-smart / verify-full / verify-slow / verify-changed   # make 包装
 # 并行前提（tools/verify.sh + sim/soc/Makefile）：各 run-* 各写各的 dump/TD，但原本
 # 13 个目标都会重写 build/fft/twiddle.bin（并发写会截断）→ 改成 `@test -f ... ||
 # python3 fft_plan.py lut ...`，由 verify.sh 预构建阶段统一生成一次；run-prach 与
@@ -321,8 +324,56 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 ## 8. 改动纪律
 
-- 改 RTL/ABI → 至少 `bash tools/verify.sh full`（动了 4-step RACH 再跑 `slow`）；改 kernel/微码 → `make test` + 相关 `run-*`；纯模型/checker/单个 benchmark 改动 → `bash tools/verify.sh changed` 秒级验证，提交前再跑 `full`。
+- 日常迭代一律 `make verify-smart`（见 §9）；**阶段末 / 提交前 / 发版**必须 `bash tools/verify.sh slow --force` 全量留档。改 RTL/ABI 时缓存自动全失效，无需人工挑选测试。
 - 新增 `run-*` 目标时，并行化要求：不得与其它目标共写同一 TD/dump；需要 twiddle 时复用带 `test -f` 守卫的那一行。
 - 新增 benchmark：C 程序 + `tools/check_*.py` + `sim/soc/Makefile` 目标 + 顶层 `soc-run-*` + **§2 表格一行**。
 - 本文件 §2 的数字与 `docs/07` 的实测数字要同步更新（它们是下一个接手的唯一可信来源）。
 - 提交信息用英文短句 + 关键数字（例：`ssb: sample-level PBCH chain ... MIB 32/32, 4.33M cycles`）。
+
+---
+
+## 9. 回归规则（输入指纹驱动，2026-11-05 定）
+
+**核心判据**：一个门的结果是它全部输入的纯函数。**输入逐字节未变 ⇒ 结果必然不变 ⇒ 不必重跑**。
+不按"测试名字"手工分类（会漏、会漂移），而由 `tools/verify_cache.py` 从
+`sim/soc/Makefile` 目标配方里的 `tools/*.py`、它们的本地 import 闭包、对应 `sw/soc/*.c`
+与二进制、以及架构层文件自动发现输入并算 SHA-256 指纹。缓存**只在 `rc=0` 时写入**。
+
+### 依赖分层（决定哪些门必须重跑）
+
+| 层 | 变更文件 | 影响范围 | 处理 |
+|---|---|---|---|
+| **L0 架构 / ABI / 工具链** | `rtl/**`、`sim/**` 源、`cgra/**`、`tools/cgra.py`、`sw/soc/*_prog.h`、`pdcch_luts.h`、`link.ld`、`start.S`、`sw/soc/Makefile`、`sim/soc/Makefile`、顶层 `Makefile`、`tools/verify.sh`、`sim/soc/build/Vgpcp_soc`、`build/fft/twiddle.bin` | **全部 47 门** | 指纹自动全失效 → 全量，不可跳过 |
+| **L1 裸机基准** | `sw/soc/*_bm.c` | 由它编译的门（含 `-D` 变体） | 自动 |
+| **L2 激励 / 黄金模型** | `tools/nr_*.py`、`dump_*.py`、公共 `pdsch_plan.py` / `ldpc5g.py` 等 | 引用它的门（含 import 闭包） | 自动 |
+| **L3 验收器** | `tools/check_*.py` | 对应 `run-*` | 自动 |
+| **L4 纯模型自检** | 仅被 `model-*` 引用的脚本 | 对应 `model-*` | 自动 |
+| **L5 文档** | `AGENTS.md`、`docs/**` | 0 门 | 全部 SKIP |
+| **L6 无变化** | — | 0 门 | 全部 SKIP |
+
+三个**隐性架构变更**（最易漏，已纳入 L0）：① CGRA 微码 / 查表头等价于改架构；
+② `link.ld` / `start.S` / 编译选项变化会让所有裸机程序重链接（历史上踩过 `.bss`
+顶到结果区的坑）；③ 仿真器 ABI（`--load` / `--results` 布局）。
+
+### 三条硬规则
+
+1. **日常**：`make verify-smart` —— 声明覆盖全部 47 门，只重跑输入变化的门。
+   输出里 `SKIP` 必须显式打印并单独计数，**绝不冒充 `PASS`**；汇总形如
+   `X passed, Y skipped (cached), Z failed`。
+2. **留档**：阶段末 / 提交前 / 发版必须 `bash tools/verify.sh slow --force`
+   （忽略缓存、全量 47 门）。这是**唯一**可作为"基线完好"证据的运行；
+   缓存结果不得写进交付结论。
+3. **可审计**：缓存只记 `rc=0`，失败门下次必跑；`--force` 永远绕过缓存；
+   `GATES=...` 与 `changed` 属临时人工手段，不算全量证据。缓存在
+   `build/verify-cache/`（gitignored，纯本机开发态），
+   `python3 tools/verify_cache.py show` 可看每个门的最后 PASS 时间与 `valid/STALE`。
+
+**为什么不用"按测试名分类省跑"**：分类表靠人工维护，新增目标 / 新依赖极易漏；
+输入指纹从 Makefile 配方与 import 闭包自动派生，新增依赖会自动进入闭包。
+`smart` 依旧声明 47 门覆盖，只是跳过未变的 —— 比手工挑几个测试跑更安全。
+
+实测：3 门首次 1 s；二次 `0 passed, 3 skipped, 0 s`；改 `tools/nr_la.py` 只让
+`model-la` 重跑（其余含 `run-rach` 全 SKIP），恢复文件后又回到 SKIP；
+改 `sim/soc/Makefile` 则四门全部失效。全量预热 `smart --force`：
+**47 passed / 0 failed / 562 s**；紧接着第二次 `smart`：
+**0 passed / 47 skipped / 1 s**（47 条缓存全部 `valid`，29 个全局输入文件）。

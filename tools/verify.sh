@@ -6,7 +6,13 @@
 #   bash tools/verify.sh full        # ~8-10 min: + 16 model self-tests + 29 SoC
 #   bash tools/verify.sh slow        # ~10 min (601 s): full + run-rach (11.8 M cycles)
 #   bash tools/verify.sh changed     # ~0.5-3 min: only gates touched by git diff
+#   bash tools/verify.sh smart       # RECOMMENDED: all 47 gates, but only re-run
+#                                   # gates whose inputs changed since the last
+#                                   # PASS (input-fingerprint cache); usually a
+#                                   # few seconds.  SKIP is never reported as PASS.
 #
+#   bash tools/verify.sh smart --force    # ignore the cache (stage-end / release)
+#   GATES="model-la run-ring" bash tools/verify.sh smart   # manual gate override
 #   bash tools/verify.sh full --linux          # also boots Linux (10^8 cycles)
 #   bash tools/verify.sh full --jobs 8         # override parallelism (default 6)
 #   CHANGED_REF=HEAD~3 bash tools/verify.sh changed
@@ -30,15 +36,20 @@ WITH_LINUX=0
 JOBS=${JOBS:-6}
 CHANGED_REF=${CHANGED_REF:-HEAD~1}
 CHANGED_ONLY=${CHANGED_ONLY:-0}
+GATE_OVERRIDE=${GATES:-}
+FORCE=0
+CACHE_ON=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --linux) WITH_LINUX=1; shift ;;
         --slow)  [ "$MODE" = full ] && MODE=slow; shift ;;
+        --force) FORCE=1; shift ;;
         --jobs)  JOBS=${2:-}; shift 2 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
-case "$MODE" in quick|full|slow|changed) ;; *) echo "unknown mode: $MODE" >&2; exit 2 ;; esac
+case "$MODE" in quick|full|slow|changed|smart) ;; *) echo "unknown mode: $MODE" >&2; exit 2 ;; esac
+[ "$MODE" = smart ] && CACHE_ON=1
 case "$JOBS" in ''|*[!0-9]*) echo "JOBS must be a positive number" >&2; exit 2 ;; esac
 [ "$JOBS" -ge 1 ] || JOBS=1
 
@@ -172,10 +183,11 @@ compute_changed() {
 case "$MODE" in
     quick)   SOC_SET=($SOCCORE_QUICK) ;;
     full)    MODEL_SET=("${ALL_MODELS[@]}"); SOC_SET=($SOCCORE_FULL) ;;
-    slow)    MODEL_SET=("${ALL_MODELS[@]}"); SOC_SET=($SOCCORE_FULL $SLOW_EXTRA) ;;
+    slow|smart) MODEL_SET=("${ALL_MODELS[@]}"); SOC_SET=($SOCCORE_FULL $SLOW_EXTRA) ;;
     changed) compute_changed ;;
 esac
 [ "$WITH_LINUX" = 1 ] && SOC_SET+=(linux)
+[ "$CACHE_ON" = 1 ] && [ -z "$GATE_OVERRIDE" ] && WANT_KERNELS=1
 
 if [ "$MODE" = changed ] && [ ${#MODEL_SET[@]} -eq 0 ] &&
    [ ${#SOC_SET[@]} -eq 0 ] && [ "$WANT_KERNELS" = 0 ]; then
@@ -200,10 +212,14 @@ fi
 NAMES=()
 
 run_one() {                            # run_one <name> <cmd...>  (background)
-    local name=$1 t0; shift
+    local name=$1 t0 rc; shift
     t0=$(date +%s)
     ( cd "$ROOT" && env -u LD_LIBRARY_PATH "$@" ) >"$TMPD/$name.out" 2>&1
-    printf '%s' "$?" >"$TMPD/$name.rc"
+    rc=$?
+    printf '%s' "$rc" >"$TMPD/$name.rc"
+    if [ "$CACHE_ON" = 1 ]; then
+        python3 "$ROOT/tools/verify_cache.py" mark "$name" "$rc" >/dev/null 2>&1 || true
+    fi
     printf '  .. %-20s done (%ss)\n' "$name" "$(( $(date +%s) - t0 ))"
 }
 
@@ -237,31 +253,72 @@ collect() {
     done
 }
 
-# kernels rebuilds the CGRA bench; keep it out of the pool so it cannot race
-# with the simulator binaries that the pool reads.
-if [ "$WANT_KERNELS" = 1 ]; then
-    submit kernels make -C "$ROOT" test
-    wait
+# ---- ordered gate list, then (smart only) drop unchanged gates -------------
+PLAN_GATES=()
+[ "$WANT_KERNELS" = 1 ] && PLAN_GATES+=(kernels)
+for m in "${MODEL_SET[@]-}"; do [ -n "$m" ] && PLAN_GATES+=("$m"); done
+for t in "${SOC_SET[@]-}"; do [ -n "$t" ] && PLAN_GATES+=("$t"); done
+[ -n "$GATE_OVERRIDE" ] && PLAN_GATES=($GATE_OVERRIDE)
+
+RUN_GATES=()
+SKIP_LINES=()
+if [ "$CACHE_ON" = 1 ]; then
+    FORCE_ARG=""
+    [ "$FORCE" = 1 ] && FORCE_ARG="--force"
+    if ! python3 "$ROOT/tools/verify_cache.py" plan $FORCE_ARG \
+            --gates "${PLAN_GATES[*]}" >"$TMPD/plan.txt" 2>"$TMPD/plan.err"; then
+        echo "cache planner failed -> running every gate" >&2
+        cat "$TMPD/plan.err" >&2
+        RUN_GATES=("${PLAN_GATES[@]}")
+    else
+        while read -r kind name ts; do
+            case "$kind" in
+                RUN)  RUN_GATES+=("$name") ;;
+                SKIP) SKIP_LINES+=("$name $ts") ;;
+            esac
+        done < "$TMPD/plan.txt"
+    fi
+else
+    RUN_GATES=("${PLAN_GATES[@]}")
 fi
 
-for m in "${MODEL_SET[@]-}"; do
-    [ -n "$m" ] || continue
-    submit "$m" ${MODEL_CMD[$m]}
-done
-for t in "${SOC_SET[@]-}"; do
-    [ -n "$t" ] || continue
-    if [ "$t" = linux ]; then
-        submit linux make -C "$ROOT/sim/soc" linux
+gate_cmd() {                           # gate_cmd <name>
+    local n=$1
+    case "$n" in
+        kernels)  submit "$n" make -C "$ROOT" test ;;
+        linux)    submit "$n" make -C "$ROOT/sim/soc" linux ;;
+        model-*)  submit "$n" ${MODEL_CMD[$n]} ;;
+        *)        submit "$n" make -C "$ROOT/sim/soc" "$n" ;;
+    esac
+}
+
+# kernels rebuilds the CGRA bench; keep it out of the pool so it cannot race
+# with the simulator binaries that the pool reads.
+REST=()
+for g in "${RUN_GATES[@]-}"; do
+    [ -z "$g" ] && continue
+    if [ "$g" = kernels ]; then
+        gate_cmd kernels
+        wait
     else
-        submit "$t" make -C "$ROOT/sim/soc" "$t"
+        REST+=("$g")
     fi
 done
+for g in "${REST[@]-}"; do [ -n "$g" ] && gate_cmd "$g"; done
 wait
 collect
+for line in "${SKIP_LINES[@]-}"; do
+    [ -z "$line" ] && continue
+    printf '%-16s SKIP  (inputs unchanged since %s)\n' "${line%% *}" "${line#* }"
+done
 
 END=$(date +%s)
 echo
-echo "== result: $PASS passed, $FAIL failed, $((END - START)) s =="
+if [ ${#SKIP_LINES[@]} -gt 0 ]; then
+    echo "== result: $PASS passed, ${#SKIP_LINES[@]} skipped (cached), $FAIL failed, $((END - START)) s =="
+else
+    echo "== result: $PASS passed, $FAIL failed, $((END - START)) s =="
+fi
 if [ "$FAIL" -gt 0 ]; then
     echo "failed:$FAILED_NAMES"
     echo "hint: grep -n '\[ OK \]|\[info\]|error' $LOG"
