@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch run-link-e2e run-pusch
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch run-link-e2e run-pusch run-sib1
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -349,6 +349,23 @@ run-pusch: all
 		--dump $(ROOT)/$(OBJ)/pusch_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+
+# ---- SIB1: Type0-PDCCH (SI-RNTI) + PDSCH -> SIB1 ----
+SIB1_TD = $(ROOT)/build/soc/sib1.td
+
+run-sib1: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(SIB1_TD))
+	python3 $(ROOT)/tools/nr_sib1.py dump $(SIB1_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1) --rv $(if $(RV),$(RV),0)
+	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/sib1_bm.bin@0x80000000 \
+		--load $(SIB1_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80070000 --nwords 1100 \
+		--dump $(ROOT)/$(OBJ)/sib1_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_sib1.py $(ROOT)/$(OBJ)/sib1_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1) --rv $(if $(RV),$(RV),0)
 
 # ---- PDCCH / DCI blind detection (38.211 7.3 + 38.212 7.3) ----
 PDCCH_TD = $(ROOT)/build/soc/pdcch.td

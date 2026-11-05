@@ -76,10 +76,17 @@
 #define NODE_OUT_BASE 0x80340000ul
 #define NODE_OUT_BLOCKS 2048
 #define NODE_OUT_STRIDE 32
+#ifdef SIB1
+/* SIB1: the SI-RNTI is fixed (0xFFFF) and known to the UE (Type0-PDCCH
+ * common search space), so there is no blind search -- one candidate. */
+#define NCAND         1
+static const uint32_t candidates[NCAND] = { 0xFFFFu };
+#else
 #define NCAND         5
 static const uint32_t candidates[NCAND] = {
     0x1111u, 0x5678u, 0x1234u, 0x9ABCu, 0xDEF0u
 };
+#endif
 
 /* ---- PDSCH (data) chain constants ---- */
 #define PDSCH_E       720
@@ -89,7 +96,11 @@ static const uint32_t candidates[NCAND] = {
 #define QPSK          2000
 #define H_SCALE       16
 #define LLR_SHIFT     8
+#ifdef SIB1
+#define N_RNTI        0xFFFFu
+#else
 #define N_RNTI        0x1234u
+#endif
 #define USABLE        984
 #define FILLER0       64
 #define FILLER_N      16

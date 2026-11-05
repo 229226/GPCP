@@ -68,6 +68,7 @@ if [ "$MODE" = full ]; then
     run model-harq  python3 tools/pdsch_full_plan.py selftest-harq --snr 20 --seed 1
     run model-ul    python3 tools/nr_ul.py
     run model-pusch python3 tools/nr_pusch.py selftest
+    run model-sib1  python3 tools/nr_sib1.py selftest
     run model-link  python3 tools/nr_link.py --trials 2
 fi
 
@@ -82,7 +83,7 @@ fi
 # stack a fresh FFT/LLR front end on that same LDPC engine, and quick
 # should stay around 320 s.
 SOCCORE="run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
-[ "$MODE" = full ] && SOCCORE="run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pusch run-pdcch run-link-e2e run-fftprobe run-slot"
+[ "$MODE" = full ] && SOCCORE="run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pusch run-sib1 run-pdcch run-link-e2e run-fftprobe run-slot"
 for t in $SOCCORE; do
     run "$t" make -C "$ROOT/sim/soc" "$t"
 done
