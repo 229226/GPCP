@@ -39,7 +39,7 @@ env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用�
 
 # 1) 一条命令全量验收（推荐先跑这个，确认基线）
 bash tools/verify.sh quick            # 实测 ~320 s（2026-11-04 复验：11 passed / 0 failed）：14 kernel + 8 个 SoC 目标（含 run-ssb-fid / run-ssb-slot）
-bash tools/verify.sh full             # 实测 ~1230 s（run-pdsch-iter 优化后约少 4 分钟）：14 kernel + 6 个模型自检 + 23 个 SoC 基准（含 run-pdcch / run-pdsch-harq）
+bash tools/verify.sh full             # 实测 ~1230 s（run-pdsch-iter 优化后约少 4 分钟）：14 kernel + 8 个模型自检 + 24 个 SoC 基准（含 run-pdcch / run-pdsch-harq / run-link-e2e / model-pusch）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 make verify / make verify-full        # 同上两个的 make 包装
 
@@ -83,6 +83,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `tools/nr_*.py` 自检 | `nr_pdcch.py`（DCI 32 bit + CRC24C + Polar K=56 + 5 个 RNTI 盲检，8~15 dB 4/4 命中）、`nr_ldpc.py`（Zc=64 分 4 页×16 PE、分层 min-sum，syndrome=0）、`nr_mimo.py`（2×2 MMSE，14 dB 起 0/720 误码）、`nr_mac.py`（MAC PDU 往返 + RV 0→2→3→1 / NDI 翻转）；均在 `verify.sh full` 的模型自检段 ；`nr_link.py`（DCI 驱动闭环：MAC→PDCCH→PDSCH→CRC→PUCCH→MAC，−8 dB 触发 HARQ 重传并经 Chase 合并救回，12/0 dB 零重传） |
 
 | `tools/nr_ul.py` 自检 | **上行模型级**：PRACH Zadoff-Chu（L_RA=139）循环相关定时估计 TA=0/5/12/23 全对、PUCCH 格式 0 用 m_CS=0/6 传 1 bit ACK/NACK（0~6 dB 8/8 全对）；未落 CGRA |
+| `tools/nr_pusch.py` 自检 | **上行 PUSCH 黄金模型（阶段 A）**：TB→CRC24A→LDPC BG2→速率匹配→QPSK→(可选 DFT-s-OFDM 变换预编码)→OFDM→TD；接收链镜像 PDSCH（含 38.211 6.4.1.1 真 Gold DMRS、6.3.1.1 加扰）；无变换预编码 / DFT-s-OFDM 在 20/0/−6 dB 与 HARQ rv=0/2 均 CRC ok、TB 80/80、0 误码；TD 格式与 PDSCH dump 同构（供阶段 B `run-pusch` 复用） |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
@@ -236,10 +237,10 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     MAC PDU + HARQ 实体均为**模型级**（`tools/nr_*.py`，各自 selftest 通过），
     未落 CGRA。各文件头注释列了刻意保留的简化（Polar 可靠性序列用自然序、
     无 REG/CCE 交织与 PC bit、BG1 官方移位表未内置、H 假设接收端已知）。
-12. **仍未做**：BG1 官方 Table 5.3.2-2 移位表（+ 层调度微码）、上行 **PUSCH** 与上行
+12. **仍未做**：BG1 官方 Table 5.3.2-2 移位表（+ 层调度微码）、上行 **PUSCH 硬件基准 `run-pusch`** 与上行
     CGRA 基准、RLC/PDCP/SDAP/RRC、QEMU 设备模型与 free5GC 联调（端到端 ping/iperf）。
-    （注：PDCCH SoC 基准 `run-pdcch`、上行 PRACH/PUCCH 模型 `nr_ul.py` 已完成，见第 13 条；
-     上行 PRACH/PUCCH 尚未落 CGRA。）
+    （注：PDCCH SoC 基准 `run-pdcch`、上行 PRACH/PUCCH 模型 `nr_ul.py`、以及 **PUSCH 黄金模型 `tools/nr_pusch.py`（阶段 A，TD 格式与 PDSCH 同构）** 已完成；
+     上行 PUSCH 尚未落 CGRA（`run-pusch` 待做）、PRACH/PUCCH 尚未落 CGRA。）
 
 13. ✅ **L1 控制/上行（本轮）**：PDCCH/DCI 盲检**已上硬件**（`run-pdcch`，E=432 逆速率匹配
     LUT + CGRA Polar SC K=56 + 5 个 RNTI 盲检，12/8 dB 两点 `[OK]`，1.33 M 周期）；上行

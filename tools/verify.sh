@@ -67,6 +67,7 @@ if [ "$MODE" = full ]; then
     run model-mac   python3 tools/nr_mac.py
     run model-harq  python3 tools/pdsch_full_plan.py selftest-harq --snr 20 --seed 1
     run model-ul    python3 tools/nr_ul.py
+    run model-pusch python3 tools/nr_pusch.py selftest
     run model-link  python3 tools/nr_link.py --trials 2
 fi
 
