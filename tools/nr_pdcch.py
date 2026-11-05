@@ -12,8 +12,10 @@ Scope notes (deliberate simplifications, called out for the next iteration):
   * the polar reliability ordering is the natural/bit-reversed order, not the
     38.212 Table 5.3.1.2-1 sequence; the encoder/decoder pair is self-consistent
   * no PC bits, no REG/CCE interleaving, no PDCCH DMRS (AWGN-only channel)
-  * RNTI blind detection re-runs the whole decode for each candidate, which is
-    exactly the real search-space behaviour (just with a tiny candidate set)
+  * RNTI blind detection performs ONE Polar SC decode, then a CRC24C check per
+    candidate (the 38.211 common-search-space c_init = N_ID carries no RNTI, so
+    the RNTI only masks the CRC) -- exactly the real search-space behaviour,
+    just with a tiny candidate set
 """
 import math
 import os

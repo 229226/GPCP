@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch run-link-e2e
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -349,3 +349,22 @@ run-pdcch: all
 		--dump $(ROOT)/$(OBJ)/pdcch_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_pdcch.py $(ROOT)/$(OBJ)/pdcch_dump.txt --snr $(if $(SNR),$(SNR),12) --seed $(if $(SEED),$(SEED),1)
+
+# ---- DCI-driven link: PDCCH (DCI) -> rv -> PDSCH circular buffer (38.211/38.212)
+# One combined TD (PDCCH symbol + PDSCH symbols) at 0x8040_0000; the SoC decodes
+# the DCI, reads rv out of it, and uses that rv as the PDSCH k0 offset.
+LINK_E2E_TD = $(ROOT)/build/soc/link_e2e.td
+
+run-link-e2e: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(LINK_E2E_TD))
+	python3 $(ROOT)/tools/dump_link_e2e.py $(LINK_E2E_TD) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/link_e2e_bm.bin@0x80000000 \
+		--load $(LINK_E2E_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80070000 --nwords 1100 \
+		--dump $(ROOT)/$(OBJ)/link_e2e_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_link_e2e.py $(ROOT)/$(OBJ)/link_e2e_dump.txt --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)

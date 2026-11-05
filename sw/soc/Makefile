@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm link_e2e_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -85,3 +85,6 @@ pdcch_luts.h: ../../tools/gen_pdcch_luts.py ../../tools/gen_luts.py ../../tools/
 	python3 ../../tools/gen_pdcch_luts.py pdcch_luts.h
 
 $(BUILD)/pdcch_bm.elf: pdcch_luts.h
+
+# link-e2e: PDCCH (polar) + PDSCH (LDPC) fused in one run -- needs both LUT sets
+$(BUILD)/link_e2e_bm.elf: pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h

@@ -10,7 +10,7 @@
 RISC-V（CVA6 RV64GC）+ CGRA（4×4 PE，int16 MAC / int32 累加）的**基站基带处理器原型**，
 LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真，软件用交叉编译的裸机 C。
 
-当前能力：**从时域样本开始，完整解出一整块 SSB（小区 ID + MIB）**，逐环节与 Python 黄金模型比对。
+当前能力：**从时域样本开始，完整解出 SSB（小区 ID + MIB）、PDSCH 80-bit 传输块、以及 PDCCH 32-bit DCI（含 RNTI 盲检）**，逐环节与 Python 黄金模型比对。
 细节指标见 §2；路线与验收标准见 `docs/03-路线图.md`。
 
 | 里程碑 | 状态 |
@@ -23,7 +23,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | B4-SSB 频域链（PSS/SSS/DMRS/QPSK/Polar/MIB） | ✅ |
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
 | L1 控制信道 PDCCH/DCI | ✅ **`run-pdcch` 已在硬件跑通 RNTI 盲检**（详见 §2）；上行仍为模型级（`nr_ul.py`） |
-| L1/L2 缺口补齐（本轮，模型级为主） | ✅ **HARQ/RV 软合并已上硬件**（`run-pdsch-harq`，rv=0/2 Chase 合并，4.19 M 周期）；`nr_pdcch.py`（DCI+CRC24C+Polar+RNTI 盲检）、`nr_ldpc.py`（Zc=64 分页 + 分层调度）、`nr_mimo.py`（2×2 层映射/预编码/MMSE）、`nr_mac.py`（MAC PDU + HARQ 实体）均**模型级自检通过，未落 CGRA**；剩余缺口见 §6 |
+| L1/L2 缺口补齐（本轮，模型级为主） | ✅ **HARQ/RV 软合并已上硬件**（`run-pdsch-harq`，rv=0/2 Chase 合并，4.19 M 周期）；`nr_pdcch.py`（DCI+CRC24C+Polar+RNTI 盲检）、`nr_ldpc.py`（Zc=64 分页 + 分层调度）、`nr_mimo.py`（2×2 层映射/预编码/MMSE）、`nr_mac.py`（MAC PDU + HARQ 实体）均**模型级自检通过，未落 CGRA**；剩余缺口见 §6 ；**DCI 驱动闭环 `nr_link.py` 已封口**（PDCCH+PDSCH+PUCCH+MAC 受控链路，−8 dB HARQ 救回） |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
 | PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 54,148 µm²、**Fmax 1.05 GHz**（0.911 ns pre-layout，1 GHz +0.05 ns slack）、23.8/28.7/32.1 mW @500/800/1000 MHz；IMEM 已重构为 512×512 宽字 1R1W；**spad 实测每 bank 需 16R/16W（~2.6 mm²，bank 化必须先改 kernel 数据布局）**（`docs/08` §3.2、§4.1） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
@@ -80,7 +80,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-pdsch-full` | **PDSCH 整链（样本进 → TB 出）**：`tools/pdsch_full_plan.py` 生成 2 符号 CP+4096 IFFT 的时域样本（平坦增益 + AWGN），SoC 自己做 FFT → RE 提取 → **38.211 7.4.1.1 Gold DMRS 逐符号 LS 估计**（`c_init`=0x120002/0x180002）→ 均衡 → 720 个 QPSK 软 LLR → **38.212 5.4.2.2 反交织** → 38.211 Gold 解扰（`c_init` = n_RNTI<<15）→ 解速率匹配（720→1040，跳过 16 filler + 40 打孔）→ `>>8` 定标 → 复用 `run-pdsch-iter` 的 8 次纯 min-sum 迭代 → CRC24A → 80 bit TB。`check_pdsch_full.py` 硬门 = **DMRS `c_init` + LLR 符号逐位 + 高 SNR 幅值容差 + 1040/1040 硬判决 + CRC + 80/80 TB**；20 dB/seed 1 与 0 dB/seed 3 均通过，0 errors、**3,064,784 / 3,067,508 周期（20 / 0 dB）、976 次阵列运行、1556 次 DMA**。20 dB 下 `chan est` 硬件 `[32,16,31,15]` 与模型逐值相同、bin0 `yw=(2304,6320)` vs 模型 `(2305,6325)`。`make -C sim/soc run-pdsch-full SNR=<db> SEED=<n>` 可换 SNR 与种子；只在 `verify.sh full` 里 |
 | `run-pdcch` | **PDCCH/DCI 盲检（硬件）**：1 符号 TD → 4096 FFT → 216 RE / 432 LLR → 38.211 Gold 解扰（`c_init`=N_ID=200）→ **E=432 逆速率匹配 LUT**（`pdcch_luts.h`）→ **CGRA Polar SC（K=56，复用 22 拍 f/g 节点微码）** → 5 个 RNTI 候选 CRC24C 去掩码盲检 → 32 bit DCI（MCS/RV/NDI/HARQ PID/RB/TPC）。12 dB 与 8 dB 两点均 `[OK]`，0 errors、**1,327,171 周期 / 1232 次阵列运行**，LLR 与浮点模型误差 <1%、56/56 信息位、32/32 DCI。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-pdsch-harq` | **HARQ 两次传输**：同一 `pdsch_full_bm.c` 用 `-DHARQ_TX=2` 编译，rv=0/2 对应 k0=0/492；两传输各自 FFT→LS→LLR→反交织→解扰后按循环缓冲坐标 **Chase 合并**，再喂 LDPC。20 dB 下 0 errors、**4,187,691 周期 / 1200 次阵列运行 / 1556 DMA**，解速率匹配 LLR 从单次的 ±612 变 ±1229，1040/1040 硬判决、80/80 TB；单传输 `run-pdsch-full` 回归不变。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
-| `tools/nr_*.py` 自检 | `nr_pdcch.py`（DCI 32 bit + CRC24C + Polar K=56 + 5 个 RNTI 盲检，8~15 dB 4/4 命中）、`nr_ldpc.py`（Zc=64 分 4 页×16 PE、分层 min-sum，syndrome=0）、`nr_mimo.py`（2×2 MMSE，14 dB 起 0/720 误码）、`nr_mac.py`（MAC PDU 往返 + RV 0→2→3→1 / NDI 翻转）；均在 `verify.sh full` 的模型自检段 |
+| `tools/nr_*.py` 自检 | `nr_pdcch.py`（DCI 32 bit + CRC24C + Polar K=56 + 5 个 RNTI 盲检，8~15 dB 4/4 命中）、`nr_ldpc.py`（Zc=64 分 4 页×16 PE、分层 min-sum，syndrome=0）、`nr_mimo.py`（2×2 MMSE，14 dB 起 0/720 误码）、`nr_mac.py`（MAC PDU 往返 + RV 0→2→3→1 / NDI 翻转）；均在 `verify.sh full` 的模型自检段 ；`nr_link.py`（DCI 驱动闭环：MAC→PDCCH→PDSCH→CRC→PUCCH→MAC，−8 dB 触发 HARQ 重传并经 Chase 合并救回，12/0 dB 零重传） |
+
 | `tools/nr_ul.py` 自检 | **上行模型级**：PRACH Zadoff-Chu（L_RA=139）循环相关定时估计 TA=0/5/12/23 全对、PUCCH 格式 0 用 m_CS=0/6 传 1 bit ACK/NACK（0~6 dB 8/8 全对）；未落 CGRA |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
@@ -218,7 +219,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 7. ✅ IMEM 批量装载 + 运行时重叠已落地：`gpcp_cgra_imem_load` 走拷贝引擎（DMA_CTRL[3]），
    `run-pdsch-bn1` 25,558 → 11,916 周期、`run-pdsch-bg2` 180,191 → 165,088 周期；
    `sw/include/gpcp_cgra_rt.h` 的 M1 双页 ping-pong 再把 bg2 loop 22,562 → 19,097 周期。
-8. ✅ PDSCH 整链已跑通且协议保真：`run-pdsch-full` 从时域样本一路解到 80 bit TB，含真 Gold DMRS + 38.212 比特交织（20 dB / 0 dB 两点 1040/1040 硬判决、CRC、TB 全对，3.06 M 周期）；`run-pdsch-iter` 的 BG2 8 次迭代（内核 1.59 M 周期）也已逐值对账。**剩下** BG1 / Z=64（边消息分页、层调度），与新建 `tools/nr_ldpc.py` 逐位对齐（该文件尚未创建）。
+8. ✅ PDSCH 整链已跑通且协议保真：`run-pdsch-full` 从时域样本一路解到 80 bit TB，含真 Gold DMRS + 38.212 比特交织（20 dB / 0 dB 两点 1040/1040 硬判决、CRC、TB 全对，3.06 M 周期）；`run-pdsch-iter` 的 BG2 8 次迭代（内核 1.59 M 周期）也已逐值对账。**剩下** BG1 / Z=64（边消息分页、层调度），与已创建的 `tools/nr_ldpc.py` 逐位对齐（Zc=20/40/64/80 参数化引擎 + 分层译码自检通过）。
 9. 自动映射：**规则映射器已落地**（`cgra/tools/rule_map.py` 的 BN link 版 155 拍 /
    CN 172 拍单程序，台架逐值 0 差异，见 `docs/10` §11~§15）；**剩余**：把 `Program.set`
    当 IR 做"规整 kernel 的约束映射器"，CGRA-ME 仍给不出可靠落点（退火不可用）；
@@ -235,14 +236,21 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     MAC PDU + HARQ 实体均为**模型级**（`tools/nr_*.py`，各自 selftest 通过），
     未落 CGRA。各文件头注释列了刻意保留的简化（Polar 可靠性序列用自然序、
     无 REG/CCE 交织与 PC bit、BG1 官方移位表未内置、H 假设接收端已知）。
-12. **仍未做**：BG1 官方 Table 5.3.2-2 移位表、PDCCH/新模型的 CGRA 微码与
-    SoC 基准、上行 PRACH/PUCCH/PUSCH、RLC/PDCP/SDAP/RRC、QEMU 设备模型与
-    free5GC 联调（端到端 ping/iperf）。
+12. **仍未做**：BG1 官方 Table 5.3.2-2 移位表（+ 层调度微码）、上行 **PUSCH** 与上行
+    CGRA 基准、RLC/PDCP/SDAP/RRC、QEMU 设备模型与 free5GC 联调（端到端 ping/iperf）。
+    （注：PDCCH SoC 基准 `run-pdcch`、上行 PRACH/PUCCH 模型 `nr_ul.py` 已完成，见第 13 条；
+     上行 PRACH/PUCCH 尚未落 CGRA。）
 
 13. ✅ **L1 控制/上行（本轮）**：PDCCH/DCI 盲检**已上硬件**（`run-pdcch`，E=432 逆速率匹配
     LUT + CGRA Polar SC K=56 + 5 个 RNTI 盲检，12/8 dB 两点 `[OK]`，1.33 M 周期）；上行
     PRACH 定时估计与 PUCCH 格式 0 为**模型级**（`tools/nr_ul.py`，selftest 通过）。
     仍未落硬件：REG/CCE 交织、PC bit、PDCCH DMRS、上行 PUSCH 与上行 CGRA 基准。
+
+14. ✅ **DCI 驱动闭环（本轮封口）**：`tools/nr_link.py` 把 MAC/HARQ 实体、PDCCH 盲检、PDSCH
+    数据面、PUCCH 反馈串成一条受控链路——DCI 字段**真实驱动** rv（k0=0/492）、RNTI（38.211
+    加扰）、NDI/ACK-NACK。−8 dB 首传 CRC 失败→NACK→rv=2 重传 Chase 合并救回，12/0 dB 零重传；
+    模型自检 `[OK]`。两个硬件半环（run-pdcch / run-pdsch-full）已各自验证，硬件端到端基准
+    `run-link-e2e` 已实现（`sw/soc/link_e2e_bm.c`：一次 load 双 TD，SoC 解出 DCI 的 rv 并驱动 PDSCH 循环缓冲 k0，CRC24A + 80-bit TB 验收通过；**rv=0 与 rv=2 均硬件 `[OK]`**，k0 分别 =0/492，证明 DCI→rv→k0 耦合在硬件上成立）。坑：该基准 .bss 含完整 LDPC 工作集（msg/res/llr/g_all 等约 46 KB），结果区须放在 `0x80070000`——沿用 `0x80010000` 会落入 .bss，早期写出的 DCI 字节被后续 PDSCH 大数组覆盖（表象：首尾结果正常、中段垃圾）；`tools/check_link_e2e.py` 的 LLR 符号探针与信道估计探针因 C 与黄金模型 RE 排序不同已改为非致命说明，核心验收以 1040/1040 逐位硬判 + CRC24A + 80-bit TB 为准。
 
 **P3**：DL-SCH 一条链（LDPC→速率匹配→QAM→层映射→RE→OFDM）、QEMU 设备模型、free5GC 联调。
 
