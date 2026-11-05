@@ -304,7 +304,8 @@ def pusch_golden(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED, rv=0, tp=False):
     crc = hard[M.A_TB:M.A_TB + M.CRC_LEN]
     want = M.payload_bits()
     return dict(
-        yq=yq, h=h, raw=raw, scaled=scaled, hard=hard, tb=tb, crc=crc, want=want,
+        yq=yq, h=h, raw=raw, descr=descr, scaled=scaled, hard=hard, tb=tb,
+        crc=crc, want=want,
         crc_ok=(M.crc24a(tb) == crc),
         tb_errors=sum(a != b for a, b in zip(tb, want)),
     )
