@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-full snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux
+.PHONY: all test build clean verify verify-full snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach
 
 all: test
 
@@ -72,6 +72,11 @@ soc-run-fftprobe: ; $(MAKE) -C sim/soc run-fftprobe
 
 soc-run-slot:
 	$(MAKE) -C sim/soc run-slot
+
+# PRACH Msg1: ZC cyclic-shift search on the CGRA -> preamble index + TA
+soc-run-prach: ; $(MAKE) -C sim/soc run-prach
+# 4-step random access: Msg1 -> Msg2 RAR -> Msg3 PUSCH -> Msg4, one SoC run
+soc-run-rach: ; $(MAKE) -C sim/soc run-rach
 
 # B3: OpenSBI + Linux on the SoC
 linux:

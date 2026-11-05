@@ -15,7 +15,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 
 | 里程碑 | 状态 |
 |---|---|
-| M0 CGRA 微架构 + 微码工具链（14 kernel） | ✅ |
+| M0 CGRA 微架构 + 微码工具链（15 kernel） | ✅ |
 | M1/B2 CVA6 驱动 CGRA（真 SoC + AXI4 突发） | ✅ |
 | M2/B2.5 L1 数据面（spad 双页、DMA+描述符环、PLIC、接收链） | ✅ |
 | M2.5 FFT 256/1024/4096 + slot 时基 | ✅ |
@@ -24,6 +24,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | B4-SSB 采样级（4 符号 FFT → N_ID + MIB） | ✅ |
 | L1 控制信道 PDCCH/DCI | ✅ **`run-pdcch` 已在硬件跑通 RNTI 盲检**（详见 §2）；上行仍为模型级（`nr_ul.py`） |
 | P1 SIB1（Type0-PDCCH → PDSCH → SIB1） | ✅ **`run-sib1` 硬件通过**（SI-RNTI 0xFFFF 单候选；rv=0/2 两点 k0=0/492；0 errors、1040/1040 硬判、TB 80/80、SIB1 字段全对；4.43 M 周期） |
+| P2 随机接入（PRACH → RAR → Msg3 → Msg4） | ✅ **`run-prach`（Msg1：ZC 循环相关落 CGRA，139/139 shift 逐位 → 前导 + TA）** + **`run-rach`（4 步全过程一次 SoC 运行：Msg1 → RA-RNTI → Msg2 RAR → Msg3 PUSCH → Msg4 竞争解决 → C-RNTI）**；`tools/nr_rach.py` 为过程级黄金模型（含 RAR/CCCH/CR-ID MAC CE）。详见 §2 两行与 `docs/11` P2 |
 | L1/L2 缺口补齐（本轮，模型级为主） | ✅ **HARQ/RV 软合并已上硬件**（`run-pdsch-harq`，rv=0/2 Chase 合并，4.19 M 周期）；`nr_pdcch.py`（DCI+CRC24C+Polar+RNTI 盲检）、`nr_ldpc.py`（Zc=64 分页 + 分层调度）、`nr_mimo.py`（2×2 层映射/预编码/MMSE）、`nr_mac.py`（MAC PDU + HARQ 实体）均**模型级自检通过，未落 CGRA**；剩余缺口见 §6 ；**DCI 驱动双向闭环 `nr_link.py` 已封口**（DL = PDCCH+PDSCH+PUCCH；UL = DCI reserved 10 bit UL grant 驱动的 PUSCH；−8 dB 双向 HARQ 各自救回）；**上行 PUSCH 硬件整链 `run-pusch` 已打通**（20 dB 0 errors、1040/1040 硬判、TB 80/80、3.07 M 周期） |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
 | PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 54,148 µm²、**Fmax 1.05 GHz**（0.911 ns pre-layout，1 GHz +0.05 ns slack）、23.8/28.7/32.1 mW @500/800/1000 MHz；IMEM 已重构为 512×512 宽字 1R1W；**spad 实测每 bank 需 16R/16W（~2.6 mm²，bank 化必须先改 kernel 数据布局）**（`docs/08` §3.2、§4.1） |
@@ -39,8 +40,8 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用都这样跑
 
 # 1) 一条命令全量验收（推荐先跑这个，确认基线）
-bash tools/verify.sh quick            # 实测 ~320 s（2026-11-04 复验：11 passed / 0 failed）：14 kernel + 8 个 SoC 目标（含 run-ssb-fid / run-ssb-slot）
-bash tools/verify.sh full             # 实测 ~1230 s（run-pdsch-iter 优化后约少 4 分钟）：14 kernel + 9 个模型自检 + 26 个 SoC 基准（含 run-pdcch / run-pdsch-harq / run-pusch / run-sib1 / run-link-e2e / model-pusch / model-sib1）
+bash tools/verify.sh quick            # 实测 ~320 s（2026-11-04 复验：11 passed / 0 failed）：15 kernel + 8 个 SoC 目标（含 run-ssb-fid / run-ssb-slot；PRACH/RACH 只在 full）
+bash tools/verify.sh full             # 实测 ~2704 s（2026-11-05 复验：39 passed / 0 failed）：15 kernel + 10 个模型自检 + 28 个 SoC 基准（含 run-pdcch / run-pdsch-harq / run-pusch / run-sib1 / run-link-e2e / run-prach / run-rach / model-rach）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 make verify / make verify-full        # 同上两个的 make 包装
 
@@ -62,7 +63,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 | 目标 | 关键期望 |
 |---|---|
-| `make test`（= `tools/cgra.py test --rebuild`） | `ALL TESTS PASSED`，14 个 kernel 逐位（含 LDPC 的 `ldpc_cn` 52 拍 / `ldpc_bn` 19 拍） |
+| `make test`（= `tools/cgra.py test --rebuild`） | `ALL TESTS PASSED`，15 个 kernel 逐位（含 LDPC 的 `ldpc_cn` 52 拍 / `ldpc_bn` 19 拍、PRACH 的 `prach_corr` 128 拍） |
 | `run` | matmul 逐位，≈2059 周期 |
 | `run-dma` / `run-irq` | 3 / 2 个 slot 的 H 值一致；中断数 4 |
 | `run-ring` | 4 个描述符消费、head=4、**0.70 周期/字** |
@@ -83,10 +84,13 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-pdsch-harq` | **HARQ 两次传输**：同一 `pdsch_full_bm.c` 用 `-DHARQ_TX=2` 编译，rv=0/2 对应 k0=0/492；两传输各自 FFT→LS→LLR→反交织→解扰后按循环缓冲坐标 **Chase 合并**，再喂 LDPC。20 dB 下 0 errors、**4,187,691 周期 / 1200 次阵列运行 / 1556 DMA**，解速率匹配 LLR 从单次的 ±612 变 ±1229，1040/1040 硬判决、80/80 TB；单传输 `run-pdsch-full` 回归不变。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-pusch` | **PUSCH 整链（上行，样本进 → TB 出）**：`tools/nr_pusch.py` 生成 2 符号 CP+4096 IFFT 时域样本（38.211 6.4.1.1 PUSCH Gold DMRS，`c_init`=`0x48d22468`/`0x11a42468`，`n_ID`=n_RNTI），SoC 自己做 FFT → RE → DMRS LS → 均衡 → 720 QPSK LLR → 反交织 → 解扰 → 解速率匹配 → 8 次 min-sum LDPC → CRC24A → 80 bit TB。20 dB/seed 1：0 errors、**3,070,613 周期 / 976 次阵列运行 / 1556 DMA**、1040/1040 硬判决、CRC ok、TB 80/80、DMRS `c_init` 与模型逐值一致。默认无变换预编码（CP-OFDM），TD 布局与 `run-pdsch-full` 同构；结果区在 `0x80070000`（`.bss` 尾部到 0x8001_1638，沿用 0x8001_0000 会压到 FFT 程序尾，属侥幸可用，故主动上移）；`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-sib1` | **SIB1（Type0-PDCCH + PDSCH）**：`tools/nr_sib1.py` 生成 1 符号 PDCCH（DCI 1_0，SI-RNTI 0xFFFF）+ 2 符号 PDSCH（80-bit 紧凑 SIB1）时域样本；SoC 复用 `link_e2e_bm.c` 整链（`-DSIB1`：单候选 SI-RNTI），解出 DCI → PDSCH → 1040/1040 硬判 → CRC24A → 80-bit SIB1 → 字段。rv=0/2 两点均 `[OK]`，k0=0/492；0 errors、**4.43 M 周期 / 2208 次阵列运行**；SIB1 字段（cell_identity/tac/prach_config_index/msg1_fdm/msg1_freq_start/zero_corr_zone/scs）与配置逐值一致。`RV=`/`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
+| `run-prach` | **Msg1 PRACH 检测落 CGRA**：`prach_corr` 微码（**128 拍 / 16 PE**，由 `tools/gen_prach_prog.py` 生成 `prach_prog.h`）做 38.211 6.3.3 Zadoff-Chu（`L_RA`=139、root u=25、127 tap）的**循环移位相关搜索**：每个 shift 一次阵列运行，16 个 PE 各出一个 int32 部分和、阵列内 butterfly 归约成 (re,im)，CPU 算 \|C\|² 取峰 → delay → 前导号 + TA。6 dB/seed 1：**139/139 shift 与整数模型逐位一致**，峰 d=39 → **preamble 2 / TA 9**（\|C\|²=2.952e17 对次峰 d=38 的 6.401e15，**16.6 dB** 裕度）、**0 errors / 139 次阵列运行 / 279 次 DMA / 4448 个「部分和 vs 阵列归约」交叉校验 / 128 拍程序**。`PRE=`/`TA=`/`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
+| `run-rach` | **4 步随机接入全过程 = 一次 SoC 运行**（`sw/soc/rach_bm.c`，复用 `prach_corr` + Polar SC + LDPC CN/BN 三类微码）：同一程序里 Msg1 ZC 相关（同上）→ **SoC 自己按 occasion 算 RA-RNTI**（38.321 6.1.5）→ Msg2 单候选 Polar 盲检（复用 `run-pdcch` 的 SC + E=432 LUT）→ DCI 的 **rv 驱动 PDSCH k0** → CRC24A → **RAR MAC CE 解析**（BI/RAPID/TA command/27-bit UL grant/TC-RNTI，38.321 6.2.3）→ Msg3 **PUSCH**（FFT 窗口 = **Msg1 实测 TA**、DMRS 6.4.1.1、数据用**解码出的 TC-RNTI** 解扰）→ CRC24A → CCCH SDU → Msg4 DCI 用**同一个 TC-RNTI** 做 CRC 掩码盲检 → PDSCH → **UE Contention Resolution Identity CE vs 程序自己塞进 Msg3 的 SDU**（38.321 5.1.5.3）→ 竞争解决、TC-RNTI 升级为 C-RNTI。默认点（p=2 / TA=9 / OCC=1 / 20 dB / seed 1）：**0 errors、11,826,693 周期、5531 次阵列运行、4947 次 DMA**；Msg1 139/139 相关逐位、RA-RNTI 0x003d、DCI 32/32、Msg2/3/4 各 **1040/1040 硬判决** + CRC24A + TB 全对、TA 命令 9、RAR grant 四字段（rb_start 1 / rb_len 5 / tda 2 / mcs 10）、TC-RNTI=C-RNTI 0x07002、`resolved=1`。第二点 `MSG4_RV=2` 亦 `[OK]`（硬件解出 rv=2 → **k0=492**，11,830,616 周期）。`PRE=`/`TA=`/`OCC=`（换 occasion ⇒ 换 RA-RNTI，二进制按 OCC 命名，不会误用旧构建）/`MSG4_RV=2`（硬编码 k0 过不了）/`SEED=` 可换点；**全套最慢的基准**，只在 `verify.sh full` 里 |
 | `tools/nr_*.py` 自检 | `nr_pdcch.py`（DCI 32 bit + CRC24C + Polar K=56 + 5 个 RNTI 盲检，8~15 dB 4/4 命中）、`nr_ldpc.py`（Zc=64 分 4 页×16 PE、分层 min-sum，syndrome=0）、`nr_mimo.py`（2×2 MMSE，14 dB 起 0/720 误码）、`nr_mac.py`（MAC PDU 往返 + RV 0→2→3→1 / NDI 翻转）；均在 `verify.sh full` 的模型自检段 ；`nr_link.py`（**DCI 驱动双向闭环**：DL = MAC→PDCCH→PDSCH→CRC→PUCCH→MAC；UL = DCI reserved 10 bit UL grant→PUSCH→CRC，`ul_rv` 真实驱动 PUSCH k0；−8 dB 双向各 2 次重传经 Chase 合并救回，12/0 dB 双向零重传；支持 `--tp` DFT-s-OFDM 上行）；`nr_sib1.py`（**SIB1**：紧凑 80-bit profile + Type0-PDCCH(SI-RNTI)+PDSCH 全链，rv=0/2 × 20/6 dB 全对） |
 
 | `tools/nr_ul.py` 自检 | **上行模型级**：PRACH Zadoff-Chu（L_RA=139）循环相关定时估计 TA=0/5/12/23 全对、PUCCH 格式 0 用 m_CS=0/6 传 1 bit ACK/NACK（0~6 dB 8/8 全对）；未落 CGRA |
 | `tools/nr_pusch.py` 自检 | **上行 PUSCH 黄金模型（阶段 A）**：TB→CRC24A→LDPC BG2→速率匹配→QPSK→(可选 DFT-s-OFDM 变换预编码)→OFDM→TD；接收链镜像 PDSCH（含 38.211 6.4.1.1 真 Gold DMRS、6.3.1.1 加扰）；无变换预编码 / DFT-s-OFDM 在 20/0/−6 dB 与 HARQ rv=0/2 均 CRC ok、TB 80/80、0 误码；TD 格式与 PDSCH dump 同构（供阶段 B `run-pusch` 复用） |
+| `tools/nr_rach.py` 自检 | **4-step 随机接入过程模型**：SIB1 的 `prach_config_index`→`N_CS`、ZC 相关（8 个 Msg1 点：TA/N_CS 组合，峰-次峰裕度）、RA-RNTI（38.321 6.1.5）、RAR/CCCH/CR-ID MAC CE、Msg3 定时窗口、Msg4 竞争解决；3 次接入全部在**一次 Msg4 内解决**，注入错误（错 TA / 错 TC-RNTI / 错竞争分辨率 ID）分别让对应门**如实失败**。`dump` 子命令产出 `run-prach`/`run-rach` 的时域镜像 |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
@@ -110,9 +114,9 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sim/cgra/` | 纯 CGRA 台架（AXI 从机模型） | `tb_cgra.cpp`：`--prog/--dma-mem/--dma-ops/--ring-desc/--spad-dump` |
 | `sim/soc/` | SoC 台架 + 所有 `run-*` 目标 | `Makefile`（每个目标 = 一条 load + dump + check） |
 | `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
-| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
+| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
-| `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 14 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`check_*.py`（每个基准的验收器）、`verify.sh` |
+| `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 15 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`gen_prach_prog.py`（生成 `prach_prog.h` 微码）、`check_*.py`（每个基准的验收器）、`verify.sh` |
 | `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_{bn,cn}_prog.py`（生成 `sw/soc/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py` |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
@@ -256,7 +260,14 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     模型自检 `[OK]`。两个硬件半环（run-pdcch / run-pdsch-full）已各自验证，硬件端到端基准
     `run-link-e2e` 已实现（`sw/soc/link_e2e_bm.c`：一次 load 双 TD，SoC 解出 DCI 的 rv 并驱动 PDSCH 循环缓冲 k0，CRC24A + 80-bit TB 验收通过；**rv=0 与 rv=2 均硬件 `[OK]`**，k0 分别 =0/492，证明 DCI→rv→k0 耦合在硬件上成立）。坑：该基准 .bss 含完整 LDPC 工作集（msg/res/llr/g_all 等约 46 KB），结果区须放在 `0x80070000`——沿用 `0x80010000` 会落入 .bss，早期写出的 DCI 字节被后续 PDSCH 大数组覆盖（表象：首尾结果正常、中段垃圾）；`tools/check_link_e2e.py` 的 LLR 符号探针与信道估计探针因 C 与黄金模型 RE 排序不同已改为非致命说明，核心验收以 1040/1040 逐位硬判 + CRC24A + 80-bit TB 为准。**阶段 C（双向）**：`nr_link.py` 增加 UL 方向——gNB 在 DCI 的 10 个 reserved 比特里下发 UL grant（`ul_flag`/`ul_ndi`/`ul_rv`/`ul_mcs`/`ul_rb_start`/`ul_rb_len`），UE 按 grant 发 PUSCH（`tools/nr_pusch.py`），gNB 侧 FFT→6.4.1.1 DMRS LS→LDPC→CRC24A；`ul_rv` 真实驱动 PUSCH k0（0/492），−8 dB 双向各 2 次重传均 Chase 合并救回、12/0 dB 双向零重传；`--tp`（DFT-s-OFDM 上行）亦 `[OK]`。DCI 32 位布局未改（UL grant 走 reserved），run-pdcch / run-link-e2e 回归不受影响。
 
-15. ✅ **P1 SIB1（本轮）**：`tools/nr_sib1.py`（紧凑 80-bit SIB1 profile）+ `run-sib1` 硬件整链。SI-RNTI 0xFFFF 单候选（Type0 CSS，无需盲检），DCI 1_0 → PDSCH → 1040/1040 → CRC24A → 80-bit SIB1 → 字段（cell_identity/tac/prach_config_index/msg1_fdm/msg1_freq_start/zero_corr_zone/scs）；rv=0/2 两点均 `[OK]`（k0=0/492）、0 errors、4.43 M 周期 / 2208 次阵列运行。**下一步**：P2 随机接入（PRACH 落硬件 + RAR/Msg3/Msg4）。
+15. ✅ **P1 SIB1（本轮）**：`tools/nr_sib1.py`（紧凑 80-bit SIB1 profile）+ `run-sib1` 硬件整链。SI-RNTI 0xFFFF 单候选（Type0 CSS，无需盲检），DCI 1_0 → PDSCH → 1040/1040 → CRC24A → 80-bit SIB1 → 字段（cell_identity/tac/prach_config_index/msg1_fdm/msg1_freq_start/zero_corr_zone/scs）；rv=0/2 两点均 `[OK]`（k0=0/492）、0 errors、4.43 M 周期 / 2208 次阵列运行。
+
+16. ✅ **P2 随机接入（本轮，三阶段全交付）**：
+    * **阶段 A（模型）**`tools/nr_rach.py`：4-step 过程状态机 + RAR / CCCH / CR-ID MAC CE（38.321 6.2.3 / 5.1.5.3），自检 3 次接入均一次 Msg4 解决，三类注入错误各自让对应门失败。
+    * **阶段 B（Msg1 落硬件）**`run-prach` + 第 15 个 kernel `prach_corr`（128 拍，`tools/gen_prach_prog.py` 生成微码）：139/139 shift 逐位、preamble 2 + TA 9、16.6 dB 裕度、0 errors。
+    * **阶段 C（过程级）**`run-rach`（`sw/soc/rach_bm.c`）：Msg1 → SoC 自算 RA-RNTI → Msg2 RAR → Msg3 PUSCH（窗口用 Msg1 实测 TA、解扰用解码出的 TC-RNTI）→ Msg4 竞争解决 → C-RNTI，**一次 SoC 运行**；默认点 0 errors、**11,826,693 周期 / 5531 次阵列运行 / 4947 次 DMA**，三条腿各 1040/1040 硬判决；**`MSG4_RV=2` 第二点也已 `[OK]`**（硬件解出 rv=2 → k0=492，11,830,616 周期）。`OCC=` 换 occasion ⇒ 换 RA-RNTI，二进制按 OCC 命名，避免"旧构建服务新激励"。
+    * **踩到的三个坑**（前两个属"流程成功、数据错"，只有逐值对账能抓）：① RAR 的 27-bit UL grant 是 **MSB-first 打包、`rsv`(1 bit) 落在 bit 0**，C 侧解析整体高了一拍（`rb_start` 应从 >>20 而非 >>21）——看"译码成不成功"永远发现不了；② 结果区 Msg1 prologue 用的是**绝对下标 13..19**，检查器按 `R_MSG1 + 13..19` 读，读到的是相关值；③ 检查器 `Report.eq/bits/bytes_` 靠**模块级 `vals`** 取数，`main()` 里那句 `global vals` 不是冗余，删掉验收器直接崩。
+    * **仍未做**：2-step RACH、Msg3 的**变换预编码（DFT-s-OFDM）变体**、PUCCH 落硬件、RRC ASN.1（SRB0→SRB1，见 P3）。
 
 **P3**：DL-SCH 一条链（LDPC→速率匹配→QAM→层映射→RE→OFDM）、QEMU 设备模型、free5GC 联调。
 

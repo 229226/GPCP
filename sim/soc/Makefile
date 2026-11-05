@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch run-link-e2e run-pusch run-sib1
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdcch run-link-e2e run-pusch run-sib1 run-prach run-rach
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -402,3 +402,56 @@ run-link-e2e: all
 		--dump $(ROOT)/$(OBJ)/link_e2e_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_link_e2e.py $(ROOT)/$(OBJ)/link_e2e_dump.txt --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+
+# ---- PRACH Msg1: ZC cyclic-shift search -> preamble index + timing advance ----
+# Stimulus is the 139-chip received preamble plus all L_RA rotated 127-tap
+# references; the CGRA does one 128-cycle run per candidate shift (complex
+# reference, real part in `acc`, imaginary in a register, 16-lane butterfly
+# reduction inside the same program).  PRE=/TA=/SNR=/SEED= pick the point.
+PRACH_TD = $(ROOT)/build/rach/prach.td
+
+run-prach: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PRACH_TD))
+	python3 $(ROOT)/tools/nr_rach.py dump --prach-out $(PRACH_TD) \
+		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
+		--prach-snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/prach_bm.bin@0x80000000 \
+		--load $(PRACH_TD)@0x80400000 \
+		--results 0x80070000 --nwords 296 \
+		--dump $(ROOT)/$(OBJ)/prach_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_prach.py $(ROOT)/$(OBJ)/prach_dump.txt \
+		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
+		--snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
+
+# ---- 4-step random access: Msg1 PRACH + Msg2 RAR + Msg3 PUSCH + Msg4 --------
+# One SoC run does the whole process: the CGRA finds the preamble and the TA, the
+# RA-RNTI is built from the occasion, Msg2's DCI carries the rv that places k0,
+# the RAR hands its TC-RNTI to Msg3's descrambling and to Msg4's CRC mask, and
+# Msg3's FFT window is the Msg1-measured TA.  OCC= must match the occasion the
+# stimulus used (it picks both the RA-RNTI and the binary); MSG4_RV=2 gives a
+# non-zero k0, so the DCI -> rv -> k0 coupling cannot be satisfied by a constant.
+RACH_TD = $(ROOT)/build/rach/rach.td
+
+run-rach: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc rach RACH_OCC=$(if $(OCC),$(OCC),1)
+	@mkdir -p $(dir $(RACH_TD))
+	python3 $(ROOT)/tools/nr_rach.py dump --prach-out $(PRACH_TD) --msg-out $(RACH_TD) \
+		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
+		--occ $(if $(OCC),$(OCC),1) --seed $(if $(SEED),$(SEED),1) \
+		$(if $(MSG4_RV),--msg4-rv $(MSG4_RV))
+	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/rach_bm_$(if $(OCC),$(OCC),1).bin@0x80000000 \
+		--load $(RACH_TD)@0x80400000 \
+		--load $(PRACH_TD)@0x80480000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80180000 --nwords 3620 \
+		--dump $(ROOT)/$(OBJ)/rach_dump.txt \
+		--max-cycles $(if $(MAXC),$(MAXC),100000000)
+	python3 $(ROOT)/tools/check_rach.py $(ROOT)/$(OBJ)/rach_dump.txt \
+		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
+		--occ $(if $(OCC),$(OCC),1) --seed $(if $(SEED),$(SEED),1) \
+		$(if $(MSG4_RV),--msg4-rv $(MSG4_RV))

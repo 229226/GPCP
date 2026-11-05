@@ -1023,6 +1023,7 @@ def main() -> int:
 def kernel_registry():
     return {"matmul": build_matmul_kernel, "fir16": build_fir_kernel,
            "pss_corr": build_pss_kernel, "sss_corr": build_sss_kernel,
+           "prach_corr": build_prach_kernel,
            "polar_enc": build_polar_enc_kernel, "polar_node": build_polar_node_kernel,
            "fft16": build_fft_kernel, "fft_stage": build_fft_stage_kernel,
            "fft_block": build_fft_block_kernel,
@@ -1100,6 +1101,133 @@ def build_sss_kernel() -> Kernel:
     rx_re = [rnd.randint(-8000, 8000) for _ in range(127)]
     rx_im = [rnd.randint(-8000, 8000) for _ in range(127)]
     return kernel_bpsk_corr(rx_re, rx_im, nr.sss_seq(42, 1), name="sss_corr")
+
+
+# ------------------------------------------------------- PRACH preamble correlate
+# 38.321 Msg1: the gNB searches the cyclic shift of one ZC root sequence.  Both
+# the received chips and the reference are complex, so the real-only
+# kernel_bpsk_corr cannot be reused -- this variant keeps the real part in `acc`
+# and the imaginary part in a register, and finishes with a 16-lane butterfly so
+# the array hands back ONE (re, im) pair per candidate shift.
+#   spad layout (page-relative, linear word = bank*32 + word):
+#     0..253    rx chips y[i] = (re, im) at 2i, 2i+1        banks 0..7
+#     256..509  reference taps r[i] = (re, im)              banks 8..15
+#     512..543  per-PE partials (re, im)                    bank 16
+#     544..575  butterfly stages, final sum at 572/573      bank 17
+#   PE p owns taps 8p .. 8p+7 (only the first PRACH_TAPS of them).
+# The candidate rotation lives in RAM: the copy engine reloads the 254 reference
+# words per shift, so one microcode program serves the whole L_RA-wide search.
+PRACH_TAPS = 127
+PRACH_REF_OFF = 256
+PRACH_PART_OFF = 512
+PRACH_RED_OFF = 544
+PRACH_CORR_CYCLES = 128
+
+
+def zc_corr_partials(y, ref, taps=PRACH_TAPS):
+    """Per-PE (re, im) partials and the total -- the arithmetic of msg1_detect.
+
+        re = sum_i (y_re*r_re + y_im*r_im),  im = sum_i (y_im*r_re - y_re*r_im)
+
+    i.e. sum_i y[i] * conj(ref[i]).
+    """
+    part = []
+    for p in range(16):
+        re = im = 0
+        for k in range(8):
+            t = p * 8 + k
+            if t >= taps:
+                break
+            yr, yi = y[t]
+            cr, ci = ref[t]
+            re += yr * cr + yi * ci
+            im += yi * cr - yr * ci
+        part.append((re, im))
+    return part, (sum(v[0] for v in part), sum(v[1] for v in part))
+
+
+def kernel_zc_corr(y, ref, taps=PRACH_TAPS, name="zc_corr"):
+    prog = Program()
+    for p in range(16):
+        prog.set(0, p, "lacc", a="zero")
+        prog.set(1, p, "mov", a="zero", dst=6)
+        for k in range(8):
+            t = p * 8 + k
+            if t >= taps:
+                break
+            b = 2 + k * 10
+            prog.set(b + 0, p, "ld", dst=0, imm=2 * t)                        # y re
+            prog.set(b + 1, p, "ld", dst=1, imm=2 * t + 1)                    # y im
+            prog.set(b + 2, p, "ld", dst=2, imm=PRACH_REF_OFF + 2 * t)        # r re
+            prog.set(b + 3, p, "ld", dst=3, imm=PRACH_REF_OFF + 2 * t + 1)    # r im
+            prog.set(b + 4, p, "mac", a=0, b=2)          # acc += y_re*r_re
+            prog.set(b + 5, p, "mac", a=1, b=3)          # acc += y_im*r_im
+            prog.set(b + 6, p, "mul", a=1, b=2, dst=4)   # y_im*r_re
+            prog.set(b + 7, p, "mul", a=0, b=3, dst=5)   # y_re*r_im
+            prog.set(b + 8, p, "add", a=6, b=4, dst=6)
+            prog.set(b + 9, p, "sub", a=6, b=5, dst=6)
+        prog.set(82, p, "st", a="acc", imm=PRACH_PART_OFF + 2 * p)
+        prog.set(83, p, "st", a=6, imm=PRACH_PART_OFF + 2 * p + 1)
+
+    # 16 -> 8 -> 4 -> 2 -> 1 butterfly on both components, PEs 0..(width-1)
+    stages = [(PRACH_PART_OFF, 8, PRACH_RED_OFF),
+              (PRACH_RED_OFF, 4, PRACH_RED_OFF + 16),
+              (PRACH_RED_OFF + 16, 2, PRACH_RED_OFF + 24),
+              (PRACH_RED_OFF + 24, 1, PRACH_RED_OFF + 28)]
+    for j, (src, width, dst) in enumerate(stages):
+        c = 88 + j * 10
+        for i in range(width):
+            prog.set(c + 0, i, "ld", dst=0, imm=src + 2 * i)
+            prog.set(c + 1, i, "ld", dst=1, imm=src + 2 * i + 1)
+            prog.set(c + 2, i, "ld", dst=2, imm=src + 2 * (i + width))
+            prog.set(c + 3, i, "ld", dst=3, imm=src + 2 * (i + width) + 1)
+            prog.set(c + 4, i, "add", a=0, b=2, dst=0)
+            prog.set(c + 5, i, "add", a=1, b=3, dst=1)
+            prog.set(c + 6, i, "st", a=0, imm=dst + 2 * i)
+            prog.set(c + 7, i, "st", a=1, imm=dst + 2 * i + 1)
+
+    preload = []
+    for t in range(taps):
+        preload.append((spad_addr(0, 0) + 8 * t, y[t][0] & 0xFFFFFFFF))
+        preload.append((spad_addr(0, 0) + 8 * t + 4, y[t][1] & 0xFFFFFFFF))
+    for t in range(taps):
+        preload.append((spad_addr(8, 0) + 8 * t, ref[t][0] & 0xFFFFFFFF))
+        preload.append((spad_addr(8, 0) + 8 * t + 4, ref[t][1] & 0xFFFFFFFF))
+
+    part, total = zc_corr_partials(y, ref, taps)
+
+    def check(st):
+        errs = []
+        for p in range(16):
+            for q, want in enumerate(part[p]):
+                got = st.get(("spad", spad_addr(16, 2 * p + q)))
+                if got != (want & 0xFFFFFFFF):
+                    errs.append(f"PE{p} {'re' if q == 0 else 'im'}: got "
+                                f"0x{got:08x} expected 0x{want & 0xFFFFFFFF:08x}")
+        for q, want in enumerate(total):
+            got = st.get(("spad", spad_addr(17, 28 + q)))
+            if got != (want & 0xFFFFFFFF):
+                errs.append(f"total {'re' if q == 0 else 'im'}: got 0x{got:08x} "
+                            f"expected 0x{want & 0xFFFFFFFF:08x}")
+        return errs
+
+    return Kernel(name, PRACH_CORR_CYCLES, prog.build(PRACH_CORR_CYCLES), preload,
+                  [], check, spad_dump=(spad_addr(0, 0), 32 * 32))
+
+
+def build_prach_kernel() -> Kernel:
+    """One candidate shift of a real L_RA=139 ZC root against a noisy Rx block."""
+    import nr_ul as UL
+    rnd = random.Random(73)
+    ref = [(int(round(c.real * 2048)), int(round(c.imag * 2048)))
+           for c in UL.zc_root(UL.ROOT_U, 139)]
+    d = 39                                  # preamble 2 * N_CS 15 + TA 9
+    y = []
+    for t in range(PRACH_TAPS):
+        c = ref[(t + d) % 139]
+        n = rnd.randint(-90, 90)
+        y.append((c[0] + n, c[1] - n))       # the peak should land on this shift
+    return kernel_zc_corr(y, ref[:PRACH_TAPS], name="prach_corr")
 
 
 # Polar encoder: 16 words of 32 bits = 512 bits = N.  Steps 1..16 are inside a

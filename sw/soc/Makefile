@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm link_e2e_bm pusch_bm sib1_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm link_e2e_bm pusch_bm sib1_bm prach_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -31,6 +31,28 @@ pdsch_cn_prog.h: ../../cgra/tools/gen_cn_prog.py ../../cgra/tools/rule_map.py
 
 $(BUILD)/pdsch_bn1_bm.elf: pdsch_bn_prog.h
 $(BUILD)/pdsch_bg2_bm.elf: pdsch_cn_prog.h
+
+# PRACH 相关微码由 tools/cgra.py 的 kernel_zc_corr() 生成（make test 的 prach_corr）
+prach_prog.h: ../../tools/gen_prach_prog.py ../../tools/cgra.py ../../tools/nr_rach.py
+	python3 ../../tools/gen_prach_prog.py
+
+$(BUILD)/prach_bm.elf: prach_prog.h
+
+# run-rach: the whole 4-step process in one program, so it needs every kernel
+# (PRACH correlation + Polar SC + LDPC CN/BN) plus the PDCCH LUTs.
+# RACH_OCC = the PRACH occasion Msg1 was sent on, which is what the RA-RNTI is
+# built from.  The binary is named after it, so an OCC=1 build can never be
+# silently reused for an OCC=3 stimulus (AGENTS §5.4: "结果一字不变 → 先查构建").
+RACH_OCC ?= 1
+rach: $(BUILD)/rach_bm_$(RACH_OCC).bin
+
+$(BUILD)/rach_bm_$(RACH_OCC).elf: rach_bm.c start.S link.ld pdcch_luts.h \
+	                         pdsch_cn_prog.h pdsch_bn_prog.h prach_prog.h | $(BUILD)
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DOCC=$(RACH_OCC) $(LDFLAGS) \
+		start.S rach_bm.c -o $@
+	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/rach_bm_$(RACH_OCC).dis
+
+.SECONDARY: $(BUILD)/rach_bm_$(RACH_OCC).elf
 
 # interrupt test: needs the trap-vector startup instead of the plain one
 $(BUILD)/irq_bm.elf: irq_bm.c start_irq.S link.ld | $(BUILD)
@@ -55,7 +77,7 @@ $(BUILD)/%.bin: $(BUILD)/%.elf
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean
+.PHONY: all clean rach
 
 # slot scheduler: needs the trap vector (timer + PLIC) startup
 $(BUILD)/slot_rtos.elf: slot_rtos.c start_irq.S link.ld | $(BUILD)

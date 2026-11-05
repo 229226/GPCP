@@ -173,7 +173,7 @@ def rx_pdsch(y, rnti):
 # ------------------------------------------------------------- PUSCH / TB
 def tx_pusch(tb, rv, rnti, snr_db, seed, tp=False):
     """UE-side PUSCH transmission at the granted redundancy version."""
-    grid = P.build_pusch_grid_tb(tb, rv, tp)
+    grid = P.build_pusch_grid_tb(tb, rv, tp, rnti)
     y = M.add_channel(grid, snr_db, seed)
     return y, P.RV_K0[rv]
 
