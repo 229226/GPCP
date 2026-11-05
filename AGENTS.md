@@ -43,11 +43,11 @@ env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用�
 
 # 1) 一条命令全量验收（2026-11-05 起：分档 + 并行 -j6，16 核 VM）
 bash tools/verify.sh quick            # 实测 146 s / 11 passed / 0 failed：kernels + 10 个 SoC 目标
-bash tools/verify.sh full             # 46 门：kernels + 16 模型自检 + 29 个 SoC 基准（不含 run-rach，约 8-9 min）
-bash tools/verify.sh slow             # 47 门（+run-rach）：**实测 601 s / 47 passed / 0 failed**（2026-11-05 全量复验）
+bash tools/verify.sh full             # 47 门：kernels + 16 模型自检 + 30 个 SoC 基准（不含 run-rach，约 8-9 min）
+bash tools/verify.sh slow             # 48 门（+run-rach）：最近一次 47 门全量 601 s（新增 run-pdsch-64qam 后待复验）
 bash tools/verify.sh changed          # 只跑 git diff 触及的门（实测 P4 diff 6 门 / 129 s；空改动直接退出）
-bash tools/verify.sh smart            # **日常默认**：全 47 门覆盖，只重跑输入变化的门（实测二次 1 s / 47 skipped）
-bash tools/verify.sh slow --force     # **阶段末/提交前/发版**：忽略缓存全量 47 门，唯一可作交付证据
+bash tools/verify.sh smart            # **日常默认**：全 48 门覆盖，只重跑输入变化的门（实测二次 47 门全跳过 / 1 s）
+bash tools/verify.sh slow --force     # **阶段末/提交前/发版**：忽略缓存全量 48 门，唯一可作交付证据
 GATES='model-la run-ring' bash tools/verify.sh smart   # 临时人工指定门（不得当全量证据）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 bash tools/verify.sh full --jobs 8    # 改并行度（默认 6，JOBS= 亦可）
@@ -57,7 +57,7 @@ make verify / verify-smart / verify-full / verify-slow / verify-changed   # make
 # python3 fft_plan.py lut ...`，由 verify.sh 预构建阶段统一生成一次；run-prach 与
 # run-rach 原本共用 build/rach/prach.td → run-rach 改用 $(RACH_TD).prach。kernels
 # 仍在并行池外串行跑（会重建 CGRA bench）。输出按提交顺序折回 build/verify.log。
-# 串行时代最后一次全绿 39 passed / 0 failed / 2704 s；并行后 47 门 / 0 failed / 601 s
+# 串行时代最后一次全绿 39 passed / 0 failed / 2704 s；并行后 47 门 / 0 failed / 601 s（现 48 门）
 # （门数 +8、耗时降至 22%；按单门折算约 5.4×）。
 
 # 3) B3 Linux（长任务；日志可反复评分，不必重跑）
@@ -103,6 +103,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-rach` | **4 步随机接入全过程 = 一次 SoC 运行**（`sw/soc/rach_bm.c`，复用 `prach_corr` + Polar SC + LDPC CN/BN 三类微码）：同一程序里 Msg1 ZC 相关（同上）→ **SoC 自己按 occasion 算 RA-RNTI**（38.321 6.1.5）→ Msg2 单候选 Polar 盲检（复用 `run-pdcch` 的 SC + E=432 LUT）→ DCI 的 **rv 驱动 PDSCH k0** → CRC24A → **RAR MAC CE 解析**（BI/RAPID/TA command/27-bit UL grant/TC-RNTI，38.321 6.2.3）→ Msg3 **PUSCH**（FFT 窗口 = **Msg1 实测 TA**、DMRS 6.4.1.1、数据用**解码出的 TC-RNTI** 解扰）→ CRC24A → CCCH SDU → Msg4 DCI 用**同一个 TC-RNTI** 做 CRC 掩码盲检 → PDSCH → **UE Contention Resolution Identity CE vs 程序自己塞进 Msg3 的 SDU**（38.321 5.1.5.3）→ 竞争解决、TC-RNTI 升级为 C-RNTI。默认点（p=2 / TA=9 / OCC=1 / 20 dB / seed 1）：**0 errors、11,826,693 周期、5531 次阵列运行、4947 次 DMA**；Msg1 139/139 相关逐位、RA-RNTI 0x003d、DCI 32/32、Msg2/3/4 各 **1040/1040 硬判决** + CRC24A + TB 全对、TA 命令 9、RAR grant 四字段（rb_start 1 / rb_len 5 / tda 2 / mcs 10）、TC-RNTI=C-RNTI 0x07002、`resolved=1`。第二点 `MSG4_RV=2` 亦 `[OK]`（硬件解出 rv=2 → **k0=492**，11,830,616 周期）。`PRE=`/`TA=`/`OCC=`（换 occasion ⇒ 换 RA-RNTI，二进制按 OCC 命名，不会误用旧构建）/`MSG4_RV=2`（硬编码 k0 过不了）/`SEED=` 可换点；**全套最慢的基准（~9 min）**，为把默认 `full` 压到 ~10 min，已移到 `verify.sh slow`（或 `full --slow`）档 |
 | `tools/nr_*.py` 自检 | `nr_pdcch.py`（DCI 32 bit + CRC24C + Polar K=56 + 5 个 RNTI 盲检，8~15 dB 4/4 命中）、`nr_ldpc.py`（Zc=64 分 4 页×16 PE、分层 min-sum，syndrome=0）、`nr_mimo.py`（2×2 MMSE，14 dB 起 0/720 误码）、`nr_mac.py`（MAC PDU 往返 + RV 0→2→3→1 / NDI 翻转）；均在 `verify.sh full` 的模型自检段 ；`nr_link.py`（**DCI 驱动双向闭环**：DL = MAC→PDCCH→PDSCH→CRC→PUCCH→MAC；UL = DCI reserved 10 bit UL grant→PUSCH→CRC，`ul_rv` 真实驱动 PUSCH k0；−8 dB 双向各 2 次重传经 Chase 合并救回，12/0 dB 双向零重传；支持 `--tp` DFT-s-OFDM 上行）；`nr_sib1.py`（**SIB1**：紧凑 80-bit profile + Type0-PDCCH(SI-RNTI)+PDSCH 全链，rv=0/2 × 20/6 dB 全对）；`nr_la.py`/`nr_qam.py`/`nr_pdsch_amc.py`（**P4**：MCS/CQI 表 + OLLA、三阶 QAM、MCS 驱动 PDSCH） |
 | `run-pdsch-16qam` | **P4 MCS 驱动下行（16QAM 落硬件）**：`tools/nr_pdsch_amc.py` 生成 TD（末尾附 1 个 word 存 rv），SoC 用 `pdsch_full_bm.c -DQAM16` 做 16QAM Gray max-log 软解调（`ref = (\|h\|²/16)×894`、`LLR = (d₁−d₀)/(2·ref)`，与 `nr_qam.py` 逐位一致），只取前 180 个数据 RE（E=720 固定、Qm=4）。默认点 MCS 13 / 20 dB / seed 1：**0 errors、3,178,732 周期 / 976 阵列 / 1556 DMA**、信道估计 `[32,16,31,15]` 与模型逐值相同、1040/1040 硬判、CRC24A、TB 80/80。`RV=2` → **k0=492**、`MCS=10 SNR=10`、`MCS=16 SNR=10 SEED=3` 三点亦 `[OK]`；QPSK `run-pdsch-full` 回归不变。`MCS=`/`RV=`/`SNR=`/`SEED=` 可换点；**rv 由 TD 尾部字在运行时读入**（单传输版 `rv_k0` 硬编码 0、又无 PDCCH 解码，故不用重编译，也避免旧构建服务新激励）；结果区 `0x80070000`；只在 `verify.sh full` 里 |
+| `run-pdsch-64qam` | **64QAM（Qm=6）落硬件**：同一 `pdsch_full_bm.c` 用 `-DQAM64` 编译；`tools/nr_pdsch_amc.py` 的 MCS 17–28 走 Qm=6，E=720 只用 **120 个符号 / 前 120 个数据 RE**；C 侧 64QAM Gray max-log（电平 ±1/±3/±5/±7、`QAM_A`=436、`LLR=(d₁−d₀)/(2·ref)`），与 `nr_qam.constellation(6)` 逐位一致。默认 MCS 20 / 25 dB / seed 1：**0 errors、3,270,885 周期 / 976 阵列 / 1556 DMA**、信道估计 `[32,16,31,15]` 与模型逐值相同、1040/1040 硬判、CRC24A、TB 80/80；`RV=2` → **k0=492**、`MCS=24 SNR=25 SEED=3` 亦 `[OK]`。⚠️ 坑：Chase 块的 `#ifdef QAM16` 若不加 `|| defined(QAM64)`，rv≠0 会静默走 `rv_k0[0]=0`（rv=0 能过、rv=2 硬判 509/1040）。`MCS=`/`RV=`/`SNR=`/`SEED=` 可换点；结果区 `0x80070000`；只在 `verify.sh full` 里 |
+
 
 | `tools/nr_ul.py` 自检 | **上行模型级**：PRACH Zadoff-Chu（L_RA=139）循环相关定时估计 TA=0/5/12/23 全对、PUCCH 格式 0 用 m_CS=0/6 传 1 bit ACK/NACK（0~6 dB 8/8 全对）；未落 CGRA |
 | `tools/nr_pusch.py` 自检 | **上行 PUSCH 黄金模型（阶段 A）**：TB→CRC24A→LDPC BG2→速率匹配→QPSK→(可选 DFT-s-OFDM 变换预编码)→OFDM→TD；接收链镜像 PDSCH（含 38.211 6.4.1.1 真 Gold DMRS、6.3.1.1 加扰）；无变换预编码 / DFT-s-OFDM 在 20/0/−6 dB 与 HARQ rv=0/2 均 CRC ok、TB 80/80、0 误码；TD 格式与 PDSCH dump 同构（供阶段 B `run-pusch` 复用） |
@@ -300,7 +302,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     * **阶段 C（MCS 驱动 PDSCH 模型 + 16QAM 硬件）**`tools/nr_pdsch_amc.py`：MCS→Qm→38.212 交织（Qm 列）→QAM→RE 网格；E=720 固定，16QAM 只用前 180 个数据 RE（E/Qm=180 符号），LDPC/速率匹配完全不动。`run-pdsch-16qam` = `pdsch_full_bm.c -DQAM16`，C 侧 16QAM 软解调与 Python 逐位一致；**默认点 + RV=2(k0=492) + MCS=10/10 dB + MCS=16/10 dB/seed3 四点 `[OK]`**，信道估计 `[32,16,31,15]` 与模型逐值相同、1040/1040 硬判、TB 80/80；QPSK `run-pdsch-full` 回归 3,065,604 周期 `[OK]` 不变。
     * **踩到的三个坑**：① 星座构造若按"排序后位置"取幅度，跨原点处不是 Gray（16QAM 960/960 只解出 729 位）；必须**从 bit 本身解幅度**（b0=符号、其余为 Gray 幅度）。② min 距离 LLR 若只除 `ref` 而不除 `2·ref`，量级放大到 1e10 会冲垮 `SENTINEL`。③ 单传输版 `rv_k0[0]` 硬编码 0 且无 PDCCH 解码，`RV=2` 必然失败；改为**TD 镜像尾部附 1 个 word 存 rv、SoC 运行时算 k0**，不重编译、也避免旧二进制服务新激励。另有协议层面的坑：**CRC24A 位本身是 LDPC 信息位**，LDPC 收敛到任意合法码字都会让 CRC 通过（把 16QAM 波形当 QPSK 解调时 CRC 仍 ok、TB 仍对，但 534/720 个 LLR 不同）——所以硬件验收必须逐值对硬判/LLR，不能只信 CRC。
     * **刻意保留的简化**：64QAM 仅模型（硬件待 P4 后续）；无 BG1/Zc64 硬件、无 2×2 MIMO 硬件、无 REG/CCE/PC/PDCCH-DMRS、无 CSI-RS 测量（用理想 SINR 上报）、无子带 CQI/PMI/RI、无 256QAM（MCS table 3）；OLLA 的 BLER 用解析近似而非实测 LDPC 瀑布；16QAM 的 RE 利用率只有一半（真实 gNB 会提高 E 或缩减分配）。
-    * **仍未做**：`run-mimo` / `run-csi` / `run-pdsch-64qam` / BG1-Zc64 硬件、P5–P8。
+    * **仍未做**：`run-mimo` / `run-csi` / BG1-Zc64 硬件、P5–P8。
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。
 
@@ -343,7 +345,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 | 层 | 变更文件 | 影响范围 | 处理 |
 |---|---|---|---|
-| **L0 架构 / ABI / 工具链** | `rtl/**`、`sim/**` 源、`cgra/**`、`tools/cgra.py`、`sw/soc/*_prog.h`、`pdcch_luts.h`、`link.ld`、`start.S`、`sw/soc/Makefile`、`sim/soc/Makefile`、顶层 `Makefile`、`tools/verify.sh`、`sim/soc/build/Vgpcp_soc`、`build/fft/twiddle.bin` | **全部 47 门** | 指纹自动全失效 → 全量，不可跳过 |
+| **L0 架构 / ABI / 工具链** | `rtl/**`、`sim/**` 源、`cgra/**`、`tools/cgra.py`、`sw/soc/*_prog.h`、`pdcch_luts.h`、`link.ld`、`start.S`、`sw/soc/Makefile`、`sim/soc/Makefile`、顶层 `Makefile`、`tools/verify.sh`、`sim/soc/build/Vgpcp_soc`、`build/fft/twiddle.bin` | **全部 48 门** | 指纹自动全失效 → 全量，不可跳过 |
 | **L1 裸机基准** | `sw/soc/*_bm.c` | 由它编译的门（含 `-D` 变体） | 自动 |
 | **L2 激励 / 黄金模型** | `tools/nr_*.py`、`dump_*.py`、公共 `pdsch_plan.py` / `ldpc5g.py` 等 | 引用它的门（含 import 闭包） | 自动 |
 | **L3 验收器** | `tools/check_*.py` | 对应 `run-*` | 自动 |
@@ -357,11 +359,11 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 ### 三条硬规则
 
-1. **日常**：`make verify-smart` —— 声明覆盖全部 47 门，只重跑输入变化的门。
+1. **日常**：`make verify-smart` —— 声明覆盖全部 48 门，只重跑输入变化的门。
    输出里 `SKIP` 必须显式打印并单独计数，**绝不冒充 `PASS`**；汇总形如
    `X passed, Y skipped (cached), Z failed`。
 2. **留档**：阶段末 / 提交前 / 发版必须 `bash tools/verify.sh slow --force`
-   （忽略缓存、全量 47 门）。这是**唯一**可作为"基线完好"证据的运行；
+   （忽略缓存、全量 48 门）。这是**唯一**可作为"基线完好"证据的运行；
    缓存结果不得写进交付结论。
 3. **可审计**：缓存只记 `rc=0`，失败门下次必跑；`--force` 永远绕过缓存；
    `GATES=...` 与 `changed` 属临时人工手段，不算全量证据。缓存在
@@ -370,7 +372,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 **为什么不用"按测试名分类省跑"**：分类表靠人工维护，新增目标 / 新依赖极易漏；
 输入指纹从 Makefile 配方与 import 闭包自动派生，新增依赖会自动进入闭包。
-`smart` 依旧声明 47 门覆盖，只是跳过未变的 —— 比手工挑几个测试跑更安全。
+`smart` 依旧声明 48 门覆盖，只是跳过未变的 —— 比手工挑几个测试跑更安全。
 
 实测：3 门首次 1 s；二次 `0 passed, 3 skipped, 0 s`；改 `tools/nr_la.py` 只让
 `model-la` 重跑（其余含 `run-rach` 全 SKIP），恢复文件后又回到 SKIP；

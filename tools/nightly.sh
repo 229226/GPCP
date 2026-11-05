@@ -44,6 +44,17 @@ if ! git -C "$ROOT" worktree add --detach "$WT" HEAD >"$OUT/worktree.log" 2>&1; 
 fi
 say "worktree: $WT (detached at $(git -C "$WT" rev-parse --short HEAD))"
 
+# third_party/ is a local, gitignored 4.3 GB tree (CVA6, Linux, PDK...), so a
+# fresh worktree does not have it.  Link it read-only instead of copying.
+mkdir -p "$WT/third_party"
+for d in "$ROOT"/third_party/*; do
+    [ -e "$d" ] || continue
+    name=$(basename "$d")
+    [ "$name" = .gitkeep ] && continue
+    ln -sfn "$d" "$WT/third_party/$name"
+done
+say "linked third_party: $(ls -1 "$WT/third_party" | tr '\n' ' ')"
+
 if ! ( cd "$WT" && env -u LD_LIBRARY_PATH make -C sw/soc \
         && env -u LD_LIBRARY_PATH make -C sim/soc all \
         && mkdir -p build/fft \

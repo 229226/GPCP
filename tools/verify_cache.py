@@ -54,6 +54,7 @@ GLOBAL_GLOBS = [
 # source (they are compiled from a shared .c with -D switches).
 BIN_SRC_ALIAS = {
     "pdsch_16qam_bm": "pdsch_full_bm.c",
+    "pdsch_64qam_bm": "pdsch_full_bm.c",
     "pdsch_harq_bm": "pdsch_full_bm.c",
     "sib1_bm": "link_e2e_bm.c",
     "rach_bm": "rach_bm.c",

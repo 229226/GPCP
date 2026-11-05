@@ -108,8 +108,6 @@ def _rate_dematch_rv(descr, rv):
 def build_grid(mcs, rv=0, tb=None, n_rnti=N_RNTI):
     """Coding chain + interleaving + QAM + Gold DMRS for one MCS/RV."""
     qm = qm_of_mcs(mcs)
-    if qm == 6:
-        raise NotImplementedError("64QAM hardware target is not part of P4-C")
     tb = M.payload_bits() if tb is None else tb
     cw = L.encode(tb + M.crc24a(tb)
                   + [0] * (M.KB * M.ZC - M.A_TB - M.CRC_LEN), M.KB, M.ZC)
@@ -213,9 +211,10 @@ def selftest():
               % (sinr, d["cqi"], d["mcs"], qm_of_mcs(d["mcs"]),
                  LA.qm_of_mcs(d["mcs"]), "OK" if chk_qm else "BAD"))
 
-    for mcs, qm in ((4, 2), (9, 2), (10, 4), (13, 4), (16, 4)):
+    for mcs, qm in ((4, 2), (9, 2), (10, 4), (13, 4), (16, 4),
+                    (20, 6), (24, 6)):
         for rv in (0, 2):
-            for snr in (20.0, 10.0):
+            for snr in ((25.0, 20.0) if qm == 6 else (20.0, 10.0)):
                 g = golden(mcs, rv, snr, 1)
                 good = (g["crc_ok"] and g["tb"] == g["want"]
                         and g["k0"] == F.RV_K0[rv]
@@ -260,18 +259,7 @@ def selftest():
           "differ -> element-wise gate catches it"
           % (bad_qm["crc_ok"], ddiff))
 
-    # 64QAM is intentionally not wired to hardware yet
-    try:
-        build_grid(20, 0)
-        ok = False
-        print("  64QAM should raise NotImplementedError")
-    except NotImplementedError:
-        print("  64QAM: hardware target deferred (documented)")
-    except ValueError:
-        ok = False
-        print("  unexpected error for 64QAM")
-
-    print("[ %s ] MCS-driven PDSCH (QPSK / 16QAM)" % ("OK" if ok else "FAIL"))
+    print("[ %s ] MCS-driven PDSCH (QPSK / 16QAM / 64QAM)" % ("OK" if ok else "FAIL"))
     return 0 if ok else 1
 
 
