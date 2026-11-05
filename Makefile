@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-full snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam
+.PHONY: all test build clean verify verify-full verify-slow verify-changed snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam
 
 all: test
 
@@ -8,9 +8,17 @@ all: test
 verify:
 	bash tools/verify.sh quick
 
-# Full SoC benchmark matrix
+# Full SoC benchmark matrix (parallel -j6, ~10-12 min)
 verify-full:
 	bash tools/verify.sh full
+
+# full + the long run-rach gate (11.8 M cycles, ~9 min)
+verify-slow:
+	bash tools/verify.sh slow
+
+# Only the gates touched by the current git diff (~0.5-3 min)
+verify-changed:
+	bash tools/verify.sh changed
 
 # SNR waterfall of the sample-level SSB receiver (first quantitative PHY metric)
 snr-sweep: all sw-check

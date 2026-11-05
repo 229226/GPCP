@@ -135,7 +135,7 @@ run-pdsch-gather: all
 # tools/fft_plan.py
 run-fft: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/fft_bm.bin@0x80000000 \
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
@@ -190,7 +190,7 @@ $(SSBTD): $(ROOT)/tools/ssb_plan.py
 
 run-ssbfft: all $(SSBTD)
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/ssb_fft_bm.bin@0x80000000 \
 		--load $(SSBTD)@0x80400000 \
@@ -208,7 +208,7 @@ run-ssbfft: all $(SSBTD)
 # plus the slot-scheduling bookkeeping (ticks / overruns / bad traps).
 run-ssb-slot: all $(SSBTD)
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/ssb_slot_bm.bin@0x80000000 \
 		--load $(SSBTD)@0x80400000 \
@@ -220,7 +220,7 @@ run-ssb-slot: all $(SSBTD)
 
 run-fftprobe: all $(SSBTD)
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/fftprobe_bm.bin@0x80000000 \
 		--load $(SSBTD)@0x80400000 \
@@ -289,7 +289,7 @@ $(SSBFID_TD): $(ROOT)/tools/ssb_plan_p1.py $(ROOT)/tools/nr_pbch.py
 
 run-ssb-fid: all $(SSBFID_TD)
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/ssb_fid_bm.bin@0x80000000 \
 		--load $(SSBFID_TD)@0x80400000 \
@@ -306,7 +306,7 @@ run-pdsch-full: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDSCHFULL_TD))
 	python3 $(ROOT)/tools/pdsch_full_plan.py dump $(PDSCHFULL_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdsch_full_bm.bin@0x80000000 \
 		--load $(PDSCHFULL_TD)@0x80400000 \
@@ -323,7 +323,7 @@ run-pdsch-16qam: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDSCH16_TD))
 	python3 $(ROOT)/tools/nr_pdsch_amc.py dump $(PDSCH16_TD) --mcs $(if $(MCS),$(MCS),13) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdsch_16qam_bm.bin@0x80000000 \
 		--load $(PDSCH16_TD)@0x80400000 \
@@ -340,7 +340,7 @@ run-pdsch-harq: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDSCHHARQ_TD))
 	python3 $(ROOT)/tools/pdsch_full_plan.py dump-harq $(PDSCHHARQ_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdsch_harq_bm.bin@0x80000000 \
 		--load $(PDSCHHARQ_TD)@0x80400000 \
@@ -357,7 +357,7 @@ run-pusch: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PUSCH_TD))
 	python3 $(ROOT)/tools/nr_pusch.py dump $(PUSCH_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pusch_bm.bin@0x80000000 \
 		--load $(PUSCH_TD)@0x80400000 \
@@ -389,7 +389,7 @@ run-sib1: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(SIB1_TD))
 	python3 $(ROOT)/tools/nr_sib1.py dump $(SIB1_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1) --rv $(if $(RV),$(RV),0)
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/sib1_bm.bin@0x80000000 \
 		--load $(SIB1_TD)@0x80400000 \
@@ -406,7 +406,7 @@ run-pdcch: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDCCH_TD))
 	python3 $(ROOT)/tools/nr_pdcch.py dump $(PDCCH_TD) $(if $(SNR),$(SNR),12) $(if $(SEED),$(SEED),1)
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdcch_bm.bin@0x80000000 \
 		--load $(PDCCH_TD)@0x80400000 \
@@ -425,7 +425,7 @@ run-link-e2e: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(LINK_E2E_TD))
 	python3 $(ROOT)/tools/dump_link_e2e.py $(LINK_E2E_TD) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/link_e2e_bm.bin@0x80000000 \
 		--load $(LINK_E2E_TD)@0x80400000 \
@@ -470,15 +470,15 @@ RACH_TD = $(ROOT)/build/rach/rach.td
 run-rach: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc rach RACH_OCC=$(if $(OCC),$(OCC),1)
 	@mkdir -p $(dir $(RACH_TD))
-	python3 $(ROOT)/tools/nr_rach.py dump --prach-out $(PRACH_TD) --msg-out $(RACH_TD) \
+	python3 $(ROOT)/tools/nr_rach.py dump --prach-out $(RACH_TD).prach --msg-out $(RACH_TD) \
 		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
 		--occ $(if $(OCC),$(OCC),1) --seed $(if $(SEED),$(SEED),1) \
 		$(if $(MSG4_RV),--msg4-rv $(MSG4_RV))
-	python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/rach_bm_$(if $(OCC),$(OCC),1).bin@0x80000000 \
 		--load $(RACH_TD)@0x80400000 \
-		--load $(PRACH_TD)@0x80480000 \
+		--load $(RACH_TD).prach@0x80480000 \
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
 		--results 0x80180000 --nwords 3620 \
 		--dump $(ROOT)/$(OBJ)/rach_dump.txt \
