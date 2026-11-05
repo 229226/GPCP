@@ -67,7 +67,7 @@ trap 'rm -rf "$TMPD"' EXIT
 # ---- gate lists -------------------------------------------------------------
 ALL_MODELS=(model-pdcch model-ldpc model-mimo model-mac model-harq model-ul
             model-pusch model-sib1 model-link model-rach model-rrc model-conn
-            model-pucch model-la model-qam model-amc)
+            model-pucch model-la model-qam model-amc model-reg)
 declare -A MODEL_CMD=(
     [model-pdcch]="python3 tools/nr_pdcch.py"
     [model-ldpc]="python3 tools/nr_ldpc.py"
@@ -85,6 +85,7 @@ declare -A MODEL_CMD=(
     [model-la]="python3 tools/nr_la.py"
     [model-qam]="python3 tools/nr_qam.py"
     [model-amc]="python3 tools/nr_pdsch_amc.py selftest"
+    [model-reg]="python3 tools/nr_pdcch_reg.py selftest"
 )
 SOCCORE_QUICK="run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
 # run-rach is the single longest gate (~9 min, 11.8 M cycles); it lives in the
@@ -150,6 +151,7 @@ compute_changed() {
             tools/nr_la.py)         add_model model-la ;;
             tools/nr_qam.py)        add_model model-qam ;;
             tools/nr_pdsch_amc.py)  add_model model-amc; add_soc run-pdsch-16qam ;;
+            tools/nr_pdcch_reg.py)  add_model model-reg ;;
             tools/dump_*.py|tools/check_*.py)
                 x=${f##*/}; x=${x%.py}; x=${x#dump_}; x=${x#check_}; x=${x//_/-}
                 add_soc "run-$x" ;;
