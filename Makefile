@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-full snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch
+.PHONY: all test build clean verify verify-full snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam
 
 all: test
 
@@ -79,6 +79,8 @@ soc-run-prach: ; $(MAKE) -C sim/soc run-prach
 soc-run-rach: ; $(MAKE) -C sim/soc run-rach
 # PUCCH format 0: 1-bit SR / HARQ-ACK on the CGRA
 soc-run-pucch: ; $(MAKE) -C sim/soc run-pucch
+# P4 MCS-driven downlink: 16QAM PDSCH
+soc-run-pdsch-16qam: ; $(MAKE) -C sim/soc run-pdsch-16qam
 
 # B3: OpenSBI + Linux on the SoC
 linux:

@@ -42,7 +42,11 @@
 
 #define CGRA_BASE     0x50000000ul
 #define EXIT_ADDR     0x40010000ul
+#ifdef QAM16
+#define RESULT_BASE   ((uint32_t *)0x80070000ul)
+#else
 #define RESULT_BASE   ((uint32_t *)0x80010000ul)
+#endif
 
 /* ---- ssb_fft.inc prerequisites ---- */
 #define NPES          16
@@ -80,7 +84,15 @@
 #define DMRS_L0       2
 #define DMRS_NSYMB    14
 #define DMRS_NCP      0
+#ifdef QAM16
+/* 16QAM: 4 bits per symbol, integer level scale 894 = 2000/sqrt(5).
+   Only E_BITS/QM = 180 symbols are mapped, onto the first 180 data REs. */
+#define QM            4
+#define QAM_A         894
+#else
 #define QM            2
+#define QAM_A         2000
+#endif
 
 /* HARQ: compile with -DHARQ_TX=2 to demodulate two RV transmissions and
  * Chase-combine their LLRs in the circular buffer before LDPC decoding. */
@@ -321,6 +333,44 @@ static void bn_scatter(uint32_t b, int want_hard, int32_t *hard)
     }
 }
 
+#ifdef QAM16
+/* 16QAM Gray constellation for one I/Q branch (38.211 7.3.1.2).
+   b0 = sign, b1 = magnitude; level = +/-1, +/-3 in units of QAM_A.
+   Must stay in sync with nr_qam.MAGNITUDE / constellation(4). */
+static const int8_t  qam16_lvl[4] = { 3, 1, -1, -3 };
+static const uint8_t qam16_b0[4]  = { 0, 0, 1, 1 };
+static const uint8_t qam16_b1[4]  = { 0, 1, 1, 0 };
+
+static void qam16_llr(int64_t eq_r, int64_t eq_i, int64_t h2, int32_t *out)
+{
+    /* out[0..1] = I branch bits (b0,b1), out[2..3] = Q branch bits.
+       Bit-exact with tools/nr_qam.py: ref = (|h|^2 / H_SCALE) * QAM_A,
+       LLR = (min_dist(bit=1) - min_dist(bit=0)) / (2*ref), truncating div. */
+    int64_t ref = (h2 / H_SCALE) * (int64_t)QAM_A;
+    if (ref <= 0) ref = QAM_A;
+    int64_t den = 2 * ref;
+    int64_t u[2] = { eq_r, eq_i };
+    for (int b = 0; b < 2; b++) {
+        for (int k = 0; k < 2; k++) {
+            int64_t d1 = (int64_t)1 << 62, d0 = (int64_t)1 << 62;
+            for (int i = 0; i < 4; i++) {
+                int64_t d = u[b] - ref * (int64_t)qam16_lvl[i];
+                d *= d;
+                uint8_t bit = (k == 0) ? qam16_b0[i] : qam16_b1[i];
+                if (bit) {
+                    if (d < d1) d1 = d;
+                } else {
+                    if (d < d0) d0 = d;
+                }
+            }
+            int64_t num = d1 - d0;
+            int64_t q = (num < 0 ? -num : num) / den;
+            out[2 * b + k] = (int32_t)(num < 0 ? -q : q);
+        }
+    }
+}
+#endif
+
 /* ------------------------------------------------------------ main */
 int main(void)
 {
@@ -379,18 +429,29 @@ int main(void)
             dbg_h[2] = hre[1]; dbg_h[3] = him[1];
         }
 
-        /* ---- equalise + QPSK soft demodulation (180 data REs/symbol) ---- */
+        /* ---- equalise + QPSK/16QAM max-log soft demodulation ---- */
         {
+            int n_sym = E_BITS / QM;
             int m = 0;
             for (int s = 0; s < NSYM; s++)
                 for (int r = 0; r < NRE; r++) {
                     if (r % 4 == 0) continue;      /* DMRS RE */
+                    if (m >= n_sym) break;         /* unused data REs (16QAM) */
                     int32_t yr = yw[(s * NRE + r) * 2 + 0];
                     int32_t yi = yw[(s * NRE + r) * 2 + 1];
                     int64_t er = (int64_t)yr * hre[s] + (int64_t)yi * him[s];
                     int64_t ei = (int64_t)yi * hre[s] - (int64_t)yr * him[s];
+#ifdef QAM16
+                    int64_t h2 = (int64_t)hre[s] * hre[s]
+                               + (int64_t)him[s] * him[s];
+                    int32_t ll[4];
+                    qam16_llr(er, ei, h2, ll);
+                    for (int k = 0; k < QM; k++)
+                        llr_e[QM * m + k] = ll[k];
+#else
                     llr_e[2 * m + 0] = (int32_t)er;
                     llr_e[2 * m + 1] = (int32_t)ei;
+#endif
                     m++;
                 }
         }
@@ -413,8 +474,17 @@ int main(void)
             for (int i = 0; i < 8; i++) descr0[i] = llr_i[i];
 
         /* ---- Chase combining in circular-buffer coordinates ---- */
+#ifdef QAM16
+        /* the 16QAM stimulus appends one word with the redundancy version */
+        uint32_t rv16 = *(volatile uint32_t *)(TD_RAM
+                        + (uint32_t)NSYM * SYM_WORDS * 4u);
+        out[1087] = rv16 * (USABLE / 4u);
+        for (int k = 0; k < E_BITS; k++)
+            rbuf[(out[1087] + (uint32_t)k) % USABLE] += llr_i[k];
+#else
         for (int k = 0; k < E_BITS; k++)
             rbuf[(rv_k0[tx] + (uint32_t)k) % USABLE] += llr_i[k];
+#endif
     }
 
     /* ---- rate de-match: combined LLRs -> 1040 coded LLRs ---- */
@@ -522,6 +592,9 @@ int main(void)
     out[1081] = dmrs_cinit(0);
     out[1082] = dmrs_cinit(1);
     out[1083] = (uint32_t)HARQ_TX;
+    out[1084] = (uint32_t)QM;
+    out[1085] = (uint32_t)QAM_A;
+    out[1086] = (uint32_t)(E_BITS / QM);
 
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     *(volatile uint32_t *)EXIT_ADDR = 0x600Du;

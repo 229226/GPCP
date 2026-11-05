@@ -74,6 +74,9 @@ if [ "$MODE" = full ]; then
     run model-rrc   python3 tools/nr_rrc.py
     run model-conn  python3 tools/nr_conn.py
     run model-pucch python3 tools/nr_pucch.py selftest
+    run model-la    python3 tools/nr_la.py
+    run model-qam   python3 tools/nr_qam.py
+    run model-amc   python3 tools/nr_pdsch_amc.py selftest
 fi
 
 # ---- 2) SoC benchmarks ------------------------------------------------------
@@ -92,7 +95,7 @@ fi
 # full-only and worth the wait -- it is the only check that couples RA-RNTI, the
 # decoded DCI's rv, the RAR's TA/TC-RNTI and the contention-resolution CE.
 SOCCORE="run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
-[ "$MODE" = full ] && SOCCORE="run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pusch run-sib1 run-pdcch run-link-e2e run-prach run-rach run-pucch run-fftprobe run-slot"
+[ "$MODE" = full ] && SOCCORE="run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pusch run-sib1 run-pdcch run-link-e2e run-prach run-rach run-pucch run-fftprobe run-slot"
 for t in $SOCCORE; do
     run "$t" make -C "$ROOT/sim/soc" "$t"
 done
