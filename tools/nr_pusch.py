@@ -171,14 +171,13 @@ def idft(x):
 RM_INFO = (None, None)        # (usable_len, filler_idx) set by build_pusch_grid
 
 
-def build_pusch_grid(rv=0, tp=False):
-    """Coding chain + interleaving + Gold DMRS for one RV transmission.
+def build_pusch_grid_tb(tb, rv=0, tp=False):
+    """Coding chain + interleaving + Gold DMRS for an explicit transport block.
 
     Returns the NSYM x NRE frequency-domain RE grid (pilots on every 4th RE).
     When ``tp`` is True the 360 QAM symbols are DFT-spread across the 360 data
     REs; otherwise they map straight onto the data REs (== PDSCH structure).
     """
-    tb = M.payload_bits()
     cw = L.encode(tb + M.crc24a(tb) + [0] * (M.KB * M.ZC - M.A_TB - M.CRC_LEN),
                   M.KB, M.ZC)
     _, usable, filler = M.rate_match(cw)
@@ -209,6 +208,11 @@ def build_pusch_grid(rv=0, tp=False):
         for m, (s, r) in enumerate(flat):
             grid[s][r] = syms[m]
     return grid
+
+
+def build_pusch_grid(rv=0, tp=False):
+    """Coding chain for the default (all-zero MAC payload) transport block."""
+    return build_pusch_grid_tb(M.payload_bits(), rv, tp)
 
 
 # ----------------------------------------------------------- OFDM / TD

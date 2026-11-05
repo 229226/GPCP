@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
-"""DCI-driven closed loop: MAC -> PDCCH -> PDSCH -> CRC -> PUCCH -> MAC.
+"""DCI-driven bidirectional closed loop: MAC -> PDCCH -> PDSCH/PUSCH -> MAC.
 
-This joins three chains that used to run in isolation (nr_pdcch.py,
-pdsch_full_plan.py, nr_mac.py / nr_ul.py) into one controlled link:
+This joins the chains that used to run in isolation (nr_pdcch.py,
+pdsch_full_plan.py, nr_pusch.py, nr_mac.py / nr_ul.py) into one controlled
+**two-direction** link:
 
-    MAC SDU -> MAC PDU (10 bytes = 80 bit = A_TB) -> TB
-      -> HarqEntity.dci_for(pid) -> DCI (32 bit)
-      -> PDCCH transmit / RNTI blind detection      [run-pdcch on hardware]
-      -> detected DCI *configures* the PDSCH transmission
-      -> PDSCH (LDPC BG2, QPSK, Gold DMRS, 38.212 interleaving)  [run-pdsch-full]
-      -> CRC24A -> ACK/NACK
-      -> PUCCH format 0 feedback -> MAC -> new_tx (NDI toggles) or retx
-      -> on failure the soft buffer is Chase-combined at the next RV's k0
+    Downlink (gNB -> UE)
+      MAC SDU -> MAC PDU (10 bytes = 80 bit = A_TB) -> TB
+        -> HarqEntity.dci_for(pid) -> DCI (32 bit)
+        -> PDCCH transmit / RNTI blind detection      [run-pdcch on hardware]
+        -> detected DCI *configures* the PDSCH transmission
+        -> PDSCH (LDPC BG2, QPSK, Gold DMRS, 38.212 interleaving)  [run-pdsch-full]
+        -> CRC24A -> ACK/NACK -> PUCCH format 0 -> MAC (NDI toggles) or retx
+        -> on failure the soft buffer is Chase-combined at the next RV's k0
+
+    Uplink (UE -> gNB)
+      MAC SDU -> MAC PDU -> TB
+        -> gNB builds a DCI whose reserved[9:0] carry an **UL grant**
+           (ul_flag / ul_ndi / ul_rv / ul_mcs / ul_rb_start / ul_rb_len)
+        -> PDCCH transmit / blind detection -> UE extracts the grant
+        -> UE transmits PUSCH at the granted RV      [nr_pusch.py model]
+        -> gNB receives: FFT -> PUSCH Gold DMRS LS -> equalise -> QPSK LLR
+           -> de-interleave -> descramble -> rate de-match -> LDPC -> CRC24A
+        -> on failure the gNB advances ul_rv and grants the retransmission
 
 What the DCI fields actually drive:
   * harq_pid : selects the per-process transport block and soft-combine buffer
@@ -20,12 +31,20 @@ What the DCI fields actually drive:
                (RV_K0 = {0:0, 1:246, 2:492, 3:738}), which is what makes a
                retransmission carry different redundancy bits
   * rnti     : genuinely drives the 38.211 7.3.3.1 PDSCH scrambling sequence
+  * reserved : on the uplink DCI, carries the 10-bit UL grant; ul_rv drives the
+               PUSCH k0 the same way rv drives the PDSCH k0, and ul_ndi flushes
+               the uplink soft buffer -- so the uplink is DCI-driven too
   * mcs / rb_start / rb_len / tpc : carried and checked field-by-field, but do
     NOT change modulation or allocation -- the physical link is fixed at QPSK,
     E=720 and 240 REs.  This is a deliberate simplification, not an omission.
 
+The DCI 32-bit layout is untouched (tools/nr_pdcch.py DCI_FIELDS unchanged);
+the UL grant rides in the pre-existing 10 reserved bits, so run-pdcch /
+run-link-e2e and their hardware models are not affected.
+
 Nothing here modifies the verified golden models: every function is imported
-and reassembled, so run-pdcch / run-pdsch-full / run-pdsch-harq are untouched.
+and reassembled, so nr_pdcch / pdsch_full_plan / nr_pusch / nr_ul / run-* are
+untouched.
 """
 import argparse
 import os
@@ -39,6 +58,7 @@ if _HERE not in sys.path:
 import nr_mac as MAC
 import nr_pdcch as PDCCH
 import nr_ul as UL
+import nr_pusch as P
 import pdsch_plan as M
 import pdsch_full_plan as F
 import ldpc5g as L
@@ -51,6 +71,30 @@ PDCCH_SNR = 12.0                    # control channel is more robust (AL=4)
 UL_SNR = 6.0                        # PUCCH format 0 detection SNR
 MAX_TX = 4                          # 1 new transmission + up to 3 retx
 DEFAULT_SNRS = (12.0, 0.0, -8.0)
+
+# ---- UL grant carried in the DCI reserved bits (10 bits) -------------------
+# 38.213-style compact uplink grant: enough to drive ndi / rv / MCS / RB fields
+# through the control channel without touching the 32-bit DCI layout.
+UL_GRANT_FIELDS = [("ul_flag", 1), ("ul_ndi", 1), ("ul_rv", 2),
+                   ("ul_mcs", 2), ("ul_rb_start", 2), ("ul_rb_len", 2)]
+UL_GRANT_BITS = sum(w for _, w in UL_GRANT_FIELDS)     # 10
+
+
+def pack_ul_grant(g):
+    """Pack a UL grant dict into the 10 reserved DCI bits (MSB first)."""
+    v = 0
+    for name, w in UL_GRANT_FIELDS:
+        v = (v << w) | (int(g.get(name, 0)) & ((1 << w) - 1))
+    return v
+
+
+def unpack_ul_grant(v):
+    """Inverse of pack_ul_grant."""
+    out = {}
+    for name, w in reversed(UL_GRANT_FIELDS):
+        out[name] = v & ((1 << w) - 1)
+        v >>= w
+    return out
 
 
 # --------------------------------------------------------------- MAC / TB
@@ -126,6 +170,26 @@ def rx_pdsch(y, rnti):
     return descr, h
 
 
+# ------------------------------------------------------------- PUSCH / TB
+def tx_pusch(tb, rv, rnti, snr_db, seed, tp=False):
+    """UE-side PUSCH transmission at the granted redundancy version."""
+    grid = P.build_pusch_grid_tb(tb, rv, tp)
+    y = M.add_channel(grid, snr_db, seed)
+    return y, P.RV_K0[rv]
+
+
+def rx_pusch(y, rnti, tp=False):
+    """gNB-side PUSCH reception: FFT -> 6.4.1.1 DMRS LS -> LLR -> descramble."""
+    yq = P.quantised_y(P.td_from_y(y))
+    h = P.pusch_channel_estimate(yq)
+    raw = P.pusch_extract_llr(yq, h, tp)
+    llr_e = P.deinterleave(raw)
+    scr = P.pusch_scrambling_seq(rnti)
+    descr = [-v if scr[k] else v for k, v in enumerate(llr_e)]
+    return descr, h
+
+
+# ------------------------------------------------------------- soft buffer
 def combine(buf, descr, rv):
     """Chase accumulation in circular-buffer coordinates (38.212 5.4.2.1)."""
     k0 = F.RV_K0[rv]
@@ -156,9 +220,9 @@ def pucch_step(ack, seed):
     return UL.pucch_detect(y)
 
 
-# --------------------------------------------------------------- closed loop
-def run_one_process(h, pid, sdu, snr_db, seed, pdcch_snr, max_tx):
-    """Run one HARQ process to completion (or to max_tx failed attempts)."""
+# --------------------------------------------------------------- DL process
+def run_dl_process(h, pid, sdu, snr_db, seed, pdcch_snr, max_tx):
+    """Run one downlink HARQ process to completion (or to max_tx attempts)."""
     tb, pdu = tb_from_sdu(sdu)
     dci = h.new_tx(pid, sdu)
     buf = None
@@ -202,80 +266,170 @@ def run_one_process(h, pid, sdu, snr_db, seed, pdcch_snr, max_tx):
     return rec
 
 
-def run_link(snr_db, trials=4, seed=1, pdcch_snr=PDCCH_SNR, max_tx=MAX_TX,
-             verbose=True):
-    h = MAC.HarqEntity()
+# --------------------------------------------------------------- UL process
+def run_ul_process(pid, sdu, snr_db, seed, pdcch_snr, max_tx, tp=False):
+    """Run one uplink HARQ process: DCI grant -> PUSCH -> CRC -> next ul_rv."""
+    tb, pdu = tb_from_sdu(sdu)
+    grant = dict(ul_flag=1, ul_ndi=(pid & 1), ul_rv=0, ul_mcs=0,
+                 ul_rb_start=0, ul_rb_len=8)
+    buf = None
+    last_ndi = None
     rec = []
+    for attempt in range(max_tx):
+        seq_seed = seed * 1000 + 500 + pid * 64 + attempt
+        # gNB -> UE: a DCI whose reserved bits carry the uplink grant.
+        dci = dict(mcs=0, rv=0, ndi=0, harq_pid=pid, rb_start=0, rb_len=0,
+                   tpc=0, reserved=pack_ul_grant(grant))
+        det = pdcch_step(dci, RNTI, pdcch_snr, seq_seed)
+        dci_ok = (det["ok"] and det["rnti"] == RNTI and det["fields"] == dci)
+        hits = sum(1 for _, o in det["tried"] if o)
+        # The UE acts on the *detected* grant, not the intended one.
+        g = unpack_ul_grant(det["fields"]["reserved"]) if det["fields"] else dict(grant)
+        ndi, rv = g["ul_ndi"], g["ul_rv"]
+        if buf is None or ndi != last_ndi:
+            buf = [0] * USABLE
+        last_ndi = ndi
+        y, k0 = tx_pusch(tb, rv, RNTI, snr_db, seq_seed, tp)
+        descr, h_est = rx_pusch(y, RNTI, tp)
+        combine(buf, descr, rv)
+        res = decode(buf)
+        tb_ok = res["tb"] == tb
+        sdu_ok = True
+        if res["crc_ok"]:
+            try:
+                sdu_ok = (sdu_from_tb(res["tb"]) == (1, sdu))
+            except Exception:
+                sdu_ok = False
+        rec.append(dict(
+            pid=pid, attempt=attempt, rv=rv, ndi=ndi, k0=k0,
+            ul_mcs=g["ul_mcs"], ul_rb_start=g["ul_rb_start"],
+            ul_rb_len=g["ul_rb_len"], dci_ok=dci_ok, rnti_hits=hits,
+            crc_ok=res["crc_ok"], tb_ok=tb_ok, sdu_ok=sdu_ok, chan=h_est,
+            tb_errors=sum(a != b for a, b in zip(res["tb"], tb)),
+        ))
+        if res["crc_ok"]:
+            break
+        # gNB schedules the retransmission at the next RV (keeps ul_ndi).
+        nxt = MAC.RV_CYCLE[(MAC.RV_CYCLE.index(grant["ul_rv"]) + 1)
+                           % len(MAC.RV_CYCLE)]
+        grant = dict(grant)
+        grant["ul_rv"] = nxt
+    return rec
+
+
+# --------------------------------------------------------------- closed loop
+def run_one_process(h, pid, dl_sdu, ul_sdu, snr_db, seed, pdcch_snr, max_tx,
+                    tp=False):
+    """Run one downlink and one uplink HARQ process (separate TBs)."""
+    dl = run_dl_process(h, pid, dl_sdu, snr_db, seed, pdcch_snr, max_tx)
+    ul = run_ul_process(pid, ul_sdu, snr_db, seed, pdcch_snr, max_tx, tp)
+    return dl, ul
+
+
+def run_link(snr_db, trials=4, seed=1, pdcch_snr=PDCCH_SNR, max_tx=MAX_TX,
+             tp=False, verbose=True):
+    h = MAC.HarqEntity()
+    dl_all, ul_all = [], []
     for t in range(trials):
         pid = t % MAC.NPROC
-        sdu = make_sdu(seed * 100 + t)
-        rec += run_one_process(h, pid, sdu, snr_db, seed, pdcch_snr, max_tx)
-    n_success = sum(1 for r in rec if r["crc_ok"])
-    n_retx = len(rec) - trials
-    n_unresolved = trials - n_success
+        dl_sdu = make_sdu(seed * 100 + t)
+        ul_sdu = make_sdu(seed * 1000 + t + 7)      # distinct UL payload
+        dl, ul = run_one_process(h, pid, dl_sdu, ul_sdu, snr_db, seed,
+                                 pdcch_snr, max_tx, tp)
+        dl_all += dl
+        ul_all += ul
+    dl_ok = sum(1 for r in dl_all if r["crc_ok"])
+    ul_ok = sum(1 for r in ul_all if r["crc_ok"])
+    dl_retx = len(dl_all) - trials
+    ul_retx = len(ul_all) - trials
+    dl_unres = trials - dl_ok
+    ul_unres = trials - ul_ok
     # tb/sdu only carry meaning once CRC passes; a failed first transmission
     # legitimately has a wrong TB, so those records must not gate the loop.
     gates = dict(
-        dci=all(r["dci_ok"] for r in rec),
-        rnti=all(r["rnti_hits"] == 1 for r in rec),
-        ul=all(r["ul_ok"] for r in rec),
-        tb=all(r["tb_ok"] for r in rec if r["crc_ok"]),
-        sdu=all(r["sdu_ok"] for r in rec if r["crc_ok"]),
-        rv=all(r["rv"] == MAC.RV_CYCLE[r["attempt"]] for r in rec),
+        dci=all(r["dci_ok"] for r in dl_all + ul_all),
+        rnti=all(r["rnti_hits"] == 1 for r in dl_all + ul_all),
+        dl_tb=all(r["tb_ok"] for r in dl_all if r["crc_ok"]),
+        dl_sdu=all(r["sdu_ok"] for r in dl_all if r["crc_ok"]),
+        dl_rv=all(r["rv"] == MAC.RV_CYCLE[r["attempt"]] for r in dl_all),
+        ul_tb=all(r["tb_ok"] for r in ul_all if r["crc_ok"]),
+        ul_sdu=all(r["sdu_ok"] for r in ul_all if r["crc_ok"]),
+        ul_rv=all(r["rv"] == MAC.RV_CYCLE[r["attempt"]] for r in ul_all),
+        ul_k0=all(r["k0"] == r["rv"] * (USABLE // 4) for r in ul_all),
     )
-    return dict(snr=snr_db, rec=rec, trials=trials, success=n_success,
-                retx=n_retx, unresolved=n_unresolved, gates=gates,
-                throughput=n_success * A_TB / max(1, len(rec)))
+    return dict(snr=snr_db, dl=dl_all, ul=ul_all, trials=trials,
+                dl_success=dl_ok, ul_success=ul_ok,
+                dl_retx=dl_retx, ul_retx=ul_retx,
+                dl_unresolved=dl_unres, ul_unresolved=ul_unres,
+                gates=gates,
+                throughput=(dl_ok + ul_ok) * A_TB
+                           / max(1, len(dl_all) + len(ul_all)))
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--snr", type=float, default=None,
-                    help="run one PDSCH SNR point instead of the sweep")
+                    help="run one PDSCH/PUSCH SNR point instead of the sweep")
     ap.add_argument("--trials", type=int, default=4,
                     help="HARQ processes per SNR point")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--pdcch-snr", type=float, default=PDCCH_SNR)
     ap.add_argument("--max-tx", type=int, default=MAX_TX)
+    ap.add_argument("--tp", action="store_true",
+                    help="use DFT-s-OFDM transform precoding on the uplink")
     args = ap.parse_args()
 
     snrs = (args.snr,) if args.snr is not None else DEFAULT_SNRS
-    print("DCI-driven loop: A_TB=%d, RV=%s, RNTI=0x%04x, PDCCH %.1f dB, "
-          "PUCCH %.1f dB" % (A_TB, MAC.RV_CYCLE, RNTI,
-                             args.pdcch_snr, UL_SNR))
+    print("DCI-driven bidirectional loop: A_TB=%d, RV=%s, RNTI=0x%04x, "
+          "PDCCH %.1f dB, PUCCH %.1f dB, UL grant %d bits in DCI reserved%s"
+          % (A_TB, MAC.RV_CYCLE, RNTI, args.pdcch_snr, UL_SNR,
+             UL_GRANT_BITS, ", DFT-s-OFDM" if args.tp else ""))
     ok = True
     results = []
     for snr in snrs:
-        r = run_link(snr, args.trials, args.seed, args.pdcch_snr, args.max_tx)
+        r = run_link(snr, args.trials, args.seed, args.pdcch_snr, args.max_tx,
+                     args.tp)
         results.append(r)
         g = r["gates"]
         bad = [k for k, v in g.items() if not v]
         ok &= not bad
-        print("  PDSCH %6.1f dB : %d/%d TB ok, %d retx, %d unresolved, "
-              "%.1f bit/tx, gates %s" % (
-                  snr, r["success"], r["trials"], r["retx"], r["unresolved"],
-                  r["throughput"], "OK" if not bad else "BAD " + ",".join(bad)))
-        for x in r["rec"]:
-            print("    pid=%d attempt=%d rv=%d k0=%3d ndi=%d dci=%s "
+        print("  %6.1f dB : DL %d/%d TB ok, %d retx, %d unres | "
+              "UL %d/%d TB ok, %d retx, %d unres | %.1f bit/attempt, gates %s"
+              % (snr, r["dl_success"], r["trials"], r["dl_retx"],
+                 r["dl_unresolved"], r["ul_success"], r["trials"],
+                 r["ul_retx"], r["ul_unresolved"], r["throughput"],
+                 "OK" if not bad else "BAD " + ",".join(bad)))
+        for x in r["dl"]:
+            print("    DL pid=%d attempt=%d rv=%d k0=%3d ndi=%d dci=%s "
                   "hits=%d crc=%s ack=%d/%s tb_err=%d" % (
                       x["pid"], x["attempt"], x["rv"], x["k0"], x["ndi"],
                       "OK" if x["dci_ok"] else "BAD", x["rnti_hits"],
                       "OK" if x["crc_ok"] else "BAD", x["ack"],
                       "OK" if x["ul_ok"] else "BAD", x["tb_errors"]))
+        for x in r["ul"]:
+            print("    UL pid=%d attempt=%d ul_rv=%d k0=%3d ul_ndi=%d dci=%s "
+                  "hits=%d crc=%s tb_err=%d" % (
+                      x["pid"], x["attempt"], x["rv"], x["k0"], x["ndi"],
+                      "OK" if x["dci_ok"] else "BAD", x["rnti_hits"],
+                      "OK" if x["crc_ok"] else "BAD", x["tb_errors"]))
 
-    # A closed loop must actually close: retransmissions have to occur at a
-    # low SNR, must eventually succeed, and must vanish at a high SNR.
+    # A closed loop must actually close in both directions: retransmissions
+    # have to occur at low SNR and vanish at high SNR, in DL and UL alike.
     hi, lo = results[0], results[-1]
     if len(results) > 1 and hi["snr"] > lo["snr"]:
-        closed = hi["retx"] == 0 and hi["unresolved"] == 0 and lo["retx"] > 0
-        if not closed:
-            print("  loop: expected 0 retx at %.1f dB and >0 retx at %.1f dB, "
-                  "got %d / %d" % (hi["snr"], lo["snr"], hi["retx"], lo["retx"]))
+        dl_closed = hi["dl_retx"] == 0 and hi["dl_unresolved"] == 0 and lo["dl_retx"] > 0
+        ul_closed = hi["ul_retx"] == 0 and hi["ul_unresolved"] == 0 and lo["ul_retx"] > 0
+        if not (dl_closed and ul_closed):
+            print("  loop: expected 0 retx at %.1f dB and >0 retx at %.1f dB; "
+                  "DL %d/%d, UL %d/%d" % (hi["snr"], lo["snr"], hi["dl_retx"],
+                                          lo["dl_retx"], hi["ul_retx"], lo["ul_retx"]))
             ok = False
         else:
-            print("  loop: %.1f dB clean (0 retx) -> %.1f dB %d retx "
-                  "(HARQ closes the link)" % (hi["snr"], lo["snr"], lo["retx"]))
-    print("[ %s ] DCI-driven MAC/PDCCH/PDSCH/PUCCH loop" % ("OK" if ok else "FAIL"))
+            print("  loop: %.1f dB clean (DL/UL 0 retx) -> %.1f dB "
+                  "DL %d retx, UL %d retx (HARQ closes both directions)"
+                  % (hi["snr"], lo["snr"], lo["dl_retx"], lo["ul_retx"]))
+    print("[ %s ] DCI-driven bidirectional MAC/PDCCH/PDSCH/PUSCH loop"
+          % ("OK" if ok else "FAIL"))
     return 0 if ok else 1
 
 
