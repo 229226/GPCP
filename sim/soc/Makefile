@@ -373,7 +373,7 @@ PUSCH_TD = $(ROOT)/build/soc/pusch.td
 run-pusch: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PUSCH_TD))
-	python3 $(ROOT)/tools/nr_pusch.py dump $(PUSCH_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/nr_pusch.py dump $(PUSCH_TD) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pusch_bm.bin@0x80000000 \
@@ -382,7 +382,7 @@ run-pusch: all
 		--results 0x80070000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pusch_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_dump.txt --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PUSCH DFT-s-OFDM: 360-point IDFT deprecoding on the SoC ----
 PUSCHTP_TD = $(ROOT)/build/soc/pusch_tp.td
@@ -390,7 +390,7 @@ PUSCHTP_TD = $(ROOT)/build/soc/pusch_tp.td
 run-pusch-tp: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PUSCHTP_TD))
-	python3 $(ROOT)/tools/nr_pusch.py dump $(PUSCHTP_TD) --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/nr_pusch.py dump $(PUSCHTP_TD) --rv $(if $(RV),$(RV),0) --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pusch_tp_bm.bin@0x80000000 \
@@ -399,7 +399,7 @@ run-pusch-tp: all
 		--results 0x80070000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pusch_tp_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_tp_dump.txt --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_tp_dump.txt --rv $(if $(RV),$(RV),0) --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- CSI-RS + CQI report (38.211 7.4.1.5 / 38.214 5.2.2.1) ----
 CSI_TD = $(ROOT)/build/soc/csi.td

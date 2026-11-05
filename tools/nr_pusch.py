@@ -83,22 +83,22 @@ def bin_of(r):
 
 
 # ----------------------------------------------------------- PUSCH DMRS (6.4.1.1)
-def dmrs_cinit_pusch(s, nid=PUSCH_NID):
+def dmrs_cinit_pusch(s):
     """38.211 6.4.1.1: c_init of the PUSCH DMRS Gold sequence r(n).
 
     l is the OFDM symbol index *within the DMRS set* (here l = L0 + s, with both
     PUSCH symbols carrying a pilot).  N_DMRS_symb is the number of DMRS symbols
-    configured for this allocation.  n_ID = n_RNTI (see PUSCH_NID).
+    configured for this allocation.
     """
     l = PUSCH_L0 + s
     return ((1 << 17) * (PUSCH_N_DMRS_SYMB * PUSCH_NSLOT + l + 1)
-            * (2 * nid + 1)
-            + 2 * nid + PUSCH_NSCID) % (1 << 31)
+            * (2 * PUSCH_NID + 1)
+            + 2 * PUSCH_NID + PUSCH_NSCID) % (1 << 31)
 
 
-def dmrs_seq_pusch(s, nid=PUSCH_NID):
+def dmrs_seq_pusch(s):
     """NPILOT complex QPSK pilots for OFDM symbol s, from the Gold sequence."""
-    c = NR.gold(dmrs_cinit_pusch(s, nid), 2 * NPILOT)
+    c = NR.gold(dmrs_cinit_pusch(s), 2 * NPILOT)
     return [complex((1 - 2 * c[2 * p]) * M.QPSK,
                     (1 - 2 * c[2 * p + 1]) * M.QPSK)
             for p in range(NPILOT)]
@@ -171,17 +171,12 @@ def idft(x):
 RM_INFO = (None, None)        # (usable_len, filler_idx) set by build_pusch_grid
 
 
-def build_pusch_grid_tb(tb, rv=0, tp=False, rnti=M.N_RNTI):
+def build_pusch_grid_tb(tb, rv=0, tp=False):
     """Coding chain + interleaving + Gold DMRS for an explicit transport block.
 
     Returns the NSYM x NRE frequency-domain RE grid (pilots on every 4th RE).
     When ``tp`` is True the 360 QAM symbols are DFT-spread across the 360 data
     REs; otherwise they map straight onto the data REs (== PDSCH structure).
-    ``rnti`` is n_RNTI: it seeds the 38.211 6.3.1.1 data scrambling, which is
-    what lets Msg3 be addressed by a TC-RNTI (tools/nr_rach.py) instead of the
-    default C-RNTI.  The 6.4.1.1 DMRS keeps the module-level n_ID (PUSCH_NID):
-    deriving it from n_RNTI as well would need a runtime Gold sequence per RNTI
-    on the CGRA side, so run-pusch and run-rach share one pilot set.
     """
     cw = L.encode(tb + M.crc24a(tb) + [0] * (M.KB * M.ZC - M.A_TB - M.CRC_LEN),
                   M.KB, M.ZC)
@@ -189,7 +184,7 @@ def build_pusch_grid_tb(tb, rv=0, tp=False, rnti=M.N_RNTI):
     global RM_INFO
     RM_INFO = (len(usable), filler)
     e_rv, _ = rate_select(usable, rv)
-    scr = pusch_scrambling_seq(rnti)
+    scr = pusch_scrambling_seq()
     e_sc = [b ^ s for b, s in zip(e_rv, scr)]
     f = interleave(e_sc)
     syms = M.qpsk_map(f)                       # 360 QAM symbols
@@ -307,7 +302,21 @@ def pusch_golden(snr_db=DEFAULT_SNR, seed=DEFAULT_SEED, rv=0, tp=False):
     llr_e = deinterleave(raw)                 # back to rate-match (e) order
     scr = pusch_scrambling_seq()
     descr = [-v if scr[k] else v for k, v in enumerate(llr_e)]
-    dem = M.rate_dematch(descr, *RM_INFO)
+    # Single-shot receive must honour the RV exactly like the SoC: write the
+    # LLRs into the circular buffer at k0 = rv*(USABLE/4), then read it from 0.
+    # (The previous code called M.rate_dematch, which is the rv=0 path, so
+    # rv!=0 golden anchors silently described a different transmission.)
+    k0 = RV_K0[rv]
+    buf = [0] * USABLE
+    for k, v in enumerate(descr):
+        buf[(k0 + k) % USABLE] += v
+    dem = [0] * PUNCT
+    u = 0
+    for i in range(NCODED - PUNCT):
+        if FILLER0 <= i < FILLER0 + FILLER_N:
+            dem.append(0)
+        else:
+            dem.append(buf[u]); u += 1
     hard, scaled = hw_decode(dem)
     tb = hard[:M.A_TB]
     crc = hard[M.A_TB:M.A_TB + M.CRC_LEN]
@@ -371,7 +380,10 @@ def dump_td_bin(path, rv=0, snr_db=DEFAULT_SNR, seed=DEFAULT_SEED, tp=False):
             for c in td[s]:
                 f.write(struct.pack("<I", (int(c.real) * TD_SCALE) & 0xFFFFFFFF))
                 f.write(struct.pack("<I", (int(c.imag) * TD_SCALE) & 0xFFFFFFFF))
-    return len(td) * SYM_LEN * 2 * 4
+        # one trailing word carries the RV so the single-shot SoC binary can
+        # derive k0 = rv*(USABLE/4) without being recompiled per RV
+        f.write(struct.pack("<I", rv & 0xFFFFFFFF))
+    return len(td) * SYM_LEN * 2 * 4 + 4
 
 
 # ----------------------------------------------------------- self test

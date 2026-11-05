@@ -457,8 +457,22 @@ int main(void)
             for (int i = 0; i < 8; i++) descr0[i] = llr_i[i];
 
         /* ---- Chase combining in circular-buffer coordinates ---- */
+#if HARQ_TX == 1
+        /* Single-shot PUSCH: the stimulus appends one word with the RV, so
+           k0 = rv*(USABLE/4) is driven by the image instead of a compile-time
+           constant (same contract as run-pdsch-16qam/64qam). */
+        {
+            uint32_t rv_word = *(volatile uint32_t *)(TD_RAM
+                               + (uint32_t)NSYM * SYM_WORDS * 4u);
+            uint32_t k0 = rv_word * (USABLE / 4u);
+            out[1087] = k0;
+            for (int k = 0; k < E_BITS; k++)
+                rbuf[(k0 + (uint32_t)k) % USABLE] += llr_i[k];
+        }
+#else
         for (int k = 0; k < E_BITS; k++)
             rbuf[(rv_k0[tx] + (uint32_t)k) % USABLE] += llr_i[k];
+#endif
     }
 
     /* ---- rate de-match: combined LLRs -> 1040 coded LLRs ---- */

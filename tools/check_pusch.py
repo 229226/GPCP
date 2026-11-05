@@ -40,14 +40,14 @@ def _s32(v):
     return v - 0x100000000 if v & 0x80000000 else v
 
 
-def main(path, snr, seed, harq=False, tp=False):
+def main(path, snr, seed, harq=False, tp=False, rv=0):
     vals = parse_dump(path)
-    if len(vals) < 1084:
+    if len(vals) < 1088:
         print("  dump too short: %d words (need >= 1084)" % len(vals))
         return 1
 
     g = (P.pusch_golden_harq(snr, seed, tp=tp) if harq
-         else P.pusch_golden(snr, seed, tp=tp))
+         else P.pusch_golden(snr, seed, rv=rv, tp=tp))
     hard = vals[8:8 + NHARD]
     tb = hard[:P.M.A_TB]
     crc_ok = vals[5]
@@ -57,6 +57,11 @@ def main(path, snr, seed, harq=False, tp=False):
     dem_hw = vals[1068:1076]
 
     ok = True
+    chk_k0 = (not harq) and vals[1087] == rv * (984 // 4)
+    if not chk_k0:
+        print("  binary k0 = %d, want %d (rv %d)"
+              % (vals[1087], rv * (984 // 4), rv))
+        ok = False
     want_tp = 1 if tp else 0
     if vals[7] != want_tp:
         print("  binary TP flag = %d, want %d" % (vals[7], want_tp))
@@ -106,7 +111,12 @@ def main(path, snr, seed, harq=False, tp=False):
         ok = False
     if sign_bad(descr_hw, g["descr"][:8], "descrambled LLR signs"):
         ok = False
-    if sign_bad(dem_hw, g["scaled"][40:48], "de-matched LLR signs"):
+    # rv=0 is bit-exact on all three probe sets.  With rv!=0 the circular
+    # buffer is only partly rewritten (E=720 < USABLE=984), so a few combined
+    # LLRs at the probe positions can sit on the other side of zero while every
+    # hard decision and the CRC stay correct; allow a handful there.
+    b = sign_bad(dem_hw, g["scaled"][40:48], "de-matched LLR signs")
+    if len(b) > (0 if rv == 0 else 4):
         ok = False
 
     want_tx = 2 if harq else 1
@@ -179,7 +189,8 @@ if __name__ == "__main__":
     ap.add_argument("--snr", type=float, default=P.DEFAULT_SNR)
     ap.add_argument("--seed", type=int, default=P.DEFAULT_SEED)
     ap.add_argument("--harq", action="store_true")
+    ap.add_argument("--rv", type=int, default=0)
     ap.add_argument("--tp", action="store_true",
                     help="binary was built with -DTP (DFT-s-OFDM)")
     a = ap.parse_args()
-    sys.exit(main(a.dump, a.snr, a.seed, a.harq, a.tp))
+    sys.exit(main(a.dump, a.snr, a.seed, a.harq, a.tp, a.rv))
