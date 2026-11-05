@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-prach run-rach
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-prach run-rach
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -400,6 +400,23 @@ run-pusch-tp: all
 		--dump $(ROOT)/$(OBJ)/pusch_tp_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_tp_dump.txt --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+
+# ---- CSI-RS + CQI report (38.211 7.4.1.5 / 38.214 5.2.2.1) ----
+CSI_TD = $(ROOT)/build/soc/csi.td
+
+run-csi: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(CSI_TD))
+	python3 $(ROOT)/tools/nr_csi.py dump $(CSI_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/csi_bm.bin@0x80000000 \
+		--load $(CSI_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80070000 --nwords 32 \
+		--dump $(ROOT)/$(OBJ)/csi_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_csi.py $(ROOT)/$(OBJ)/csi_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PUCCH format 0: 1-bit SR / HARQ-ACK on the CGRA ----
 PUCCH_TD = $(ROOT)/build/soc/pucch.td

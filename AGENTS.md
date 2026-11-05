@@ -43,11 +43,11 @@ env -u LD_LIBRARY_PATH ...            # 所有 verilator / 模型 / make 调用�
 
 # 1) 一条命令全量验收（2026-11-05 起：分档 + 并行 -j6，16 核 VM）
 bash tools/verify.sh quick            # 实测 146 s / 11 passed / 0 failed：kernels + 10 个 SoC 目标
-bash tools/verify.sh full             # 全部非 RACH 门：kernels + 16 模型自检 + 31 个 SoC 基准（当前 48 门，约 9-10 min）
-bash tools/verify.sh slow             # 再加 run-rach（当前 49 门）；最近一次 47 门全量 601 s
+bash tools/verify.sh full             # 全部非 RACH 门：kernels + 16 模型自检 + 31 个 SoC 基准（约 10 min）
+bash tools/verify.sh slow             # 再加 run-rach；最近一次 47 门全量 601 s
 bash tools/verify.sh changed          # 只跑 git diff 触及的门（实测 P4 diff 6 门 / 129 s；空改动直接退出）
 bash tools/verify.sh smart            # **日常默认**：覆盖 slow 档全部门，只重跑输入变化的门（实测全跳过 / 1 s）
-bash tools/verify.sh slow --force     # **阶段末/提交前/发版**：忽略缓存全量（当前 49 门），唯一可作交付证据
+bash tools/verify.sh slow --force     # **阶段末/提交前/发版**：忽略缓存全量，唯一可作交付证据
 GATES='model-la run-ring' bash tools/verify.sh smart   # 临时人工指定门（不得当全量证据）
 bash tools/verify.sh full --linux     # 再加 Linux 启动（10^8 周期，很久）
 bash tools/verify.sh full --jobs 8    # 改并行度（默认 6，JOBS= 亦可）
@@ -112,6 +112,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `tools/nr_pusch.py` 自检 | **上行 PUSCH 黄金模型（阶段 A）**：TB→CRC24A→LDPC BG2→速率匹配→QPSK→(可选 DFT-s-OFDM 变换预编码)→OFDM→TD；接收链镜像 PDSCH（含 38.211 6.4.1.1 真 Gold DMRS、6.3.1.1 加扰）；无变换预编码 / DFT-s-OFDM 在 20/0/−6 dB 与 HARQ rv=0/2 均 CRC ok、TB 80/80、0 误码；TD 格式与 PDSCH dump 同构（供阶段 B `run-pusch` 复用） |
 | `tools/nr_rach.py` 自检 | **4-step 随机接入过程模型**：SIB1 的 `prach_config_index`→`N_CS`、ZC 相关（8 个 Msg1 点：TA/N_CS 组合，峰-次峰裕度）、RA-RNTI（38.321 6.1.5）、RAR/CCCH/CR-ID MAC CE、Msg3 定时窗口、Msg4 竞争解决；3 次接入全部在**一次 Msg4 内解决**，注入错误（错 TA / 错 TC-RNTI / 错竞争分辨率 ID）分别让对应门**如实失败**。`dump` 子命令产出 `run-prach`/`run-rach` 的时域镜像 |
 | `run-pucch` | **PUCCH 格式 0（1-bit SR / HARQ-ACK）落 CGRA**：`tools/nr_pucch.py` 生成定点（`CHIP_SCALE`=2048）时域镜像（139 个接收 (re,im) + 2 个 127-tap 参考），SoC 复用已验证的 **`prach_corr` 微码**（128 拍 / 16 PE）只跑 **2 个候选 m_CS=0/6**，阵列内 butterfly 归约，CPU 比 \|C\|² 判决。默认点（ACK=1 / 6 dB / seed 1）：**0 errors / 2 次阵列运行 / 5 次 DMA / 64 个 PE 分部逐位对账 / 25.9 dB 裕度**；C[0]=(536606450,−4842875) vs C[6]=(3249896,27044604)，与 `nr_ul.py` 浮点模型一致。`ACK=0`（胜者 m_CS=6、bit=0、24.7 dB）、`SNR=0 SEED=3`（14.7 dB）两点亦 `[OK]`。`ACK=`/`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
+| `run-csi` | **CSI-RS + 宽带 CQI 上报落硬件**：`tools/nr_csi.py` 生成 1 符号 CSI-RS（38.211 7.4.1.5 Gold，`c_init`=0xC01，密度 3 → 80 个 RE）→ SoC FFT → 80 点 LS → **相邻差分噪声估计** `Pn=Σ|A[i]−A[i−1]|²/(2(N−1))`（对前端增益不敏感）→ `snr_q8`（分步除法避免 int64 溢出）→ 38.214 门限表选 CQI（`csi_cqi_tab.h`，无需 log）。默认 20 dB：**0 errors、476,691 周期**、SNR 20.59 vs 模型 20.56 dB、CQI 14 一致；0 dB（CQI 3）/ 10 dB（CQI 8）/ 20 dB seed 3 三点 `[OK]`。⚠️ 两个坑：① SNR 参考必须先除以有源 RE 数、再计入 |h|²（否则分别偏 4.8 dB / 7 dB）；② 整数除法不能过早做（`Pn` 会被量化成 0/1）。只在 `verify.sh full` 里 |
+
 | `tools/nr_rrc.py` / `nr_conn.py` / `nr_pucch.py` 自检 | **P3 模型三件套**：`nr_rrc.py`（5 类紧凑 64-bit RRC SDU + Short BSR/PHR/TA cmd/C-RNTI CE + SRB0→SRB1 状态机，SDU/PDU/TB 逐层往返；错 C-RNTI 被拒）；`nr_conn.py`（连接建立全过程跑真实 PDCCH/PDSCH/PUSCH/PUCCH：RRCSetup→SRB1→SetupComplete→SR→UL grant→BSR/PHR→RRCReconfiguration+TA CE→Complete；**5 类注入错误**（错 C-RNTI / 无 SR / 错 BSR / 错 TA CE / 跳过 SRB1）各自让对应门如实失败，DFT-s-OFDM 上行与 seed 2/3 亦 `[OK]`）；`nr_pucch.py`（4 个 SNR × 16 点全部与 `nr_ul.py` 浮点模型一致，整数相关逐值） |
 | `run-pdsch` | LDPC 迭代闭环（CN 50 + BN 12 拍 × 8 次）：`[-1,-1,-1,-1,-1,-1,0,0]` 与黄金模型逐位一致，**50,721 周期**（2 个判决真的被迭代翻转） |
 | `run-slot` | 8 slot，抖动 0，零 overrun |
@@ -347,7 +349,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 | 层 | 变更文件 | 影响范围 | 处理 |
 |---|---|---|---|
-| **L0 架构 / ABI / 工具链** | `rtl/**`、`sim/**` 源、`cgra/**`、`tools/cgra.py`、`sw/soc/*_prog.h`、`pdcch_luts.h`、`link.ld`、`start.S`、`sw/soc/Makefile`、`sim/soc/Makefile`、顶层 `Makefile`、`tools/verify.sh`、`sim/soc/build/Vgpcp_soc`、`build/fft/twiddle.bin` | **全部门（当前 49 门）** | 指纹自动全失效 → 全量，不可跳过 |
+| **L0 架构 / ABI / 工具链** | `rtl/**`、`sim/**` 源、`cgra/**`、`tools/cgra.py`、`sw/soc/*_prog.h`、`pdcch_luts.h`、`link.ld`、`start.S`、`sw/soc/Makefile`、`sim/soc/Makefile`、顶层 `Makefile`、`tools/verify.sh`、`sim/soc/build/Vgpcp_soc`、`build/fft/twiddle.bin` | **全部门** | 指纹自动全失效 → 全量，不可跳过 |
 | **L1 裸机基准** | `sw/soc/*_bm.c` | 由它编译的门（含 `-D` 变体） | 自动 |
 | **L2 激励 / 黄金模型** | `tools/nr_*.py`、`dump_*.py`、公共 `pdsch_plan.py` / `ldpc5g.py` 等 | 引用它的门（含 import 闭包） | 自动 |
 | **L3 验收器** | `tools/check_*.py` | 对应 `run-*` | 自动 |
