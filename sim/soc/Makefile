@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-prach run-rach
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-rach
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -434,6 +434,23 @@ run-mimo-ce: all
 		--dump $(ROOT)/$(OBJ)/mimo_ce_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_mimo_ce.py $(ROOT)/$(OBJ)/mimo_ce_dump.txt --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
+
+# ---- 2x2 MMSE receiver: pilots -> H -> per-RE solve -> hard bits ----
+MIMO_TD = $(ROOT)/build/soc/mimo.td
+
+run-mimo: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(MIMO_TD))
+	python3 $(ROOT)/tools/nr_mimo_ce.py dump $(MIMO_TD) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/mimo_bm.bin@0x80000000 \
+		--load $(MIMO_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80070000 --nwords 200 \
+		--dump $(ROOT)/$(OBJ)/mimo_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_mimo.py $(ROOT)/$(OBJ)/mimo_dump.txt --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PUCCH format 0: 1-bit SR / HARQ-ACK on the CGRA ----
 PUCCH_TD = $(ROOT)/build/soc/pucch.td
