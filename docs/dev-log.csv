@@ -25,3 +25,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-06,09:43,09:44,1,arch,experiment,调研开源 CGRA 编译器对本项目 ISA 的可用性,73d1907,measured,5 个候选对比表 + 3 处 ISA 不匹配点；结论：借方法不搬代码
 2026-11-06,09:54,10:00,6,arch,experiment,实测 Morpher 能否为本项目 4x4 ISA 生成微码,0df2d54,measured,array_add II=4 / 243-0 / 9 s；8 寄存器改造后仍 II=4；算子表硬编码无 MAC；适配估计 2-3 周
 2026-11-06,10:04,10:27,23,arch,experiment,用 Morpher 为我们的 kernel 建立 II 基准线,5f62f2a,measured,FIR II=4/18s/1975-0；GEMM II=4/47s/1035-0；FFT 52 节点 >6min 未收敛；常量下标断言
+2026-11-06,10:52,10:53,1,arch,infra,ADL 保真度修正：P0 寄存器模型 / P1 存储 / P2 后端设计,2c1a414,measured,P0 段错误(139)、P1 断言(134)、P3 已记录；ADL 保真度表 8 项
