@@ -160,6 +160,7 @@ riscv64-unknown-elf-gcc --specs=/usr/lib/picolibc/riscv64-unknown-elf/picolibc.s
 - [docs/12-夜间批次.md](docs/12-夜间批次.md)：无人值守长跑框架与 T1–T5 夜间开发队列
 - [docs/13-重复实现审计.md](docs/13-重复实现审计.md)：重复造轮子的量化审计（800 函数 / 17 簇 / 6.9% 冗余）与分级解法
 - [docs/14-CGRA编译器方案.md](docs/14-CGRA编译器方案.md)：程序 → 微码的编译器设计（MRRG 建模、II 搜索、影子验证、M0–M4 里程碑）
+- [docs/15-Morpher-II基线.md](docs/15-Morpher-II基线.md)：开源 Morpher 实测（FIR/GEMM II=4，RecMin 锁死在访存回环）+ 对自研编译器的三条约束
 - [docs/04-环境搭建.md](docs/04-环境搭建.md)：工具链版本、安装命令与两个必踩的坑
 - [docs/05-soc-b2.md](docs/05-soc-b2.md)：CVA6 + CGRA SoC 的地址映射、AXI 从机实现、复现步骤
 - [docs/06-linux-b3.md](docs/06-linux-b3.md)：Linux 版 SoC、OpenSBI 补丁、AXI 原子/LR-SC、镜像布局
