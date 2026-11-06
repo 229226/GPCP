@@ -33,6 +33,7 @@
  *   [1094] DMRS c_init sym1  [1095] k0 used by the PDSCH
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
+#include "../include/soc_io.h"
 #include "../include/gpcp_cgra_rt.h"
 #include "../include/ldpc_bg2.h"
 #include "pdcch_luts.h"
@@ -160,8 +161,6 @@ static int32_t (*llr)[ZC] = (int32_t (*)[ZC])LLR_BASE;
 static int32_t *g_all = (int32_t *)GATH_BASE;
 static int32_t *b_all = (int32_t *)BOUT_BASE;
 
-static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
-static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t errs, runs, dmas;

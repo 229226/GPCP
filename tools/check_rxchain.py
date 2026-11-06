@@ -21,6 +21,7 @@ Result area (32-bit words):
 
 import sys
 from pathlib import Path
+from checklib import parse_dump, words32
 
 SLOTS = 4
 NPES = 16
@@ -99,28 +100,13 @@ def golden_slot(s):
     return res
 
 
-def parse(path):
-    st = {}
-    for line in Path(path).read_text().splitlines():
-        t = line.split()
-        if not t:
-            continue
-        if t[0] == "word":
-            st.setdefault("words", []).append(int(t[2], 16))
-        elif t[0] == "cycles":
-            st["cycles"] = int(t[1])
-        elif t[0] == "timeout":
-            st["timeout"] = int(t[1])
-        elif t[0] == "exit_code":
-            st["exit_code"] = int(t[1], 16)
-    return st
 
 
 def main():
     if len(sys.argv) != 2:
         print("usage: check_rxchain.py <dump>")
         return 2
-    st = parse(sys.argv[1])
+    st = parse_dump(sys.argv[1])
     if st.get("timeout", 1):
         print("[FAIL] simulation timed out")
         return 1

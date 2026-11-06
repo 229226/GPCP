@@ -32,6 +32,7 @@
  *   [12] errors/timeouts   [13] 0x600D
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
+#include "../include/soc_io.h"
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
@@ -46,8 +47,6 @@
 #define ITERS            8
 #define LCG_SEED         1u
 
-static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
-static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 #define SPAD(bank, word)  (CGRA_BASE + GPCP_SPAD_ADDR((bank), (word)))

@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fft_plan as P   # noqa: E402
+from checklib import parse_dump, words32
 
 SIZES = (256, 1024, 4096)
 SEEDS = {256: 0x1357, 1024: 0x2468, 4096: 0x369C}
@@ -48,28 +49,13 @@ def golden(n):
     return re, im, gr, gi, fr, fi
 
 
-def parse(path):
-    st = {}
-    for line in Path(path).read_text().splitlines():
-        t = line.split()
-        if not t:
-            continue
-        if t[0] == "word":
-            st.setdefault("words", []).append(int(t[2], 16))
-        elif t[0] == "cycles":
-            st["cycles"] = int(t[1])
-        elif t[0] == "timeout":
-            st["timeout"] = int(t[1])
-        elif t[0] == "exit_code":
-            st["exit_code"] = int(t[1], 16)
-    return st
 
 
 def main():
     if len(sys.argv) != 2:
         print("usage: check_fft.py <dump>")
         return 2
-    st = parse(sys.argv[1])
+    st = parse_dump(sys.argv[1])
     if st.get("timeout", 1):
         print("[FAIL] simulation timed out")
         return 1

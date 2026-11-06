@@ -20,6 +20,7 @@
  *                        [1048] CN 累计 [1049] BN 累计 [1050] D$失效+重构 累计（分项计时，判据不读）
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
+#include "../include/soc_io.h"
 #include "../include/gpcp_cgra_rt.h"
 #include "pdsch_cn_prog.h"
 #include "pdsch_bn_prog.h"
@@ -60,8 +61,6 @@ static int32_t (*llr)[ZC] = (int32_t (*)[ZC])LLR_BASE;
 static int32_t *g_all = (int32_t *)GATH_BASE;               /* 每块一段：g_all + b*520 */
 static int32_t *b_all = (int32_t *)BOUT_BASE;               /* 每块一段：b_all + b*520 */
 
-static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
-static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 #define SPAD_IDX(bank, word) GPCP_SPAD_IDX((bank), (word))
 

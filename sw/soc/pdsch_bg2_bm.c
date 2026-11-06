@@ -26,6 +26,7 @@
  * against the Python model (same LLR stream, same base graph).
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
+#include "../include/soc_io.h"
 #include "../include/gpcp_cgra_rt.h"
 #include "pdsch_cn_prog.h"
 #include "../include/ldpc_bg2.h"
@@ -53,8 +54,6 @@ static int32_t (*msg)[BG2_MAXD][ZC] = (int32_t (*)[BG2_MAXD][ZC])MSG_BASE;
 static int32_t (*res)[3][ZC] = (int32_t (*)[3][ZC])RES_BASE;
 static int32_t (*llr)[ZC] = (int32_t (*)[ZC])LLR_BASE;
 
-static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
-static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 #define SPAD_IDX(bank, word) GPCP_SPAD_IDX((bank), (word))

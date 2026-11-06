@@ -13,6 +13,7 @@
  *                          [8..] 26 x 20 words (bank-major)
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
+#include "../include/soc_io.h"
 #include "pdsch_bn_prog.h"
 
 #define CGRA_BASE   0x50000000ul
@@ -28,8 +29,6 @@
 
 static int32_t (*bnb)[ZC] = (int32_t (*)[ZC])BNB_BASE;
 
-static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
-static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
 #define SPAD_IDX(bank, word) GPCP_SPAD_IDX((bank), (word))
 
 static uint32_t runs, dmas, errs;

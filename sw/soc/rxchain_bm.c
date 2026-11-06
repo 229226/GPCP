@@ -28,6 +28,7 @@
  */
 
 #include "../include/gpcp_cgra.h"
+#include "../include/soc_io.h"
 
 #define CGRA_BASE    0x50000000ul
 #define PLIC_BASE    0x0C000000ul
@@ -85,8 +86,6 @@ static volatile uint32_t arr_count;      /* array completions (progress, not an 
 static volatile uint32_t bad_traps;
 static uint32_t errs;
 
-static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
-static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
 
 /* --------------------------------------------------------------- trap entry */
 void trap_handler(void)

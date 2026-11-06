@@ -18,6 +18,7 @@
  *   [6..69] decoded bits u^   [70..133] transmitted bits u   [134] 0x600D
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
+#include "../include/soc_io.h"
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
@@ -43,8 +44,6 @@ static int32_t *bet  = (int32_t *)(IN_BASE + 128);
 static int32_t *oblk = (int32_t *)OUT_BASE;
 static int out_idx;
 
-static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
-static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t prog[NODE_CYCLES * NPES];

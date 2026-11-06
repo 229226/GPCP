@@ -15,6 +15,7 @@
  *   [10..17] A[0..3] (re,im)    [18] NCSI     [19] c_init
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
+#include "../include/soc_io.h"
 #include "../include/gpcp_cgra_rt.h"
 
 #define CGRA_BASE     0x50000000ul
@@ -45,8 +46,6 @@
 
 #include "csi_cqi_tab.h"
 
-static inline uint32_t mmio_r(uintptr_t a) { return *(volatile uint32_t *)a; }
-static inline void mmio_w(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t errs, runs, dmas;

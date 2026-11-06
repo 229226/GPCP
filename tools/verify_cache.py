@@ -44,7 +44,7 @@ GLOBAL_GLOBS = [
     "sim/**/*.v", "rtl/**/*.svh", "sim/**/*.cpp", "sim/**/*.cc", "sim/**/*.h",
     "sim/**/*.py", "cgra/**/*.py", "cgra/**/*.v", "cgra/**/*.sv",
     "sw/soc/Makefile", "sw/soc/link.ld", "sw/soc/start.S",
-    "sw/soc/*_prog.h", "sw/soc/pdcch_luts.h",
+    "sw/include/*.h", "sw/soc/*_prog.h", "sw/soc/pdcch_luts.h",
     "sim/soc/Makefile", "Makefile",
     "tools/cgra.py", "tools/verify.sh", "tools/verify_cache.py",
     "build/fft/twiddle.bin", "sim/soc/build/Vgpcp_soc",
