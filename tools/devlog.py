@@ -53,6 +53,12 @@ KINDS = {
     "wait":       "纯等待（与 domain=wait 配对使用）",
 }
 
+# 各 AI 工具的入口文档都必须内联同一份规则块（字节一致），由 check 机械校验。
+ENTRY_DOCS = ["AGENTS.md", "README.md", "CLAUDE.md", "GEMINI.md",
+              ".cursorrules", ".github/copilot-instructions.md"]
+BLOCK_BEGIN = "<!-- devlog-rule:v1 -->"
+BLOCK_END = "<!-- /devlog-rule -->"
+
 CONFIDENCE = {
     "measured": "有明确起止（start/stop 或已记录的时钟）",
     "estimate": "事后按区间与内容推断，误差约 ±25%",
@@ -173,6 +179,42 @@ def cmd_add(a):
             "confidence": a.confidence, "evidence": a.evidence or ""})
 
 
+def rule_block(path):
+    """Return the normalised shared rule block, or None if absent."""
+    if not os.path.exists(path):
+        return None
+    text = open(path, encoding="utf-8").read()
+    m = re.search(re.escape(BLOCK_BEGIN) + r"(.*?)" + re.escape(BLOCK_END),
+                  text, re.S)
+    if not m:
+        return None
+    return "\n".join(ln.rstrip() for ln in m.group(1).strip().splitlines())
+
+
+def check_entry_docs(errs, warns):
+    """每个 AI 入口文档都必须内联同一份规则块，否则该工具读不到规则。"""
+    blocks = {}
+    for rel in ENTRY_DOCS:
+        fp = os.path.join(ROOT, rel)
+        b = rule_block(fp)
+        if b is None:
+            if os.path.exists(fp):
+                errs.append("%s 存在但缺规则块（%s ... %s）"
+                            % (rel, BLOCK_BEGIN, BLOCK_END))
+            else:
+                warns.append("入口文档缺失：%s（该工具读不到台账规则）" % rel)
+        else:
+            blocks[rel] = b
+    if not blocks:
+        return
+    ref_key = "AGENTS.md" if "AGENTS.md" in blocks else sorted(blocks)[0]
+    ref = blocks[ref_key]
+    for rel, b in sorted(blocks.items()):
+        if b != ref:
+            errs.append("%s 的规则块与 %s 不一致（改了口径没同步？）"
+                        % (rel, ref_key))
+
+
 def cmd_check(a):
     rows = read_rows()
     errs, warns = [], []
@@ -229,6 +271,8 @@ def cmd_check(a):
             if re.match(r"^(docs?|devlog)\b", subj, re.I):
                 continue
             warns.append("提交 %s 没有工时记录：%s" % (h, subj[:46]))
+
+    check_entry_docs(errs, warns)
 
     for w in warns:
         print("WARN  %s" % w)

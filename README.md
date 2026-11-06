@@ -5,6 +5,9 @@
 
 > **接手开发请先读 [`AGENTS.md`](AGENTS.md)**：现状、硬规矩（15 条踩坑规则）、调试方法论、
 > 以及一条命令的全量验收 `bash tools/verify.sh quick|full`（`make verify` / `make verify-full`）。
+>
+> **每次开发都要记账**（耗时 + 领域，见 §10 与文末"开发规则"），`make devcheck` 是门禁。
+> 各 AI 工具入口：`CLAUDE.md` / `GEMINI.md` / `.cursorrules` / `.github/copilot-instructions.md`。
 
 ## 当前状态：M0 / B2 完成，L1 数据面 + DMA 双缓冲完成，B3 进行中
 
@@ -163,3 +166,47 @@ riscv64-unknown-elf-gcc --specs=/usr/lib/picolibc/riscv64-unknown-elf/picolibc.s
 1. **B3 收尾**：以更小的内核/更快的仿真跑到 BusyBox 用户态，验证 `/dev/mem` 访问 CGRA；
 2. **B4**：srsRAN 参考实现 + free5GC 端到端；
 3. 硬件侧：CGRA 加 DMA 描述符环、scratchpad、8×8 扩展。
+
+## 开发规则（人与 AI 共同遵守）
+
+<!-- devlog-rule:v1 -->
+### 强制规则：开发工时台账
+
+每次开发都必须记录**这项任务花了多久**与**它属于哪个领域**：写 RTL、做综合、验证测试、
+写软件（裸机 C / 驱动）、写微码、写协议模型、搭基建、写文档 —— 都算开发。
+
+单一事实来源是 `docs/dev-log.csv`，工具是 `tools/devlog.py`。**不要手写 CSV**，用工具。
+
+```bash
+python3 tools/devlog.py start <domain> "<任务>"        # 开工立即记
+python3 tools/devlog.py stop  --commit <hash> --evidence "<周期数 / 门数 / [OK] 行>"
+python3 tools/devlog.py add --domain <domain> --kind <kind> --minutes N \
+        --task "<任务>" --commit <hash> --confidence measured|estimate|backfill
+python3 tools/devlog.py report                         # 按领域 / 类型 / 天 / 周汇总
+make devcheck                                          # 提交前必须 0 error
+```
+
+`domain`（写什么）：`arch` `rtl` `microcode` `model` `sw` `verif` `synth` `pd` `infra` `doc` `wait`
+`kind`（为什么花时间）：`feature` `fix` `infra` `experiment` `doc` `wait`
+
+**四条不可协商：**
+1. 功能 / 修复 / 基建提交都必须有台账行，`commit` 填提交哈希（多个用 `;` 分隔）。
+2. 必须有 `evidence`（周期数、门数、`[OK]`、PASS 汇总至少一项），否则按**未完成**处理。
+3. 精度不得伪装：`estimate`（事后估算 ±25%）不许写成 `measured`（有明确起止）。
+4. 负结果也要记（`kind=experiment`，可以没有 commit）——它比成功的实验更能防止重复踩坑。
+
+**口径细节**（wall-clock 到验收通过；纯等待单列 `domain=wait`；并行按投入比例不重复计；
+单条 ≤3 h 否则拆分；跨领域必须拆成多条）：见 `AGENTS.md` §10。
+
+### 完成定义（DoD）
+
+一个任务要同时满足三条才算完成，缺一条不算：
+1. 相关门绿 —— `make verify-smart`，或对应的 `make -C sim/soc run-*`；
+2. `make devcheck` **0 error**；
+3. 文档与实测数字同步（`AGENTS.md` §2 的数字、`docs/11` 的基线与变更记录）。
+<!-- /devlog-rule -->
+
+各 AI 工具的入口都内联了同一份规则块：`CLAUDE.md`（Claude Code）、
+`GEMINI.md`（Gemini CLI）、`.cursorrules`（Cursor）、
+`.github/copilot-instructions.md`（Copilot）、`README.md`（本文件），
+`AGENTS.md` 是唯一事实来源。`make devcheck` 会校验它们始终一致。

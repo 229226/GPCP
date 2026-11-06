@@ -390,12 +390,49 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 ## 10. 开发工时台账（2026-11-06 定）
 
-**为什么记**：估算下一个任务靠的是同类任务的均值，不是感觉；返工黑洞（`fix` 与
-`experiment` 占比）只有记账才看得见；阶段复盘时"这周到底干了什么"要能一句话回答，
-且每个数字都能追到提交与日志。
+<!-- devlog-rule:v1 -->
+### 强制规则：开发工时台账
 
-**单一事实来源**：`docs/dev-log.csv`（append-only、进 git、可 diff）。工具是
-`tools/devlog.py`，它只做录入规范化与审计，**不发明数据**。
+每次开发都必须记录**这项任务花了多久**与**它属于哪个领域**：写 RTL、做综合、验证测试、
+写软件（裸机 C / 驱动）、写微码、写协议模型、搭基建、写文档 —— 都算开发。
+
+单一事实来源是 `docs/dev-log.csv`，工具是 `tools/devlog.py`。**不要手写 CSV**，用工具。
+
+```bash
+python3 tools/devlog.py start <domain> "<任务>"        # 开工立即记
+python3 tools/devlog.py stop  --commit <hash> --evidence "<周期数 / 门数 / [OK] 行>"
+python3 tools/devlog.py add --domain <domain> --kind <kind> --minutes N \
+        --task "<任务>" --commit <hash> --confidence measured|estimate|backfill
+python3 tools/devlog.py report                         # 按领域 / 类型 / 天 / 周汇总
+make devcheck                                          # 提交前必须 0 error
+```
+
+`domain`（写什么）：`arch` `rtl` `microcode` `model` `sw` `verif` `synth` `pd` `infra` `doc` `wait`
+`kind`（为什么花时间）：`feature` `fix` `infra` `experiment` `doc` `wait`
+
+**四条不可协商：**
+1. 功能 / 修复 / 基建提交都必须有台账行，`commit` 填提交哈希（多个用 `;` 分隔）。
+2. 必须有 `evidence`（周期数、门数、`[OK]`、PASS 汇总至少一项），否则按**未完成**处理。
+3. 精度不得伪装：`estimate`（事后估算 ±25%）不许写成 `measured`（有明确起止）。
+4. 负结果也要记（`kind=experiment`，可以没有 commit）——它比成功的实验更能防止重复踩坑。
+
+**口径细节**（wall-clock 到验收通过；纯等待单列 `domain=wait`；并行按投入比例不重复计；
+单条 ≤3 h 否则拆分；跨领域必须拆成多条）：见 `AGENTS.md` §10。
+
+### 完成定义（DoD）
+
+一个任务要同时满足三条才算完成，缺一条不算：
+1. 相关门绿 —— `make verify-smart`，或对应的 `make -C sim/soc run-*`；
+2. `make devcheck` **0 error**；
+3. 文档与实测数字同步（`AGENTS.md` §2 的数字、`docs/11` 的基线与变更记录）。
+<!-- /devlog-rule -->
+
+
+### 为什么记
+
+估算下一个任务靠的是同类任务的均值，不是感觉；返工黑洞（`fix` 与 `experiment` 占比）
+只有记账才看得见；阶段复盘时"这周到底干了什么"要能一句话回答，且每个数字都能追到
+提交与日志。
 
 ### 两个正交维度
 
@@ -403,57 +440,53 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 
 | 维度 | 取值 | 回答的问题 |
 |---|---|---|
-| `domain` 领域 | `arch` 架构/方案、`rtl` RTL、`microcode` CGRA 微码与查表头、`model` 协议模型、`sw` 裸机 C/驱动、`verif` 验证测试、`synth` 综合时序面积、`pd` 物理设计、`infra` 工具链与仿真设施、`doc` 文档、`wait` 纯等待 | **写什么** |
-| `kind` 类型 | `feature` 新功能、`fix` 修缺陷、`infra` 基建流程、`experiment` 探索（含负结果）、`doc` 文档、`wait` 等待 | **为什么花时间** |
+| `domain` 领域 | 见上块（`arch` `rtl` `microcode` `model` `sw` `verif` `synth` `pd` `infra` `doc` `wait`） | **写什么** |
+| `kind` 类型 | `feature` `fix` `infra` `experiment` `doc` `wait` | **为什么花时间** |
 
 一条记录只有一个主 `domain`。跨领域就**拆成多条**（模型 3 h + 硬件 4 h + checker 1 h
 是三条，不是一条 8 h）—— 这个拆分正是本规则的价值所在。
 
 ### 计时口径（不按这个记，数据不可比）
 
-1. **wall-clock**：从动手到**验收通过**，含调试、返工、等待二进制的零碎时间。
-2. **不含纯等待**：后台回归/夜间长跑期间若在做别的任务，时间记到那个任务；
-   若只是干等，单独记 `domain=wait, kind=wait`。总时长因此不会虚高。
+1. **wall-clock**：从动手到**验收通过**，含调试、返工、等二进制的零碎时间。
+2. **不含纯等待**：后台回归/夜间长跑期间若在做别的任务，时间记到那个任务；若只是干等，
+   单独记 `domain=wait, kind=wait`。总时长因此不会虚高。
 3. **并行按投入比例**，不重复计数。总和可以小于墙钟，不可以大于墙钟。
-4. **精度必须标注**：`measured`（有起止）/ `estimate`（±25%）/ `backfill`（追溯基线）。
-   **`estimate` 不得写成 `measured`**，`backfill` 不得被引用为实测。
+4. **精度必须标注**：`measured` / `estimate`（±25%）/ `backfill`（追溯基线）。
+   `estimate` 不得写成 `measured`，`backfill` 不得被引用为实测。
 5. **单条不超过 3 h**，超了说明中途穿插了别的活，必须拆。
 
-### 三条硬规则
+### `check` 校验什么（门禁，不是装饰）
 
-1. **每次开发必须有记录**：功能/修复/基建提交都必须至少有一条台账，`commit` 字段
-   写上哈希（多个用 `;`）。提交前跑 `make devcheck`，**0 error** 才算完。
-2. **必须有 evidence**：周期数、门数、`[OK]` 行、PASS 汇总，至少一项。
-   没有证据的任务按"未完成"处理 —— 台账不是感受记录。
-3. **负结果也要记**：`kind=experiment`，无提交也记。删掉的实验（如 MCS 校准前提
-   不成立）比成功的更能防止下次重复踩坑。
-
-`check` 会校验：枚举合法、`minutes` 与起止自洽（±5 min）、每日合计 ≤ 24 h、
-最近 15 个非文档提交都有归属。**它是门禁，不是装饰**。
-
-### 命令
-
-```bash
-python3 tools/devlog.py start rtl "CGRA 乘法器流水化"    # 开工
-python3 tools/devlog.py stop --commit abc1234 --evidence "run-fftprobe [OK]"  # 收工
-python3 tools/devlog.py add --domain model --kind experiment --minutes 11 \
-        --task "MCS 表校准（前提不成立）" --confidence estimate
-python3 tools/devlog.py report            # 按领域 / 类型 / 每天
-python3 tools/devlog.py report --week     # 按 ISO 周
-python3 tools/devlog.py domains          # 查枚举定义
-make devcheck                            # 门禁
-```
+枚举合法 · `minutes` 与起止自洽（±5 min）· 每日合计 ≤ 24 h · 最近 15 个非文档提交
+都有归属（`devlog:` / `docs:` 开头豁免）· **六个入口文档的规则块字节一致**。
 
 ### 首个基线（2026-11-05 21:40 → 11-06 01:45，19 条）
 
-| 领域 | 时长 | 占比 |
-|---|---|---|
-| `sw` 裸机 C | 1.4 h / 6 条（均值 14 min） | 34.7% |
-| `infra` 工具链与仿真 | 1.3 h / 3 条（均值 26 min） | 31.8% |
-| `model` 协议模型 | 1.0 h / 8 条（均值 8 min） | 25.3% |
-| `wait` 等待 | 0.2 h | 5.3% |
-| `verif` 验证 | 0.1 h | 2.9% |
+| 领域 | 时长 | 个均 | 占比 |
+|---|---|---|---|
+| `sw` 裸机 C | 1.4 h / 6 条 | 14 min | 34.7% |
+| `infra` 工具链与仿真 | 1.3 h / 3 条 | **26 min** | 31.8% |
+| `model` 协议模型 | 1.0 h / 8 条 | 8 min | 25.3% |
+| `wait` 等待 | 0.2 h | 13 min | 5.3% |
+| `verif` 验证 | 0.1 h | 7 min | 2.9% |
 
-结论：**`sw` 与 `model` 的"个均"只有 8–14 min，`infra` 却要 26 min** —— 说明单门
-硬件的边际成本已经很低，真正的开销在工具链改造上，后续排期应据此加权。
-（本批全部为 `estimate`，仅作基线，不作精度统计。）
+结论：`sw` 与 `model` 个均只有 8–14 min，`infra` 却要 26 min —— 单门硬件的边际成本已
+很低，真正的开销在工具链改造上，后续排期据此加权。（本批全为 `estimate`，仅作基线。）
+
+### 入口文档同步机制
+
+上面那份规则块是**同一份字节**，内联在下面 6 个文件里，覆盖主流 AI 工具的读取入口：
+
+| 文件 | 谁读它 |
+|---|---|
+| `AGENTS.md` | Codex / 通用 agent（**唯一事实来源**） |
+| `README.md` | 人 + 会读 README 的 agent |
+| `CLAUDE.md` | Claude Code |
+| `GEMINI.md` | Gemini CLI |
+| `.cursorrules` | Cursor |
+| `.github/copilot-instructions.md` | GitHub Copilot |
+
+`devcheck` 会比对六处的规则块：**任何一处改了口径没同步 → error**；文件缺失 → warn。
+改规则时先改 `AGENTS.md`，再把同一块复制到其余文件（清单在 `tools/devlog.py` 的
+`ENTRY_DOCS`）。
