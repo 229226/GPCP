@@ -18,3 +18,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-06,01:09,01:20,11,model,experiment,MCS 表校准尝试（负结果）：80 bit TB 实际码率 0.077，4 dB 也能解 64QAM，前提不成立，脚本已删除,,estimate,无提交（有意）
 2026-11-06,01:20,01:32,12,model,fix,修 nr_pusch.py 丢失 P2 的 rnti 参数（本地旧副本覆盖导致 4 个门失败）,98575da,estimate,54 门全绿 793 s
 2026-11-06,01:32,01:45,13,wait,wait,等待全量回归（后台跑，期间未做别的任务）,,estimate,54 passed / 0 failed / 793 s
+2026-11-06,08:33,08:38,5,infra,infra,开发工时台账：CSV 数据 + devlog.py(start/stop/add/report/check) + AGENTS.md §10 计时口径 + devcheck 门禁；回填通宵批次,1a0eb0a,measured,回填 19 条 4.1 h；devcheck 0 error 0 warn；start/stop 与重复 start 拒绝已自检

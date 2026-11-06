@@ -136,6 +136,7 @@ def cmd_stop(a):
     mins = to_min(end) - to_min(rec["start"])
     if mins < 0:                       # 跨零点
         mins += 24 * 60
+    mins = max(1, mins)                # 不足 1 min 记 1：0 会被 check 判非法
     rec.update({"end": end, "minutes": mins,
                 "commit": a.commit or "", "evidence": a.evidence or "",
                 "confidence": "measured"})
