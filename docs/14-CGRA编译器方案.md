@@ -232,3 +232,93 @@ CGRA-ME 的 II 最低但只能处理最内层循环；CGRA-Flow 是唯一直接�
 **一句话**：现成工具解决的是「有循环、有自己的硬件」的通用场景；我们的问题是
 「小 DFG + 特殊 ISA + 512 拍硬约束」，通用后端的适配成本高于自建。
 但 Morpher 已经把「该怎么做」写成了开源实现，照它的结构做，不要重新发明。
+
+---
+
+## 13. Morpher 实测（2026-11-06）
+
+环境：`morpher-env:latest`（Ubuntu 20.04 + LLVM 10，宿主机 g++ 12 / LLVM 14 不能直接编）。
+源码 `~/morpher`（2026-10-26 已构建，本次未重建）。
+
+### 13.1 工具链可用（已实跑）
+
+```
+cgra_xml_mapper -d array_add_PartPredDFG.xml -x 4 -y 4 -j hycube_original_mem.json -t HyCUBE_4REG
+→ Initial target II = 4 (ResMin 2, RecMin 4)
+→ Map Success with II = 4!!!      耗时 9 s
+→ hycube_simulator: Matches 243, Mismatches 0, "Simulation test passed!!!"
+```
+
+历史批次（`BATCH_RESULT.md`，13 个 benchmark）：**12 PASS / 0 mismatch**，仅 hpcg 失败
+（其自述不在保证范围内）。结论：**映射器 + 仿真器是成熟可用的**，不是玩具。
+
+### 13.2 ADL 能描述我们的寄存器模型（已实测）
+
+把 `ARCH.PE.REGS` 从 `[NR,ER,WR,SR,TREG]` 扩成 8 个通用寄存器 `r0..r7`，
+并把新寄存器接入四个方向的 crossbar 输入（`CONNECTIONS` 同步补全），重跑同一 DFG：
+
+```
+→ Map Success with II = 4!!!      耗时 25 s（搜索空间变大，仍同一 II）
+```
+
+**结论：PE 的寄存器数量是可参数化的**，不需要改 C++。这是本次最有价值的正面发现。
+（产物：`~/morpher/gpcp_8reg.json`）
+
+### 13.3 算子集是硬编码的（负面）
+
+`Morpher_CGRA_Mapper/src/arch/PE.cpp` 的 `getNonMEMIns()` / `getMEMIns()` 里逐条
+`supportedOPs["ADD"] = 1;` —— **不是从 ADL 的 `OPS` 块读取**。全仓库
+`grep -i "accumul\|MAC"` **零命中**：没有累加器，也就没有 `MAC/LACC/MACL`。
+
+与我们 16 条指令的对应关系：
+
+| 我们的 op | Morpher | 说明 |
+|---|---|---|
+| NOP / ADD / SUB / MUL / AND / XOR | ✅ 同名 | 直接对应 |
+| SHR / SHL | ✅ ARS / LS | 语义一致 |
+| LD / ST | △ LOAD / STORE、OLOAD / OSTORE | 它们是「先算地址再访存」，我们是 `{bank,word}` 立即数 |
+| MOV | △ | 可用 ADD rz 模拟 |
+| **MAX / MIN** | ❌ | 无（LDPC min-sum 必需） |
+| **MAC / LACC / MACL** | ❌ | 无累加器；只能用 MUL+ADD 代替（每算子多 1 拍、多 1 个寄存器） |
+
+即 **9/16 直接可用**，缺的 3 条恰好是我们性能模型的核心。
+
+### 13.4 位流是 HyCUBE 专用的（负面，但可绕）
+
+`printHyCUBEBinary()` 位于 `src/mapper/PathFinderMapper.cpp:3355`，**单个函数**，
+且只在 `PEType == "HyCUBE_4REG"` 时调用；输出是无结构的 `.bin`（array_add 为 5943 B），
+**没有可读的调度表**（node → PE/cycle）。
+
+两条绕法：
+1. 在该函数旁加一个 CSV 导出（估计 <100 行 C++），再用我们的 Python 打包成 32 位编码；
+2. 直接读它的 `.bin` 格式（需要读打包源码，不如方案 1）。
+
+### 13.5 还有一处结构性不匹配
+
+Morpher 的模型是**带硬件循环**的：DFG 里会出现 `BR / JUMPL / MOVC`，映射按
+"启动间隔 II" 输出稳态核。我们的阵列**没有分支硬件**，程序是一次性 ≤512 拍。
+要对接必须把循环展开成直线代码，并丢掉分支节点 —— 这一步得自己加。
+
+### 13.6 结论
+
+| 问题 | 答案 |
+|---|---|
+| Morpher 本身能用吗？ | **能**，实测 II=4 / 243 匹配 / 9 s；历史 12/13 benchmark 全绿 |
+| 能描述我们的 PE 吗？ | **能**（8 寄存器实测通过），ADL 只描述结构，不描述算子语义 |
+| 能直接产出我们的微码吗？ | **不能**：算子表硬编码、无累加器、无分支模式、位流专用 |
+| 适配工作量 | **2–3 周**：ADL 2–3 天（已验证）+ 加算子 1–2 天 + 调度导出与打包 3–5 天 + 对拍验证 3–5 天 |
+| 对比自研 M0+M1 | 自研约 1.5 周且纯 Python、无 C++ fork、与 `rule_map` 无缝 |
+
+### 13.7 建议（双轨）
+
+1. **把 Morpher 当 II 基准线**（1 天）：对我们关心的 kernel（matmul / FIR / FFT 蝶形）
+   写标准 C 版本，用它的 Docker 跑出参考 II 与 PE 利用率，作为自研映射器的验收标尺。
+   —— 这是它最大的即时价值，且零改造。
+2. **自研 M0 照常做**（3 天），M1 的路由实现直接参考它的 `PathFinderMapper.cpp`
+   （开源可读，MRRG + 协商拥塞的完整实现）。
+3. **只有当**自研映射质量明显不达标、且时间紧时，才做 13.6 里那 2–3 周的完整适配；
+   届时要接受"长期维护一个 C++ fork"的代价。
+
+**一句话**：Morpher 证明了"这条路能走通"，而且它的映射器质量有 13 个 benchmark 背书；
+但它的 ISA 模型是 HyCUBE 式的（无累加器、有分支、专用位流），
+把我们的 ISA 塞进去要动 C++ 且要长期跟进上游 —— 不如借它的**方法**和**基准线**。
