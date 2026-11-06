@@ -22,3 +22,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-06,08:40,08:43,3,doc,doc,把开发工时台账规则同步到所有 AI 入口文档,12386d5,measured,6 处字节一致；篡改一字 error、删文件 warn 已实测；gen_ai_docs.py sync 幂等且能传播
 2026-11-06,09:07,09:22,15,arch,infra,审计开发过程中的重复造轮子并给出解法,03bc22e;ea16614,measured,17 簇 / 1092 冗余行；26 份 mmio + 6 份 parse 归并；44/45 .bin 逐字节不变；回归 54/0/1322 s
 2026-11-06,09:23,09:34,11,arch,feature,CGRA 编译器方案（docs/14）：复用 rule_map 的 ISA 仿真与 DFG 映射，补 MRRG 放置/路由/模调度/分段/主机编排；M0-M4 里程碑,ea16614,measured,16 kernel/1250 行手写微码作为收益基准；M0 定为 3 天且要求与手写 matmul 逐位相同
+2026-11-06,09:43,09:44,1,arch,experiment,调研开源 CGRA 编译器对本项目 ISA 的可用性,73d1907,measured,5 个候选对比表 + 3 处 ISA 不匹配点；结论：借方法不搬代码
