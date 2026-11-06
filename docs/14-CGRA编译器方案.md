@@ -186,3 +186,49 @@ void k(const short *x, int *y) {          // 定长、无指针算术
 
 **建议的上手顺序**：先做 M0（3 天，只接 DFG 不接 C），当天就能验证"编译器产物 = 手写微码"；
 有这条 bit-exact 基线之后，再上路由和前端。反过来（先做前端）会在没有正确性保证的情况下堆功能。
+
+---
+
+## 12. 开源工具调研：能用吗？（2026-11-06）
+
+**结论先行：没有能直接吃下本项目 ISA 的现成编译器；但 Morpher 的架构描述语言（ADL）最接近，
+它的映射方法学应当照搬。建议「借方法 + 按需借交叉验证」，不整体采用任何一套。**
+
+> 说明：以下判断来自各项目 README / 论文，**尚未实际构建验证**（构建成本见末列）。
+
+| 工具 | 前端 | 架构描述 | 映射算法 | 输出 | 构建代价 | 对本项目的适配度 |
+|---|---|---|---|---|---|---|
+| **Morpher**（NUS, ICCAD'25） | 注释 C → LLVM DFG | **ADL：模块 / 端口 / 连接，支持多跳** | 模调度 + MRRG + PathFinder / SA / LISA | 配置位流 + 周期精确 sim | LLVM 10 + g++≤7（有 Docker） | **最接近**：ADL 可描述任意阵列；但需补 link 语义与 DMA ring，2–4 周才出第一个 kernel |
+| **CGRA-Flow**（OpenCGRA） | C/C++ → LLVM pass | GUI/JSON（tile、FU、crossbar、SPM） | exhaustive + heuristic | schedule.json + PyMTL RTL | Docker + GUI；RTL2Layout 需 ~100 GB 内存 | 中：它的 tile 是 crossbar + 多 FU，与「每 PE 每拍一条指令 + link 寄存器」不同构 |
+| **Compigra**（EPFL, ARC'25） | C/C++ via Polygeist | 定制 MLIR dialect | **ILP（Gurobi）** | CGRA assembly | LLVM+MLIR+Polygeist ~130 GB + Gurobi 许可 | 低（近期）：映射质量高，但需重写 arch model 与 asm writer |
+| **CGRA-ME**（Toronto） | C → LLVM IR | XML | **ILP，II 最低** | bitstream | C++ | 中低：横评显示**只支持最内层循环** |
+| **ML-CGRA**（PNNL） | ML 模型 | 4×4 / 8×8 | MLIR lowering | CGRA 配置 | MLIR | 低：面向 DL 算子，不覆盖 FFT/MMSE/LDPC |
+
+横评（arXiv 2502.19114，2025）在 PolyBench 上对比 CGRA-Flow / Morpher / CGRA-ME / Pillars：
+CGRA-ME 的 II 最低但只能处理最内层循环；CGRA-Flow 是唯一直接支持多维循环的；
+**所有工具链都存在 PE 利用率不足**，复杂循环（三角求解）多家找不到好映射。
+
+### 12.1 为什么不能直接拿来用
+
+我们的 ISA 有三处不在这些工具的默认模型里：
+
+1. **link 寄存器的更新语义**：`MAC` 不更新 link、`MACL` 才更新 —— 这是为「移位 / 累加同拍」
+   设计的，通用 FU 模型没有这个副作用；
+2. **无硬件循环 + 512 拍程序上限**：它们用 modulo scheduling 产出稳态核，靠硬件循环计数器
+   跑迭代；我们必须在编译期展开或切段，由主机 / DMA 驱动；
+3. **scratchpad 的 bank/word 编码 + 描述符环双缓冲**：地址是 `{bank[4:0], word[4:0]}`，
+   数据搬运由 DMA 环完成。Morpher 的 decoupled access-execute 模型接近，但要重写内存模型。
+
+### 12.2 建议
+
+1. **照搬方法学，不搬代码**：MRRG + PathFinder 协商拥塞 + II 递增，正是 `§4 D1/D2` 的方案；
+   用 `rule_map.py` 的 DFG 与 ISA 仿真作底座，Python 约 600 行即可覆盖 M0/M1。
+2. **前端先用 pycparser**：kernel 是 affine 小循环，DFG 只有几十到上百节点；
+   MLIR/LLVM 全套（130 GB + Gurobi）与收益不成比例。
+3. **可选的交叉验证**：用 Morpher 的 Docker 跑同一 DFG，比较 II 与 PE 利用率，
+   作为「我们的映射器是否够好」的外部标尺；**不进 CI**，只在阶段评审时跑。
+4. **升级触发条件**：出现 >200 节点或含复杂控制流的 kernel 时，再评估 Compigra（ILP/CFG 处理）。
+
+**一句话**：现成工具解决的是「有循环、有自己的硬件」的通用场景；我们的问题是
+「小 DFG + 特殊 ISA + 512 拍硬约束」，通用后端的适配成本高于自建。
+但 Morpher 已经把「该怎么做」写成了开源实现，照它的结构做，不要重新发明。
