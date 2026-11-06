@@ -488,5 +488,11 @@ make devcheck                                          # 提交前必须 0 error
 | `.github/copilot-instructions.md` | GitHub Copilot |
 
 `devcheck` 会比对六处的规则块：**任何一处改了口径没同步 → error**；文件缺失 → warn。
-改规则时先改 `AGENTS.md`，再把同一块复制到其余文件（清单在 `tools/devlog.py` 的
-`ENTRY_DOCS`）。
+改规则时**只改 `AGENTS.md` 里那一块**，然后：
+
+```bash
+python3 tools/gen_ai_docs.py sync    # 传播到其余五个入口（幂等）
+make devcheck                        # 复核六处一致
+```
+
+清单在 `tools/devlog.py` 的 `ENTRY_DOCS`；新增 AI 工具时加一行即可。
