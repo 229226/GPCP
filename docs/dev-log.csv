@@ -27,3 +27,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-06,10:04,10:27,23,arch,experiment,用 Morpher 为我们的 kernel 建立 II 基准线,5f62f2a,measured,FIR II=4/18s/1975-0；GEMM II=4/47s/1035-0；FFT 52 节点 >6min 未收敛；常量下标断言
 2026-11-06,10:52,10:53,1,arch,infra,ADL 保真度修正：P0 寄存器模型 / P1 存储 / P2 后端设计,2c1a414,measured,P0 段错误(139)、P1 断言(134)、P3 已记录；ADL 保真度表 8 项
 2026-11-06,,,32,arch,experiment,Morpher 接入：调度导出补丁 + 自写 ADL 与保真度实测,67048d8;7d4b6d3;2c1a414,estimate,schedule.csv 导出成功；自有 ADL 映射 II=8/40s；P0 段错误 P1 断言
+2026-11-06,,,14,arch,experiment,Morpher 后端 v0：schedule→我们的微码，实测 0/20 可编码,269fc56,estimate,no_op 8 / no_addr 3 / no_route 8；结论转向只借映射器
