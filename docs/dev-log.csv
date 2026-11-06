@@ -1,0 +1,20 @@
+date,start,end,minutes,domain,kind,task,commit,confidence,evidence
+2026-11-05,21:40,22:27,47,infra,infra,回归并行化：wait -n 池 -j6 + 两处共享写冲突（twiddle.bin / prach.td）,1950d5f,estimate,47 门 601 s（原串行 2704 s）
+2026-11-05,22:27,22:50,23,infra,infra,输入指纹缓存 verify_cache.py + smart 档 + 回归分层规则,870a251,estimate,二次运行 47 SKIP / 1 s
+2026-11-05,22:50,22:58,8,infra,infra,nightly 长跑框架；worktree 缺 third_party 改为逐目录 symlink,2f14568,estimate,31+ case 全 OK
+2026-11-05,22:58,23:06,8,model,feature,64QAM 模型放开 Qm=6（链路已参数化），补 MCS 20/24 × rv × SNR 自检点,edb44d7,estimate,selftest 绿
+2026-11-05,23:06,23:12,6,sw,feature,pdsch_full_bm.c -DQAM64；修 Chase 块 #ifdef QAM16 未覆盖 QAM64 的真 bug,edb44d7,estimate,"rv=2 修复后 1040/1040、3,270,885 周期"
+2026-11-05,23:12,23:24,12,model,feature,PUSCH 360 点 IDFT 定点化：Q20 cos 表 + int64 累加（避开软浮点）,abf6cd9,estimate,误差 <0.2 LSB
+2026-11-05,23:24,23:31,7,sw,feature,pusch_bm.c -DTP 变换预编码；checker 幅值门改为 0.6-1.6 比例,abf6cd9,estimate,"7,995,677 周期、1040/1040"
+2026-11-05,23:31,23:40,9,model,feature,CSI-RS 模型：SNR 参考修正三次（有源 RE 数、|h|^2、LS 归一化）,c953ec4,estimate,selftest 2 dB 门内
+2026-11-05,23:40,23:51,11,sw,feature,csi_bm.c：1 符号 FFT → 80 点 LS → 差分噪声 → CQI 表；排 csi_bm.elf 抢走 pusch_tp 配方的 Makefile 规则错位,c953ec4,estimate,"476,691 周期、CQI 14/8/3 三点一致"
+2026-11-05,23:51,23:58,7,verif,infra,verify.sh 接入 run-csi，门数改为相对表述（避免每加一门改八处）,c953ec4;a8ec735,estimate,slow 档 50 门基线，787 s
+2026-11-05,23:58,00:04,6,model,feature,2x2 MIMO 链路模型（MMSE + LDPC）；修 sigma^2 量纲与 h_est 分离,d0fc40e,estimate,0 dB 32 错 → 5 dB 全对
+2026-11-06,00:04,00:08,4,sw,feature,mimo_ce_bm.c：两层 FDM 正交导频 → 双天线 FFT → 4 个 LS 系数,ec8db86,estimate,"1,015,472 周期、仅 1 LSB 差"
+2026-11-06,00:08,00:16,8,sw,feature,mimo_bm.c 定点 2x2 MMSE + checker 按 SNR 分层容差,6ffeb90,estimate,"720/720 逐位一致、1,246,524 周期"
+2026-11-06,00:16,01:05,49,sw,feature,PUSCH 单传输 RV：TD 尾部 rv 字 + 运行时 k0；修模型 pusch_golden 单传输忽略 rv 的真 bug,86dfedc,estimate,run-pusch RV=0/2 均 [OK]
+2026-11-06,01:05,01:07,2,model,feature,PDCCH REG bundle 交织 / CCE 映射（38.211 7.3.2.3-4）,1789442;917a6db,estimate,排列/可逆/铺满/n_shift 四项自检
+2026-11-06,01:07,01:09,2,model,feature,上行闭环功控 nr_pc.py（38.213 7.1.1）,a8ab7e8,estimate,三种路损 16-24 步收敛
+2026-11-06,01:09,01:20,11,model,experiment,MCS 表校准尝试（负结果）：80 bit TB 实际码率 0.077，4 dB 也能解 64QAM，前提不成立，脚本已删除,,estimate,无提交（有意）
+2026-11-06,01:20,01:32,12,model,fix,修 nr_pusch.py 丢失 P2 的 rnti 参数（本地旧副本覆盖导致 4 个门失败）,98575da,estimate,54 门全绿 793 s
+2026-11-06,01:32,01:45,13,wait,wait,等待全量回归（后台跑，期间未做别的任务）,,estimate,54 passed / 0 failed / 793 s

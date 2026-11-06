@@ -387,3 +387,73 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 改 `sim/soc/Makefile` 则四门全部失效。全量预热 `smart --force`：
 **47 passed / 0 failed / 562 s**；紧接着第二次 `smart`：
 **0 passed / 47 skipped / 1 s**（47 条缓存全部 `valid`，29 个全局输入文件）。
+
+## 10. 开发工时台账（2026-11-06 定）
+
+**为什么记**：估算下一个任务靠的是同类任务的均值，不是感觉；返工黑洞（`fix` 与
+`experiment` 占比）只有记账才看得见；阶段复盘时"这周到底干了什么"要能一句话回答，
+且每个数字都能追到提交与日志。
+
+**单一事实来源**：`docs/dev-log.csv`（append-only、进 git、可 diff）。工具是
+`tools/devlog.py`，它只做录入规范化与审计，**不发明数据**。
+
+### 两个正交维度
+
+只记"领域"不够 —— "写 RTL 花 3 h"和"修 RTL 的 bug 花 3 h"对下次估算意义完全相反。
+
+| 维度 | 取值 | 回答的问题 |
+|---|---|---|
+| `domain` 领域 | `arch` 架构/方案、`rtl` RTL、`microcode` CGRA 微码与查表头、`model` 协议模型、`sw` 裸机 C/驱动、`verif` 验证测试、`synth` 综合时序面积、`pd` 物理设计、`infra` 工具链与仿真设施、`doc` 文档、`wait` 纯等待 | **写什么** |
+| `kind` 类型 | `feature` 新功能、`fix` 修缺陷、`infra` 基建流程、`experiment` 探索（含负结果）、`doc` 文档、`wait` 等待 | **为什么花时间** |
+
+一条记录只有一个主 `domain`。跨领域就**拆成多条**（模型 3 h + 硬件 4 h + checker 1 h
+是三条，不是一条 8 h）—— 这个拆分正是本规则的价值所在。
+
+### 计时口径（不按这个记，数据不可比）
+
+1. **wall-clock**：从动手到**验收通过**，含调试、返工、等待二进制的零碎时间。
+2. **不含纯等待**：后台回归/夜间长跑期间若在做别的任务，时间记到那个任务；
+   若只是干等，单独记 `domain=wait, kind=wait`。总时长因此不会虚高。
+3. **并行按投入比例**，不重复计数。总和可以小于墙钟，不可以大于墙钟。
+4. **精度必须标注**：`measured`（有起止）/ `estimate`（±25%）/ `backfill`（追溯基线）。
+   **`estimate` 不得写成 `measured`**，`backfill` 不得被引用为实测。
+5. **单条不超过 3 h**，超了说明中途穿插了别的活，必须拆。
+
+### 三条硬规则
+
+1. **每次开发必须有记录**：功能/修复/基建提交都必须至少有一条台账，`commit` 字段
+   写上哈希（多个用 `;`）。提交前跑 `make devcheck`，**0 error** 才算完。
+2. **必须有 evidence**：周期数、门数、`[OK]` 行、PASS 汇总，至少一项。
+   没有证据的任务按"未完成"处理 —— 台账不是感受记录。
+3. **负结果也要记**：`kind=experiment`，无提交也记。删掉的实验（如 MCS 校准前提
+   不成立）比成功的更能防止下次重复踩坑。
+
+`check` 会校验：枚举合法、`minutes` 与起止自洽（±5 min）、每日合计 ≤ 24 h、
+最近 15 个非文档提交都有归属。**它是门禁，不是装饰**。
+
+### 命令
+
+```bash
+python3 tools/devlog.py start rtl "CGRA 乘法器流水化"    # 开工
+python3 tools/devlog.py stop --commit abc1234 --evidence "run-fftprobe [OK]"  # 收工
+python3 tools/devlog.py add --domain model --kind experiment --minutes 11 \
+        --task "MCS 表校准（前提不成立）" --confidence estimate
+python3 tools/devlog.py report            # 按领域 / 类型 / 每天
+python3 tools/devlog.py report --week     # 按 ISO 周
+python3 tools/devlog.py domains          # 查枚举定义
+make devcheck                            # 门禁
+```
+
+### 首个基线（2026-11-05 21:40 → 11-06 01:45，19 条）
+
+| 领域 | 时长 | 占比 |
+|---|---|---|
+| `sw` 裸机 C | 1.4 h / 6 条（均值 14 min） | 34.7% |
+| `infra` 工具链与仿真 | 1.3 h / 3 条（均值 26 min） | 31.8% |
+| `model` 协议模型 | 1.0 h / 8 条（均值 8 min） | 25.3% |
+| `wait` 等待 | 0.2 h | 5.3% |
+| `verif` 验证 | 0.1 h | 2.9% |
+
+结论：**`sw` 与 `model` 的"个均"只有 8–14 min，`infra` 却要 26 min** —— 说明单门
+硬件的边际成本已经很低，真正的开销在工具链改造上，后续排期应据此加权。
+（本批全部为 `estimate`，仅作基线，不作精度统计。）

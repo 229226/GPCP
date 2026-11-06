@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam
+.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam
 
 all: test
 
@@ -23,6 +23,13 @@ verify-slow:
 # Only the gates touched by the current git diff (~0.5-3 min)
 verify-changed:
 	bash tools/verify.sh changed
+
+# 开发工时台账：校验（每个功能/修复提交都要有记录）与汇总
+devcheck:
+	python3 tools/devlog.py check
+
+devreport:
+	python3 tools/devlog.py report
 
 # SNR waterfall of the sample-level SSB receiver (first quantitative PHY metric)
 snr-sweep: all sw-check
