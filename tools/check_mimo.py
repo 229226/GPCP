@@ -73,6 +73,7 @@ def main(path, snr, seed):
     chk(vals[19] == 4 * CE.NDATA, "bit count = %d, want %d"
         % (vals[19], 4 * CE.NDATA))
     chk(vals[17] > 0, "regularisation is zero")
+    chk(vals[7] > 0, "MMSE tile never ran on the CGRA")
 
     hw_bits = []
     for i in range(CE.NDATA):
@@ -93,8 +94,8 @@ def main(path, snr, seed):
             chk(err < 0.4, "h[%d][%d] hw=%s model=%s rel_err=%.0f%%"
                 % (rx, l, a, b, err * 100))
 
-    print("  probe: %d errors, %d cycles, lambda=%d"
-          % (vals[1], vals[2], vals[17]))
+    print("  probe: %d errors, %d cycles, lambda=%d, mmse_runs=%d"
+          % (vals[1], vals[2], vals[17], vals[7]))
     print("  probe: hard bits %d/%d match (tolerance %d at %.0f dB)"
           % (len(ref_bits) - len(bad), len(ref_bits), tol, snr))
     print("  probe: TB crc=%s tb_err=%d after the float reference decode"

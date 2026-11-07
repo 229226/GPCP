@@ -23,6 +23,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "../include/gpcp_cgra_rt.h"
+#include "mmse_2x1_prog.h"      /* 编译器生成的 MMSE 相关微码（cgra/tools/gen_kernel_prog.py） */
 
 #define CGRA_BASE     0x50000000ul
 #define EXIT_ADDR     0x40010000ul
@@ -88,6 +89,58 @@ static int64_t cm_re(int64_t ar, int64_t ai, int64_t br, int64_t bi)
 { return ar * br - ai * bi; }
 static int64_t cm_im(int64_t ar, int64_t ai, int64_t br, int64_t bi)
 { return ar * bi + ai * br; }
+
+/* ---------------------------------------------------------------- CGRA MMSE
+ * b = H^H y 由 CGRA 的 mmse_2x1 tile 计算：一次 16 个 RE（一个 PE 一个 RE），
+ * 每个 RE 喂 8 个 Q15 叶子（h1r/h1i/h2r/h2i/y1r/y1i/y2r/y2i），回 2 个 Q30 汇
+ * （numr/numi）。板级验证时 *16 还原到 C 参考的 FRONT_GAIN 量纲，因此 2x2 求解
+ * 与纯 C 版逐位一致。
+ */
+#define MBANKS (MMSE_2X1_BANK_HI - MMSE_2X1_BANK_LO + 1)
+/* DMA 直接读 RAM，编译器看不见 -> 必须 volatile */
+static volatile int32_t mleaf[MBANKS][16];
+static uint32_t mmse_runs, mmse_dmas;
+
+static void mmse_prog_load(void)
+{
+    if (gpcp_cgra_imem_load(CGRA_BASE, mmse_2x1_prog,
+                            MMSE_2X1_PROG_CYCLES * NPES) != 0)
+        errs++;
+}
+
+static void mmse_dma(uintptr_t ram, uint32_t spad, uint32_t words, uint32_t dir)
+{
+    /* 显式序列：清 done -> 回读确认 -> 等 busy 落 -> 启动 -> 轮询本次 done。
+     * rt_dma_run 会在 "start 被 busy 忽略" 时误判成功，所以不用它。 */
+    uint32_t g = 0;
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DMA_CTRL, GPCP_CGRA_DMA_CLRDONE);
+    while (mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE)
+        if (++g > 100000u) { errs++; return; }
+    g = 0;
+    while (mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_BUSY)
+        if (++g > 200000u) { errs++; return; }
+    gpcp_cgra_dma_start(CGRA_BASE, ram, spad, words, 0, dir, 32, 16);
+    g = 0;
+    while (!(mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE))
+        if (++g > 200000u) { errs++; return; }
+    mmse_dmas++;
+}
+
+static void mmse_run(void)
+{
+    /* 32 拍的阵列太短：必须"清 DONE + 回读确认 + 轮询本次 DONE"；
+     * 否则会读到上一轮遗留的 done 而提前读 spad（实测 l=1 的 b 恒等于 l=0）。 */
+    uint32_t g = 0;
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_CTRL, GPCP_CGRA_CTRL_CLRDONE);
+    while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_DONE)
+        if (++g > 100000u) { errs++; break; }
+    gpcp_cgra_array_start(CGRA_BASE, 0, MMSE_2X1_PROG_CYCLES);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    g = 0;
+    while (!(mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_DONE))
+        if (++g > 200000u) { errs++; break; }
+    mmse_runs++;
+}
 
 int main(void)
 {
@@ -157,29 +210,98 @@ int main(void)
     int64_t dd = detr * detr + deti * deti;
     if (dd <= 0) { dd = 1; errs++; }
 
-    /* ---- per data RE: b = H^H y, solve, hard bits ---- */
+    /* ---- data-RE index table（pilots every 4th RE）---- */
+    int dre[NDATA], nd = 0;
+    for (int rr = 0; rr < NRE && nd < NDATA; rr++)
+        if (rr % 4 != 0) dre[nd++] = rr;
+
+    /* ---- b = H^H y on the CGRA: 16 REs per tile run, one run per layer ---- */
+    static int64_t b0r_a[NDATA], b0i_a[NDATA], b1r_a[NDATA], b1i_a[NDATA];
+    int cg_ok = 1;
+    {
+        /* 量纲守卫：mul 是 16x16，且 4 项 Q30 求和不能溢出 int32 */
+        int64_t hmax = 0, ymax = 0;
+        for (int rx = 0; rx < 2; rx++)
+            for (int l = 0; l < 2; l++) {
+                int64_t a = hre[rx][l] < 0 ? -hre[rx][l] : hre[rx][l];
+                int64_t b = him[rx][l] < 0 ? -him[rx][l] : him[rx][l];
+                if (a > hmax) hmax = a;
+                if (b > hmax) hmax = b;
+            }
+        for (int i = 0; i < NDATA; i++) {
+            uint32_t ip = rev4(BIN0 + (uint32_t)dre[i]);
+            for (int rx = 0; rx < 2; rx++)
+                for (int q = 0; q < 2; q++) {
+                    int64_t v = sp[rx][2 * ip + q];
+                    if (v < 0) v = -v;
+                    if (v > ymax) ymax = v;
+                }
+        }
+        if (hmax > 32767 || ymax > 32767 || 4 * hmax * ymax > 0x7FFFFFFFLL)
+            cg_ok = 0;
+    }
+    if (cg_ok) {
+        mmse_prog_load();
+        for (int base = 0; base < NDATA; base += 16) {
+            int n = NDATA - base; if (n > 16) n = 16;
+            for (int l = 0; l < 2; l++) {
+                for (int k = 0; k < 16; k++) {
+                    if (k < n) {
+                        uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
+                        mleaf[MMSE_2X1_BANK_H1R - MMSE_2X1_BANK_LO][k] = (int32_t)hre[0][l];
+                        mleaf[MMSE_2X1_BANK_H1I - MMSE_2X1_BANK_LO][k] = (int32_t)him[0][l];
+                        mleaf[MMSE_2X1_BANK_H2R - MMSE_2X1_BANK_LO][k] = (int32_t)hre[1][l];
+                        mleaf[MMSE_2X1_BANK_H2I - MMSE_2X1_BANK_LO][k] = (int32_t)him[1][l];
+                        mleaf[MMSE_2X1_BANK_Y1R - MMSE_2X1_BANK_LO][k] = (int32_t)sp[0][2 * ip];
+                        mleaf[MMSE_2X1_BANK_Y1I - MMSE_2X1_BANK_LO][k] = (int32_t)sp[0][2 * ip + 1];
+                        mleaf[MMSE_2X1_BANK_Y2R - MMSE_2X1_BANK_LO][k] = (int32_t)sp[1][2 * ip];
+                        mleaf[MMSE_2X1_BANK_Y2I - MMSE_2X1_BANK_LO][k] = (int32_t)sp[1][2 * ip + 1];
+                    } else {
+                        for (int j = 0; j < MBANKS; j++) mleaf[j][k] = 0;
+                    }
+                }
+                mmse_dma((uintptr_t)&mleaf[0][0],
+                         GPCP_SPAD_IDX(MMSE_2X1_BANK_LO, 0), MBANKS * 16, 0);
+                mmse_run();
+                /* 直接从 spad 主机窗口读汇：MMIO 非缓存，且 mmse_run 已等到 DONE，
+                 * 绕开 "DMA 写 RAM -> CPU 命中旧 D$ 行" 的异步清空竞态。 */
+                for (int k = 0; k < n; k++) {
+                    int64_t br = ((int64_t)(int32_t)mmio_r(
+                                      CGRA_BASE + GPCP_SPAD_ADDR(MMSE_2X1_BANK_NUMR, k)))
+                                 << FRONT_GAIN;
+                    int64_t bi = ((int64_t)(int32_t)mmio_r(
+                                      CGRA_BASE + GPCP_SPAD_ADDR(MMSE_2X1_BANK_NUMI, k)))
+                                 << FRONT_GAIN;
+                    if (l == 0) { b0r_a[base + k] = br; b0i_a[base + k] = bi; }
+                    else        { b1r_a[base + k] = br; b1i_a[base + k] = bi; }
+                }
+            }
+        }
+    }
+
+    /* ---- per data RE: b = H^H y (CGRA) -> solve -> hard bits ---- */
     int bit_err = 0;
     for (int i = 0; i < NDATA; i++) {
-        int r = -1, seen = 0;
-        for (int rr = 0; rr < NRE; rr++) {
-            if (rr % 4 == 0) continue;
-            if (seen == i) { r = rr; break; }
-            seen++;
-        }
+        int r = dre[i];
         uint32_t ip = rev4(BIN0 + (uint32_t)r);
         int64_t y0r = (int64_t)sp[0][2 * ip] << FRONT_GAIN;
         int64_t y0i = (int64_t)sp[0][2 * ip + 1] << FRONT_GAIN;
         int64_t y1r = (int64_t)sp[1][2 * ip] << FRONT_GAIN;
         int64_t y1i = (int64_t)sp[1][2 * ip + 1] << FRONT_GAIN;
 
-        int64_t b0r = cm_re(hre[0][0], -him[0][0], y0r, y0i)
-                    + cm_re(hre[1][0], -him[1][0], y1r, y1i);
-        int64_t b0i = cm_im(hre[0][0], -him[0][0], y0r, y0i)
-                    + cm_im(hre[1][0], -him[1][0], y1r, y1i);
-        int64_t b1r = cm_re(hre[0][1], -him[0][1], y0r, y0i)
-                    + cm_re(hre[1][1], -him[1][1], y1r, y1i);
-        int64_t b1i = cm_im(hre[0][1], -him[0][1], y0r, y0i)
-                    + cm_im(hre[1][1], -him[1][1], y1r, y1i);
+        int64_t b0r, b0i, b1r, b1i;
+        if (cg_ok) {
+            b0r = b0r_a[i]; b0i = b0i_a[i]; b1r = b1r_a[i]; b1i = b1i_a[i];
+        } else {                              /* 量纲越界时回退到纯 C，保证仍可诊断 */
+            b0r = cm_re(hre[0][0], -him[0][0], y0r, y0i)
+                + cm_re(hre[1][0], -him[1][0], y1r, y1i);
+            b0i = cm_im(hre[0][0], -him[0][0], y0r, y0i)
+                + cm_im(hre[1][0], -him[1][0], y1r, y1i);
+            b1r = cm_re(hre[0][1], -him[0][1], y0r, y0i)
+                + cm_re(hre[1][1], -him[1][1], y1r, y1i);
+            b1i = cm_im(hre[0][1], -him[0][1], y0r, y0i)
+                + cm_im(hre[1][1], -him[1][1], y1r, y1i);
+        }
 
         /* num0 = b0*g11 - b1*g01 ; num1 = b1*g00 - b0*g10 */
         int64_t n0r = b0r * g11r - cm_re(b1r, b1i, g01r, g01i);
@@ -205,6 +327,7 @@ int main(void)
     out[1] = errs;
     out[2] = mtime() - t0;
     out[6] = 0x600Du;
+    out[7] = mmse_runs;          /* >0 证明 b = H^H y 真的跑在 CGRA 上 */
     for (int rx = 0; rx < 2; rx++)
         for (int l = 0; l < 2; l++) {
             out[8 + 4 * rx + 2 * l] = (uint32_t)(int32_t)hre[rx][l];

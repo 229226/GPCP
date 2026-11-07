@@ -152,3 +152,12 @@ $(BUILD)/sib1_bm.elf: link_e2e_bm.c start.S link.ld pdcch_luts.h pdsch_cn_prog.h
 # PUCCH format 0: reuses the PRACH correlation microcode header
 $(BUILD)/pucch_bm.elf: pucch_bm.c start.S link.ld prach_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S pucch_bm.c -o $@
+
+# 真实 kernel tile：由 L1/L2 编译器生成（mmse_2x1 供 run-mimo 的 b = H^H y）
+mmse_2x1_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/mmse_2x1.yaml
+	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/mmse_2x1.yaml
+
+fft_butterfly_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/fft_butterfly.yaml
+	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/fft_butterfly.yaml
+
+$(BUILD)/mimo_bm.elf: mmse_2x1_prog.h
