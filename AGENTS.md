@@ -268,9 +268,11 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     0 dB 时噪声抬高峰值仍有幅值差，但软比特符号全对、LDPC 照常收敛。
     要彻底消除低 SNR 偏差，需给 FFT 加块浮点/AGC，或按峰值归一化 TD 样本。
 11. ✅ **本轮补齐（深度标注）**：HARQ/RV 软合并**已落硬件**（`run-pdsch-harq`）；
-    PDCCH/DCI、Zc=64 分页 + 分层 LDPC 调度、2×2 MIMO 层映射/预编码/MMSE、
-    MAC PDU + HARQ 实体均为**模型级**（`tools/nr_*.py`，各自 selftest 通过），
-    未落 CGRA。各文件头注释列了刻意保留的简化（Polar 可靠性序列用自然序、
+    PDCCH/DCI、Zc=64 分页 + 分层 LDPC 调度、2×2 MIMO 层映射/预编码、MAC PDU +
+    HARQ 实体均为**模型级**（`tools/nr_*.py`，各自 selftest 通过），未落 CGRA；
+    **2×2 MMSE 的向量相关 `b = H^H y` 已落 CGRA**（`run-mimo` 用编译器生成的
+    `mmse_2x1` tile，25 dB 720/720 硬判、`mmse_runs=24`，见 `docs/18` §11.5），
+    标量 1/det 与 2×2 求解仍在 CVA6。各文件头注释列了刻意保留的简化（Polar 可靠性序列用自然序、
     无 REG/CCE 交织与 PC bit、BG1 官方移位表未内置、H 假设接收端已知）。
 12. **仍未做**：BG1 官方 Table 5.3.2-2 移位表（+ 层调度微码）、上行
     CGRA 基准（PUSCH 的 **DFT-s-OFDM 变换预编码变体**尚未落硬件）、RLC/PDCP/SDAP/RRC、QEMU 设备模型与 free5GC 联调（端到端 ping/iperf）。
