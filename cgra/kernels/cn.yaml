@@ -1,0 +1,13 @@
+name: cn
+kind: cn
+desc: "LDPC 校验节点：min1/min2/sign（直连 rule_map.schedule_cn）"
+out: sw/soc/pdsch_cn_prog.h
+# 实际微码由 schedule_cn 生成（10 条边成对归约，20 个提升行一次跑完），
+# 与仓库 pdsch_cn_prog.h 逐字节一致。布局：bank 0..9 = 边、bank 30 = 哨兵、bank 10/11/12 = min1/min2/sign。
+leaves:
+  "e0..e9": { bank: "0..9" }
+  sent:   { bank: 30 }
+sinks:
+  min1: { bank: 10 }
+  min2: { bank: 11 }
+  sign: { bank: 12 }
