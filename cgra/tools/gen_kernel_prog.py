@@ -27,6 +27,7 @@ import cgra as cgra_mod                       # noqa: E402
 from cgra import NPES, enc, spad_idx         # noqa: E402
 import rule_map as rm                         # noqa: E402
 import kernel_spec as ks                      # noqa: E402
+import bank_alloc as ba                       # noqa: E402  L2-A：区间图着色 bank 分配器
 
 
 # ---------------------------------------------------------------- 字格式化
@@ -190,7 +191,33 @@ def run_spec(spec_path, out=None, rows=None):
     # dfg
     dfg = ks.build_dfg(spec)
     instances = spec.get("instances", 16)
-    mc, lv, sink_addrs, banks = rm.schedule(dfg, instances)
+    # ---- L2-A：两阶段 bank 分配（淘汰 leaf_banks/sink_bank 硬编码的 6 上限）----
+    plan_leaves, plan_sinks = _plan_assign(dfg)
+    mc0, _lv, _sa, _b, liv, max_regs = rm.schedule(
+        dfg, instances, banks=plan_leaves, sink_addrs=plan_sinks,
+        return_liveness=True)
+    end = mc0.cycles - 1
+    # 叶子常驻 [0, end]（输入单次写入）；汇常驻 [st, end]（写回后由校验器读）。
+    # 二者在着色意义下两两重叠 -> 强制分配不同 bank，匹配 spad 单次初始化模型。
+    liv_alloc = {}
+    for n in dfg.leaves():
+        liv_alloc[n] = (0, end)
+    for n in dfg.sinks():
+        liv_alloc[n] = (liv.get(n, (0, end))[0], end)
+    # hints = YAML 里显式写的 bank（强制绑定，复现固定布局）
+    hints = {}
+    for fld in ("leaves", "sinks"):
+        for name, bank in ks.expand_mapping(spec.get(fld, {})).items():
+            if bank is not None:
+                hints[name] = bank
+    alloc = ba.alloc_banks(liv_alloc, hints=hints)
+    leaf_banks_final = {n: b for n, b in alloc.items() if n in set(dfg.leaves())}
+    sink_banks_final = {n: b for n, b in alloc.items() if n in set(dfg.sinks())}
+    # ---- 第二阶段：用分配好的 bank 发射 ----
+    mc, lv, sink_addrs, banks = rm.schedule(
+        dfg, instances, banks=leaf_banks_final, sink_addrs=sink_banks_final)
+    # ---- L2-D：资源断言（铁律：不过就 exit 1）----
+    _assert_resources(mc, leaf_banks_final, sink_banks_final, max_regs)
     e, nvals = check_dfg(mc, dfg, banks, sink_addrs, instances)
     if e:
         print(f"[{spec_path}] 自检失败：{len(e)}/{nvals} 个值不同，拒绝生成", file=sys.stderr)
@@ -201,6 +228,28 @@ def run_spec(spec_path, out=None, rows=None):
     print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
           f"自检 {nvals} 值 0 差异")
     return 0
+
+
+# ---------------------------------------------------------------- L2 辅助：规划期 bank / 资源断言
+def _plan_assign(dfg):
+    """规划期临时 bank 分配：叶子与汇各给唯一 bank（不触发 6 上限），仅用于算生命区间。"""
+    leaves = {n: i for i, n in enumerate(dfg.leaves())}
+    sinks = {n: 100 + i for i, n in enumerate(dfg.sinks())}
+    return leaves, sinks
+
+
+def _assert_resources(mc, leaf_banks, sink_banks, max_regs):
+    """L2-D：生成前硬断言，不过就 SystemExit。"""
+    if mc.cycles > 512:
+        raise SystemExit(f"微码 {mc.cycles} 拍超过 IMEM 上限 512（≈8192 字 / 16 PE）")
+    maxbank = 0
+    for b in list(leaf_banks.values()) + list(sink_banks.values()):
+        maxbank = max(maxbank, b)
+    if maxbank > 31:
+        raise SystemExit(f"bank {maxbank} 越界（spad_idx 只保留 5 位，必须 <=31）")
+    if max_regs > 8:
+        raise SystemExit(f"单 PE 活跃寄存器 {max_regs} 超过 8 个（r0..r7）")
+    return
 
 
 def run_from_cgra(func, out=None):

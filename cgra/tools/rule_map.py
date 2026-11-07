@@ -162,31 +162,45 @@ def sink_bank(name):
     return None
 
 
-def schedule(dfg, instances=16):
+def _touch(liv, name, cyc):
+    """记录 name 在 cyc 拍被使用（首次/末次），用于 L2-A 的生命区间。"""
+    if liv[name][0] is None:
+        liv[name][0] = cyc
+    liv[name][1] = cyc
+
+
+def schedule(dfg, instances=16, banks=None, sink_addrs=None, return_liveness=False):
     """规则映射：一个实例一条串行指令流，跑在自己的 PE 上。
 
-    返回 (Microcode, 层号表, 汇地址表, 叶子地址表)：汇地址表记录每个汇写到哪个 bank，
-    未约定地址的汇（通用 DFG 里的中间汇）按出现顺序分到 bank 26 起。
+    返回 (Microcode, 层号表, 汇地址表, 叶子地址表)；return_liveness=True 时额外返回
+    (生命区间表, 最大活跃寄存器数)。
+
+    banks / sink_addrs：若给定则使用（L2-A 由 bank_alloc 分配）；否则沿用旧的
+    leaf_banks / sink_bank 硬编码（与 rule_map.main 的 --dfg/--bn 路径保持兼容）。
     """
     mc = Microcode()
     lv = dfg.levels()
-    banks = leaf_banks(dfg)
-    # 汇地址必须在实例循环之前定好（否则每个实例会分到不同 bank）
-    sink_addrs = {}
-    for n in dfg.sinks():
-        b = sink_bank(n)
-        if b is None:
-            # 通用 DFG：按出现顺序分到 bank 26 起。注意 spad_idx 只保留
-            # bank[4:0]（页内地址），所以不能用到 32 以上。
-            b = 26 + len(sink_addrs)
-            if b > 31:
-                raise SystemExit("通用 DFG 的汇太多（最多 6 个，bank 26..31）")
-        sink_addrs[n] = b
+    if banks is None:
+        banks = leaf_banks(dfg)
+    if sink_addrs is None:
+        sink_addrs = {}
+        for n in dfg.sinks():
+            b = sink_bank(n)
+            if b is None:
+                # 通用 DFG：按出现顺序分到 bank 26 起。注意 spad_idx 只保留
+                # bank[4:0]（页内地址），所以不能用到 32 以上。
+                b = 26 + len(sink_addrs)
+                if b > 31:
+                    raise SystemExit("通用 DFG 的汇太多（最多 6 个，bank 26..31）")
+            sink_addrs[n] = b
     topo = dfg.topo()
     idx = {n: i for i, n in enumerate(topo)}
     # 每个值的"最后一个消费者"位置（叶子/算子都用它判断寄存器何时可以释放）
     lastuse = {n: (max(idx[d] for d in dfg.succs(n)) if dfg.succs(n) else idx[n])
                for n in topo}
+    liveness = {n: [None, None] for n in topo}
+    max_regs = 0
+    end = 0
     for w in range(instances):
         cyc = 0
         reg_of = {}                       # 只记录"算子结果 -> 寄存器"
@@ -207,6 +221,7 @@ def schedule(dfg, instances=16):
                     raise SystemExit(f"寄存器不够：{n} 取 {s} 时无空闲寄存器")
                 r = free.pop()
                 mc.put(cyc, w, "ld", dst=r, imm=spad_idx(bank, w))
+                _touch(liveness, s, cyc)
                 cyc += 1
                 srcs.append(r)
                 tmp.append(r)
@@ -217,8 +232,10 @@ def schedule(dfg, instances=16):
             b = srcs[1] if len(srcs) > 1 else "zero"
             imm = 31 if op == "shr" else 0
             mc.put(cyc, w, op, a=a, b=b, dst=dst, imm=imm)
+            _touch(liveness, n, cyc)
             cyc += 1
             reg_of[n] = dst
+            max_regs = max(max_regs, 8 - len(free))   # 当前活跃寄存器数
             free.extend(tmp)              # 叶子寄存器用完即还
             for s, _o in dfg.preds(n):    # 上游结果的最后一个消费者就是本算子
                 if s in reg_of and lastuse[s] <= idx[n]:
@@ -226,8 +243,21 @@ def schedule(dfg, instances=16):
             if not dfg.succs(n):          # 汇：写回 spad
                 bank = sink_addrs[n]
                 mc.put(cyc, w, "st", a=dst, imm=spad_idx(bank, w))
+                _touch(liveness, n, cyc)
                 cyc += 1
                 free.append(reg_of.pop(n))
+        end = max(end, cyc)
+    # 叶子常驻 spad 整个程序（输入由外部一次性写入，自检只初始化一次）
+    for l in dfg.leaves():
+        if liveness[l][0] is None:
+            liveness[l] = [0, end]
+        else:
+            liveness[l][1] = end
+    liv = {n: (liveness[n][0] if liveness[n][0] is not None else 0,
+               liveness[n][1] if liveness[n][1] is not None else 0)
+           for n in topo}
+    if return_liveness:
+        return mc, lv, sink_addrs, banks, liv, max_regs
     return mc, lv, sink_addrs, banks
 
 

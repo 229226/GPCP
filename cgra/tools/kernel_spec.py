@@ -78,11 +78,20 @@ def _expand_keys(expr):
 
 
 def expand_mapping(mapping):
-    """{key: {bank: X}} → {name: bank(int)}，key 与 bank 并行展开且长度一致。"""
+    """{key: {bank: X}} → {name: bank(int|None)}，key 与 bank 并行展开且长度一致。
+
+    bank 缺省（写法 `{}` 或不写）时值为 None，表示「交给 bank_alloc 自动分配」（L2-A）。
+    """
     out = {}
     for k, v in mapping.items():
-        bank_expr = v["bank"] if isinstance(v, dict) and "bank" in v else v
+        bank_expr = v.get("bank") if isinstance(v, dict) else v
         names = _expand_keys(k)
+        if bank_expr is None:
+            for name in names:
+                if name in out:
+                    raise ValueError(f"名字重复：{name!r}")
+                out[name] = None
+            continue
         banks = _expand_range(bank_expr)
         if len(names) != len(banks):
             raise ValueError(
@@ -132,7 +141,7 @@ def validate(spec):
             errs.append(f"{field}: {e}")
             continue
         for name, bank in expanded.items():
-            if not (0 <= bank <= 31):
+            if bank is not None and not (0 <= bank <= 31):
                 errs.append(f"{field} {name} 的 bank {bank} 越界（必须 0..31）")
 
     if kind == "dfg":

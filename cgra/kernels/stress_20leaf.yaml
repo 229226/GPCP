@@ -1,0 +1,27 @@
+name: stress_20leaf
+kind: dfg
+desc: "20 叶子串行求和，验证 bank 分配器区间图着色（旧代码 >6 叶子会 SystemExit）。"
+leaves:
+  a0..a19: {}          # 不写 bank，交给 bank_alloc 自动分配
+ops:
+  - {name: s1, op: add, a: a0, b: a1}
+  - {name: s2, op: add, a: s1, b: a2}
+  - {name: s3, op: add, a: s2, b: a3}
+  - {name: s4, op: add, a: s3, b: a4}
+  - {name: s5, op: add, a: s4, b: a5}
+  - {name: s6, op: add, a: s5, b: a6}
+  - {name: s7, op: add, a: s6, b: a7}
+  - {name: s8, op: add, a: s7, b: a8}
+  - {name: s9, op: add, a: s8, b: a9}
+  - {name: s10, op: add, a: s9, b: a10}
+  - {name: s11, op: add, a: s10, b: a11}
+  - {name: s12, op: add, a: s11, b: a12}
+  - {name: s13, op: add, a: s12, b: a13}
+  - {name: s14, op: add, a: s13, b: a14}
+  - {name: s15, op: add, a: s14, b: a15}
+  - {name: s16, op: add, a: s15, b: a16}
+  - {name: s17, op: add, a: s16, b: a17}
+  - {name: s18, op: add, a: s17, b: a18}
+  - {name: s19, op: add, a: s18, b: a19}
+# s19 无后继，由 rule_map.DFG.sinks() 自动识别为汇（无需显式列出）
+instances: 16
