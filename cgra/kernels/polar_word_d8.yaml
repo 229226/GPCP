@@ -1,0 +1,11 @@
+name: polar_word_d8
+kind: dfg
+desc: "Polar 编码字间级 d=8：w[i] ^= w[i+8]（原地）"
+leaves:
+  wa: {addr: {base: 0, stride: 1}}
+  wb: {addr: {base: 8, stride: 1}}
+ops:
+  - {name: x, op: xor, a: wa, b: wb}
+sinks:
+  x: {addr: {base: 0, stride: 1}}
+instances: 16

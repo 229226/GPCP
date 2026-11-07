@@ -35,6 +35,7 @@ class DFG:
     def __init__(self):
         self.opcode = {}
         self.imm = {}            # name -> 移位立即数（仅 shr/shl 使用；其余算子为 0）
+        self.addr = {}           # name -> (base, stride)  平坦 spad 地址 = base + stride*instance
         self.order = []
         self.edges = []
 
@@ -194,7 +195,8 @@ def _touch(liv, name, cyc):
     liv[name][1] = cyc
 
 
-def schedule(dfg, instances=16, banks=None, sink_addrs=None, return_liveness=False):
+def schedule(dfg, instances=16, banks=None, sink_addrs=None, addrs=None,
+             return_liveness=False):
     """规则映射：一个实例一条串行指令流，跑在自己的 PE 上。
 
     返回 (Microcode, 层号表, 汇地址表, 叶子地址表)；return_liveness=True 时额外返回
@@ -239,13 +241,18 @@ def schedule(dfg, instances=16, banks=None, sink_addrs=None, return_liveness=Fal
                 if s in reg_of:
                     srcs.append(reg_of[s])
                     continue
-                bank = banks.get(s)
-                if bank is None:
-                    raise SystemExit(f"操作数 {s} 既不在寄存器里也不是已知叶子（v0 不支持 spill）")
+                if addrs and s in addrs:
+                    base, stride = addrs[s]
+                    imm = base + stride * w          # 平坦寻址：base + stride*instance
+                else:
+                    bank = banks.get(s)
+                    if bank is None:
+                        raise SystemExit(f"操作数 {s} 既不在寄存器里也不是已知叶子（v0 不支持 spill）")
+                    imm = spad_idx(bank, w)
                 if not free:
                     raise SystemExit(f"寄存器不够：{n} 取 {s} 时无空闲寄存器")
                 r = free.pop()
-                mc.put(cyc, w, "ld", dst=r, imm=spad_idx(bank, w))
+                mc.put(cyc, w, "ld", dst=r, imm=imm)
                 _touch(liveness, s, cyc)
                 cyc += 1
                 srcs.append(r)
@@ -258,7 +265,10 @@ def schedule(dfg, instances=16, banks=None, sink_addrs=None, return_liveness=Fal
             # 移位立即数：仅 shr/shl 使用 YAML 里声明的 imm（计划书 §6.2 之外的通用需求，
             # 例如 FFT/MMSE 的 Q15 缩放 >>1 / >>15）；其余算子 imm 恒 0。
             imm = dfg.imm.get(n, 0) if op in ("shr", "shl") else 0
-            mc.put(cyc, w, op, a=a, b=b, dst=dst, imm=imm)
+            if op == "neg":                 # 伪算子：sub a=zero b=x
+                mc.put(cyc, w, "sub", a="zero", b=a, dst=dst)
+            else:
+                mc.put(cyc, w, op, a=a, b=b, dst=dst, imm=imm)
             _touch(liveness, n, cyc)
             cyc += 1
             reg_of[n] = dst
@@ -268,8 +278,9 @@ def schedule(dfg, instances=16, banks=None, sink_addrs=None, return_liveness=Fal
                 if s in reg_of and lastuse[s] <= idx[n]:
                     free.append(reg_of.pop(s))
             if not dfg.succs(n):          # 汇：写回 spad
-                bank = sink_addrs[n]
-                mc.put(cyc, w, "st", a=dst, imm=spad_idx(bank, w))
+                sa = sink_addrs[n]
+                imm = (sa[0] + sa[1] * w) if isinstance(sa, tuple) else spad_idx(sa, w)
+                mc.put(cyc, w, "st", a=dst, imm=imm)
                 _touch(liveness, n, cyc)
                 cyc += 1
                 free.append(reg_of.pop(n))

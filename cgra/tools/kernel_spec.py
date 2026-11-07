@@ -35,10 +35,11 @@ def load_spec(path):
 
 # ---------------------------------------------------------------- bank 写法展开
 def _expand_range(expr):
-    """bank 的三种写法 → int 列表：
-       int        -> [int]
-       "lo..hi"   -> list(range(lo, hi+1))
-       [a, b, ..] -> 递归展开
+    """bank/地址的三种写法 → int 列表：
+       int          -> [int]
+       "lo..hi"     -> list(range(lo, hi+1))
+       "lo..hi:step"-> list(range(lo, hi+1, step))   （flat 地址常用步长 2）
+       [a, b, ..]   -> 递归展开
     """
     if isinstance(expr, int):
         return [expr]
@@ -49,8 +50,9 @@ def _expand_range(expr):
         return out
     if isinstance(expr, str):
         if ".." in expr:
-            lo, hi = expr.split("..")
-            return list(range(int(lo), int(hi) + 1))
+            rng, _, step = expr.partition(":")
+            lo, hi = rng.split("..")
+            return list(range(int(lo), int(hi) + 1, int(step) if step else 1))
         return [int(expr)]
     raise ValueError(f"非法 bank 写法: {expr!r}")
 
@@ -103,6 +105,33 @@ def expand_mapping(mapping):
     return out
 
 
+def expand_addr_mapping(mapping):
+    """{key: {addr: {base: X, stride: S}}} → {name: (base, stride)}。
+
+    寻址公式：spad 平坦地址 = base + stride*instance（instance = PE 号）。
+    - `stride: 0` 表示所有 PE 共享同一个字（广播系数，如 FIR 抽头 / 导频）；
+    - `stride: 2` 表示每个 PE 往后挪 2 个字（PRACH 的实虚交错 y 窗口）；
+    - base 支持单值 / "lo..hi" / "lo..hi:step" / 列表，与名字并行展开。
+    带 addr 的叶子/汇不参与 bank 分配（地址是显式平坦地址）。
+    """
+    out = {}
+    for k, v in mapping.items():
+        if not isinstance(v, dict) or "addr" not in v:
+            continue
+        a = v["addr"]
+        bases = _expand_range(a.get("base", 0))
+        stride = int(a.get("stride", 1))
+        names = _expand_keys(k)
+        if len(names) != len(bases):
+            raise ValueError(
+                f"key {k!r} 展开 {len(names)} 个名字，但 addr.base 展开 {len(bases)} 个，长度不一致")
+        for name, base in zip(names, bases):
+            if name in out:
+                raise ValueError(f"名字重复：{name!r}")
+            out[name] = (int(base), stride)
+    return out
+
+
 # ---------------------------------------------------------------- 校验
 IMM_OPS = {"shr", "shl", "ld", "st"}
 
@@ -125,8 +154,8 @@ def validate(spec):
             continue
         n, o = op["name"], op["op"]
         op_names.add(n)
-        if o not in OPS:
-            errs.append(f"op {n!r} 用了非法算子 {o!r}（合法：{sorted(OPS)}）")
+        if o not in OPS and o != "neg":     # neg = 伪算子，降为 sub a=zero b=x
+            errs.append(f"op {n!r} 用了非法算子 {o!r}（合法：{sorted(OPS)} + neg）")
         if o not in IMM_OPS and op.get("imm", 0):
             errs.append(f"op {n!r}({o}) 不允许非零 imm（仅 shr/shl/ld/st 允许）")
 
@@ -143,18 +172,39 @@ def validate(spec):
         for name, bank in expanded.items():
             if bank is not None and not (0 <= bank <= 31):
                 errs.append(f"{field} {name} 的 bank {bank} 越界（必须 0..31）")
+        try:
+            addrs = expand_addr_mapping(m)
+        except ValueError as e:
+            errs.append(f"{field}: {e}")
+            continue
+        inst = int(spec.get("instances", 16))
+        for name, (base, stride) in addrs.items():
+            if expanded.get(name) is not None:
+                errs.append(f"{field} {name} 同时写了 bank 与 addr（只能二选一）")
+            if base < 0 or stride < 0:
+                errs.append(f"{field} {name} 的 addr base/stride 不能为负")
+            elif base + stride * (inst - 1) > 1023:
+                errs.append(f"{field} {name} 的 addr 越界："
+                            f"{base}+{stride}*{inst - 1} > 1023（imm 只有 10 位）")
 
     if kind == "dfg":
         leaves = set(expand_mapping(spec.get("leaves", {})).keys())
         allnames = op_names | leaves
+        referenced = set()
         for op in spec.get("ops", []):
             for ref in (op.get("a"), op.get("b")):
                 if ref is None:
                     continue
+                referenced.add(ref)
                 if ref not in allnames:
                     errs.append(f"op {op['name']!r} 引用了未声明的名字 {ref!r}")
             if op.get("name") in leaves:
                 errs.append(f"op 名字 {op['name']!r} 与叶子名冲突")
+        # sinks 里声明的名字必须真的是「没有后继的算子」，否则地址会静默落到分配器
+        actual_sinks = op_names - referenced
+        declared = set(expand_mapping(spec.get("sinks", {})).keys())
+        for name in sorted(declared - actual_sinks):
+            errs.append(f"sinks 里的 {name!r} 不是 DFG 的汇（它还有后继 / 不是算子名）")
     return errs
 
 
@@ -166,6 +216,8 @@ def build_dfg(spec):
     for name in leaves:
         # 叶子无前驱；给占位 opcode，schedule 会跳过无前驱节点、只当 LD 源
         d.node(name, "add")
+    # flat 地址（base + stride*instance）：长数组/广播系数走这里，不用 bank
+    d.addr.update(expand_addr_mapping(spec.get("leaves", {})))
     for op in spec.get("ops", []):
         n = op["name"]
         # imm 仅 shr/shl 使用（Q15 缩放）；op.get("imm", 0) 缺省即 0

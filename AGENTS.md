@@ -260,6 +260,10 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
    CN 172 拍单程序，台架逐值 0 差异，见 `docs/10` §11~§15）；**剩余**：把 `Program.set`
    当 IR 做"规整 kernel 的约束映射器"，CGRA-ME 仍给不出可靠落点（退火不可用）；
    再谈 MLIR/CGRA-Flow（`docs/01` §2.3）。
+   **2026-11-08 更新**：L1/L2 编译器已覆盖协议全部 CGRA kernel（BN/CN/FFT 蝶形/
+   chnest/MMSE/PRACH/BPSK/Polar 节点 + 9 级 Polar 编码），`gen_kernel_prog.py --all`
+   一次编 20 个、全部 0 差异；PRACH 编译器微码在 `run-prach-cgra` 上 **139/139 逐位一致**
+   （129 拍 = 16 PE × 8 tap 部分和 + CPU 归约）。仍缺：QAM 解调落 CGRA、多级 FFT 编排。
 10. **定点 FFT 增益的真相（已定位，勿再误判）**：`ssb_fft.inc` 没有 AGC / 块浮点
     缩放，增益取决于**时域波形峰值**。step-1 的恒定 `+QPSK` 导频全同相 → PAPR
     高 → 触发额外缩放，实测幅值只有浮点模型的 0.2×（曾误判为引擎固有缺陷）。

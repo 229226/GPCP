@@ -88,15 +88,18 @@ def _sym(name):
 
 
 def _write_dfg(f, spec, mc, nvals, nops, nleaves, nsinks, instances,
-               leaf_banks=None, sink_banks=None):
+               leaf_banks=None, sink_banks=None, addrs=None, sink_flat=None):
     sym = _sym(spec.get("name", "kernel"))
     leaf_banks = leaf_banks or {}
     sink_banks = sink_banks or {}
+    addrs = addrs or {}
+    sink_flat = sink_flat or {}
     f.write("/* 由 cgra/tools/gen_kernel_prog.py 生成，勿手改。\n"
             f" * 通用 DFG 调度（rule_map.schedule）：{nops} 算子 / {nleaves} 叶子 / {nsinks} 汇，\n"
             f" * {instances} 个实例各占 1 PE，共 {mc.cycles} 拍 × {NPES} PE。\n"
             f" * 自检：{nvals} 个汇值、0 差异（模型）。\n"
-            f" * 布局：每实例 1 个 spad word（word=实例号），叶子/汇 bank 见下方 BANK_*。 */\n")
+            f" * 布局：bank 叶子/汇 -> word=实例号（BANK_*）；flat 叶子/汇 ->\n"
+            f" *       spad 平坦下标 = BASE + STRIDE*实例号（ADDR_*）。 */\n")
     f.write(f"#ifndef {sym}_PROG_H\n#define {sym}_PROG_H\n\n")
     f.write(f"#define {sym}_PROG_CYCLES {mc.cycles}\n")
     f.write(f"#define {sym}_PROG_PES    {NPES}\n")
@@ -109,6 +112,15 @@ def _write_dfg(f, spec, mc, nvals, nops, nleaves, nsinks, instances,
     if all_banks:
         f.write(f"#define {sym}_BANK_LO {min(all_banks)}\n")
         f.write(f"#define {sym}_BANK_HI {max(all_banks)}\n")
+    # flat 地址：spad 平坦下标 = BASE + STRIDE*instance
+    for n in sorted(addrs):
+        base, stride = addrs[n]
+        f.write(f"#define {sym}_ADDR_{_sym(n)}_BASE {base}\n")
+        f.write(f"#define {sym}_ADDR_{_sym(n)}_STRIDE {stride}\n")
+    for n in sorted(sink_flat):
+        base, stride = sink_flat[n]
+        f.write(f"#define {sym}_ADDR_{_sym(n)}_BASE {base}\n")
+        f.write(f"#define {sym}_ADDR_{_sym(n)}_STRIDE {stride}\n")
     f.write("\n")
     f.write(f"static const unsigned int {sym.lower()}_prog[{mc.cycles} * {NPES}]\n"
             f"    __attribute__((aligned(8))) = {{\n")
@@ -117,16 +129,34 @@ def _write_dfg(f, spec, mc, nvals, nops, nleaves, nsinks, instances,
 
 
 # ---------------------------------------------------------------- 通用 DFG 自检
-def check_dfg(mc, dfg, banks, sink_addrs, instances):
-    """随机叶子值 → 所有汇写回值与黄金模型逐一对账（镜像 rule_map.main 的通用模式）。"""
+def _sink_idx(sa, inst):
+    """汇地址：int = bank（word=instance）；tuple = (base, stride) 平坦地址。"""
+    return (sa[0] + sa[1] * inst) if isinstance(sa, tuple) else spad_idx(sa, inst)
+
+
+def _leaf_idx(l, inst, banks, addrs):
+    return (addrs[l][0] + addrs[l][1] * inst) if l in addrs else spad_idx(banks[l], inst)
+
+
+def check_dfg(mc, dfg, banks, sink_addrs, instances, addrs=None):
+    """随机叶子值 → 所有汇写回值与黄金模型逐一对账（镜像 rule_map.main 的通用模式）。
+
+    先按 **spad 地址** 初始化（不是按「叶子×实例」）：stride=0 的广播叶子、以及
+    地址重叠的叶子因此天然共享同一个随机值，和硬件上"预装一次"的语义一致。
+    """
+    addrs = addrs or {}
     rnd = random.Random(7)
+    n_inst = min(instances, 16)
     spad, exp = {}, {}
-    for inst in range(min(instances, 16)):
+    for inst in range(n_inst):
+        for l in dfg.leaves():
+            idx = _leaf_idx(l, inst, banks, addrs)
+            if idx not in spad:
+                spad[idx] = rnd.randint(-5000, 5000) & 0xFFFFFFFF
+    for inst in range(n_inst):
         vals = {}
         for l in dfg.leaves():
-            v = rnd.randint(-5000, 5000)
-            vals[l] = _s32(v)
-            spad[spad_idx(banks[l], inst)] = v & 0xFFFFFFFF
+            vals[l] = _s32(spad[_leaf_idx(l, inst, banks, addrs)])
         for n in dfg.topo():
             if not dfg.preds(n):
                 continue
@@ -155,10 +185,12 @@ def check_dfg(mc, dfg, banks, sink_addrs, instances):
                 vals[n] = x if _s32(x) > _s32(y) else y
             elif op == "min":
                 vals[n] = x if _s32(x) < _s32(y) else y
+            elif op == "neg":               # 伪算子：sub a=zero b=x
+                vals[n] = _s32(-x)
             else:
                 raise SystemExit(f"通用自检不支持 op {op}")
             if not dfg.succs(n):
-                exp[spad_idx(sink_addrs[n], inst)] = vals[n] & 0xFFFFFFFF
+                exp[_sink_idx(sink_addrs[n], inst)] = vals[n] & 0xFFFFFFFF
     rm.simulate(mc, spad)
     errs = [(i, spad.get(i), w) for i, w in exp.items() if spad.get(i) != w]
     return errs, len(exp)
@@ -207,34 +239,46 @@ def run_spec(spec_path, out=None, rows=None):
     # dfg
     dfg = ks.build_dfg(spec)
     instances = spec.get("instances", 16)
+    # flat 地址（base + stride*instance）：长数组/广播系数；不参与 bank 分配
+    leaf_addrs = ks.expand_addr_mapping(spec.get("leaves", {}))
+    sink_flat = ks.expand_addr_mapping(spec.get("sinks", {}))
+    flat = set(leaf_addrs) | set(sink_flat)
     # ---- L2-A：两阶段 bank 分配（淘汰 leaf_banks/sink_bank 硬编码的 6 上限）----
-    plan_leaves, plan_sinks = _plan_assign(dfg)
+    plan_leaves, plan_sinks = _plan_assign(dfg, skip=flat)
+    plan_sinks = dict(plan_sinks)
+    plan_sinks.update(sink_flat)          # 规划期 flat 汇也要有地址（不参与分配）
     mc0, _lv, _sa, _b, liv, max_regs = rm.schedule(
         dfg, instances, banks=plan_leaves, sink_addrs=plan_sinks,
-        return_liveness=True)
+        addrs=leaf_addrs, return_liveness=True)
     end = mc0.cycles - 1
     # 叶子常驻 [0, end]（输入单次写入）；汇常驻 [st, end]（写回后由校验器读）。
     # 二者在着色意义下两两重叠 -> 强制分配不同 bank，匹配 spad 单次初始化模型。
     liv_alloc = {}
     for n in dfg.leaves():
-        liv_alloc[n] = (0, end)
+        if n not in flat:
+            liv_alloc[n] = (0, end)
     for n in dfg.sinks():
-        liv_alloc[n] = (liv.get(n, (0, end))[0], end)
+        if n not in flat:
+            liv_alloc[n] = (liv.get(n, (0, end))[0], end)
     # hints = YAML 里显式写的 bank（强制绑定，复现固定布局）
     hints = {}
     for fld in ("leaves", "sinks"):
         for name, bank in ks.expand_mapping(spec.get(fld, {})).items():
-            if bank is not None:
+            if bank is not None and name not in flat:
                 hints[name] = bank
     alloc = ba.alloc_banks(liv_alloc, hints=hints)
     leaf_banks_final = {n: b for n, b in alloc.items() if n in set(dfg.leaves())}
     sink_banks_final = {n: b for n, b in alloc.items() if n in set(dfg.sinks())}
-    # ---- 第二阶段：用分配好的 bank 发射 ----
+    sink_final = dict(sink_banks_final)
+    sink_final.update(sink_flat)                  # 显式平坦地址优先
+    # ---- 第二阶段：用分配好的 bank / 显式地址发射 ----
     mc, lv, sink_addrs, banks = rm.schedule(
-        dfg, instances, banks=leaf_banks_final, sink_addrs=sink_banks_final)
+        dfg, instances, banks=leaf_banks_final, sink_addrs=sink_final,
+        addrs=leaf_addrs)
     # ---- L2-D：资源断言（铁律：不过就 exit 1）----
-    _assert_resources(mc, leaf_banks_final, sink_banks_final, max_regs)
-    e, nvals = check_dfg(mc, dfg, banks, sink_addrs, instances)
+    _assert_resources(mc, leaf_banks_final, sink_banks_final, max_regs,
+                      leaf_addrs=leaf_addrs, sink_flat=sink_flat, instances=instances)
+    e, nvals = check_dfg(mc, dfg, banks, sink_addrs, instances, addrs=leaf_addrs)
     if e:
         print(f"[{spec_path}] 自检失败：{len(e)}/{nvals} 个值不同，拒绝生成", file=sys.stderr)
         return 1
@@ -242,21 +286,25 @@ def run_spec(spec_path, out=None, rows=None):
         # 算子数 = 总节点 - 叶子（叶子由消费者现场 LD，不算独立发射的算子）
         _write_dfg(f, spec, mc, nvals, len(dfg.order) - len(dfg.leaves()),
                    len(dfg.leaves()), len(dfg.sinks()), instances,
-                   leaf_banks=leaf_banks_final, sink_banks=sink_banks_final)
+                   leaf_banks=leaf_banks_final, sink_banks=sink_banks_final,
+                   addrs=leaf_addrs, sink_flat=sink_flat)
     print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
           f"自检 {nvals} 值 0 差异")
     return 0
 
 
 # ---------------------------------------------------------------- L2 辅助：规划期 bank / 资源断言
-def _plan_assign(dfg):
-    """规划期临时 bank 分配：叶子与汇各给唯一 bank（不触发 6 上限），仅用于算生命区间。"""
-    leaves = {n: i for i, n in enumerate(dfg.leaves())}
-    sinks = {n: 100 + i for i, n in enumerate(dfg.sinks())}
+def _plan_assign(dfg, skip=()):
+    """规划期临时 bank 分配：叶子与汇各给唯一 bank（不触发 6 上限），仅用于算生命区间。
+    `skip` 里的名字（flat 地址）不参与。"""
+    skip = set(skip)
+    leaves = {n: i for i, n in enumerate(n for n in dfg.leaves() if n not in skip)}
+    sinks = {n: 100 + i for i, n in enumerate(n for n in dfg.sinks() if n not in skip)}
     return leaves, sinks
 
 
-def _assert_resources(mc, leaf_banks, sink_banks, max_regs):
+def _assert_resources(mc, leaf_banks, sink_banks, max_regs,
+                      leaf_addrs=None, sink_flat=None, instances=16):
     """L2-D：生成前硬断言，不过就 SystemExit。"""
     if mc.cycles > 512:
         raise SystemExit(f"微码 {mc.cycles} 拍超过 IMEM 上限 512（≈8192 字 / 16 PE）")
@@ -265,6 +313,11 @@ def _assert_resources(mc, leaf_banks, sink_banks, max_regs):
         maxbank = max(maxbank, b)
     if maxbank > 31:
         raise SystemExit(f"bank {maxbank} 越界（spad_idx 只保留 5 位，必须 <=31）")
+    maxflat = 0
+    for base, stride in list((leaf_addrs or {}).values()) + list((sink_flat or {}).values()):
+        maxflat = max(maxflat, base + stride * (instances - 1))
+    if maxflat > 1023:
+        raise SystemExit(f"flat 地址 {maxflat} 越界（imm 只有 10 位，必须 <=1023）")
     if max_regs > 8:
         raise SystemExit(f"单 PE 活跃寄存器 {max_regs} 超过 8 个（r0..r7）")
     return

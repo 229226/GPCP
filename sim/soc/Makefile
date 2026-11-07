@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-rach
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -551,6 +551,25 @@ run-prach: all
 # stimulus used (it picks both the RA-RNTI and the binary); MSG4_RV=2 gives a
 # non-zero k0, so the DCI -> rv -> k0 coupling cannot be satisfied by a constant.
 RACH_TD = $(ROOT)/build/rach/rach.td
+
+PCGRA_TD = $(ROOT)/build/rach/prach_cgra.td
+
+# 同一套 PRACH 检测，但相关微码由 L1/L2 编译器生成（16 PE x 8 tap 部分和，CPU 归约）
+run-prach-cgra: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PCGRA_TD))
+	python3 $(ROOT)/tools/nr_rach.py dump --prach-out $(PCGRA_TD) \
+		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
+		--prach-snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/prach_cgra_bm.bin@0x80000000 \
+		--load $(PCGRA_TD)@0x80400000 \
+		--results 0x80070000 --nwords 296 \
+		--dump $(ROOT)/$(OBJ)/prach_cgra_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_prach_cgra.py $(ROOT)/$(OBJ)/prach_cgra_dump.txt \
+		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
+		--snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
 
 run-rach: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc rach RACH_OCC=$(if $(OCC),$(OCC),1)

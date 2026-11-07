@@ -2,7 +2,8 @@
  * 通用 DFG 调度（rule_map.schedule）：16 算子 / 6 叶子 / 4 汇，
  * 16 个实例各占 1 PE，共 32 拍 × 16 PE。
  * 自检：64 个汇值、0 差异（模型）。
- * 布局：每实例 1 个 spad word（word=实例号），叶子/汇 bank 见下方 BANK_*。 */
+ * 布局：bank 叶子/汇 -> word=实例号（BANK_*）；flat 叶子/汇 ->
+ *       spad 平坦下标 = BASE + STRIDE*实例号（ADDR_*）。 */
 #ifndef FFT_BUTTERFLY_PROG_H
 #define FFT_BUTTERFLY_PROG_H
 

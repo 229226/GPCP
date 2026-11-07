@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -41,6 +41,12 @@ prach_prog.h: ../../tools/gen_prach_prog.py ../../tools/cgra.py ../../tools/nr_r
 	python3 ../../tools/gen_prach_prog.py
 
 $(BUILD)/prach_bm.elf: prach_prog.h
+
+# 编译器生成的 PRACH 相关微码（cgra/kernels/prach_corr.yaml）
+prach_corr_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/kernel_spec.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/prach_corr.yaml
+	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/prach_corr.yaml
+
+$(BUILD)/prach_cgra_bm.elf: prach_corr_prog.h
 
 # run-rach: the whole 4-step process in one program, so it needs every kernel
 # (PRACH correlation + Polar SC + LDPC CN/BN) plus the PDCCH LUTs.

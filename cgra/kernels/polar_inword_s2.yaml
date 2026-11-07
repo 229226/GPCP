@@ -1,0 +1,13 @@
+name: polar_inword_s2
+kind: dfg
+desc: "Polar 编码字内第 2 级：w ^= (w>>4) & mask（mask 由 bench 预装到 flat 32，广播）"
+leaves:
+  w:    {addr: {base: 0, stride: 1}}
+  mask: {addr: {base: 32, stride: 0}}
+ops:
+  - {name: t,  op: shr, a: w, imm: 4}
+  - {name: t2, op: and, a: t, b: mask}
+  - {name: w2, op: xor, a: w, b: t2}
+sinks:
+  w2: {addr: {base: 0, stride: 1}}
+instances: 16

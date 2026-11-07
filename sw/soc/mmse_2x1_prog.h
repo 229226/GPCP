@@ -2,7 +2,8 @@
  * 通用 DFG 调度（rule_map.schedule）：14 算子 / 8 叶子 / 2 汇，
  * 16 个实例各占 1 PE，共 32 拍 × 16 PE。
  * 自检：32 个汇值、0 差异（模型）。
- * 布局：每实例 1 个 spad word（word=实例号），叶子/汇 bank 见下方 BANK_*。 */
+ * 布局：bank 叶子/汇 -> word=实例号（BANK_*）；flat 叶子/汇 ->
+ *       spad 平坦下标 = BASE + STRIDE*实例号（ADDR_*）。 */
 #ifndef MMSE_2X1_PROG_H
 #define MMSE_2X1_PROG_H
 
