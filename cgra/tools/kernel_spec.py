@@ -168,7 +168,8 @@ def build_dfg(spec):
         d.node(name, "add")
     for op in spec.get("ops", []):
         n = op["name"]
-        d.node(n, op["op"])
+        # imm 仅 shr/shl 使用（Q15 缩放）；op.get("imm", 0) 缺省即 0
+        d.node(n, op["op"], imm=op.get("imm", 0))
         a = op.get("a")
         b = op.get("b")
         if a is not None:
@@ -179,8 +180,28 @@ def build_dfg(spec):
 
 
 def resolve_out(spec, path, root):
+    """输出路径：spec.out > <root>/sw/soc > <脚本目录>/sw/soc > 脚本目录。
+
+    后两级是为了让本脚本在「扁平 checkout」（kernel/*.yaml 与 tools 同目录、
+    没有 cgra/ 与 sw/ 的镜像仓库）里也能直接跑——见 docs/18 §L2-A 备注。
+    """
     out = spec.get("out")
     if out:
-        return out if os.path.isabs(out) else os.path.join(root, out)
+        if os.path.isabs(out):
+            return out
+        canonical_out = os.path.join(root, out)
+        if os.path.isdir(os.path.dirname(canonical_out)):
+            return canonical_out
+        local_out = os.path.join(HERE, out)
+        if os.path.isdir(os.path.dirname(local_out)):
+            return local_out
+        return canonical_out
     name = spec.get("name", os.path.splitext(os.path.basename(path))[0])
-    return os.path.join(root, "sw", "soc", f"{name}_prog.h")
+    fname = f"{name}_prog.h"
+    canonical = os.path.join(root, "sw", "soc")
+    if os.path.isdir(canonical):
+        return os.path.join(canonical, fname)
+    local = os.path.join(HERE, "sw", "soc")
+    if os.path.isdir(local):
+        return os.path.join(local, fname)
+    return os.path.join(HERE, fname)

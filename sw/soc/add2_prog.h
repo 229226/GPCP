@@ -1,12 +1,18 @@
 /* 由 cgra/tools/gen_kernel_prog.py 生成，勿手改。
- * 通用 DFG 调度（rule_map.schedule）：3 算子 / 2 叶子 / 1 汇，
+ * 通用 DFG 调度（rule_map.schedule）：1 算子 / 2 叶子 / 1 汇，
  * 16 个实例各占 1 PE，共 4 拍 × 16 PE。
- * 自检：16 个汇值、0 差异（模型）。 */
+ * 自检：16 个汇值、0 差异（模型）。
+ * 布局：每实例 1 个 spad word（word=实例号），叶子/汇 bank 见下方 BANK_*。 */
 #ifndef ADD2_PROG_H
 #define ADD2_PROG_H
 
 #define ADD2_PROG_CYCLES 4
 #define ADD2_PROG_PES    16
+#define ADD2_BANK_A0 26
+#define ADD2_BANK_A1 27
+#define ADD2_BANK_SUM 28
+#define ADD2_BANK_LO 26
+#define ADD2_BANK_HI 28
 
 static const unsigned int add2_prog[4 * 16]
     __attribute__((aligned(8))) = {

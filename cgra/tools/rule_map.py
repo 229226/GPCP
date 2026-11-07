@@ -34,11 +34,13 @@ class DFG:
 
     def __init__(self):
         self.opcode = {}
+        self.imm = {}            # name -> 移位立即数（仅 shr/shl 使用；其余算子为 0）
         self.order = []
         self.edges = []
 
-    def node(self, name, opcode):
+    def node(self, name, opcode, imm=0):
         self.opcode[name] = opcode
+        self.imm[name] = imm
         self.order.append(name)
 
     def edge(self, src, dst, operand):
@@ -64,8 +66,31 @@ class DFG:
         return lv
 
     def topo(self):
-        lv = self.levels()
-        return sorted(self.order, key=lambda n: (lv[n], self.order.index(n)))
+        """声明序优先的稳定拓扑排序（Kahn）。
+
+        在不破坏依赖的前提下，尽可能按「构造/YAML 声明顺序」发射算子，
+        从而把中间结果的活跃区间缩短、降低寄存器压力——这正是 MMSE/FFT 这类
+        宽 DFG 能塞进 8 个 GPR 的关键（见 mmse_2x1 / fft_butterfly 的实测）。
+        不再是「先发完所有 level-1 再发 level-2」，否则 8 个并行乘积会同时占满寄存器。
+        """
+        import heapq
+        indeg = {n: 0 for n in self.order}
+        succ = {n: [] for n in self.order}
+        for s, d, _o in self.edges:
+            indeg[d] = indeg.get(d, 0) + 1
+            succ[s].append(d)
+        pos = {n: i for i, n in enumerate(self.order)}
+        ready = [i for i, n in enumerate(self.order) if indeg[n] == 0]
+        heapq.heapify(ready)                 # 小根堆，按声明下标
+        out = []
+        while ready:
+            i = heapq.heappop(ready)
+            out.append(self.order[i])
+            for d in succ[self.order[i]]:
+                indeg[d] -= 1
+                if indeg[d] == 0:
+                    heapq.heappush(ready, pos[d])
+        return out
 
 
 def parse_dot(path):
@@ -107,7 +132,7 @@ def build_bn_dfg(nmsg=23):
         d.node(f"S{k}", "sub")
         d.edge("ALL", f"S{k}", 0)
         d.edge(f"m{k}", f"S{k}", 1)
-    d.node("H0", "shr")
+    d.node("H0", "shr", imm=31)      # 硬判决：算术右移 31 位取符号（-1/0）
     d.edge("ALL", "H0", 0)
     return d
 
@@ -230,7 +255,9 @@ def schedule(dfg, instances=16, banks=None, sink_addrs=None, return_liveness=Fal
             dst = free.pop()
             a = srcs[0] if srcs else "zero"
             b = srcs[1] if len(srcs) > 1 else "zero"
-            imm = 31 if op == "shr" else 0
+            # 移位立即数：仅 shr/shl 使用 YAML 里声明的 imm（计划书 §6.2 之外的通用需求，
+            # 例如 FFT/MMSE 的 Q15 缩放 >>1 / >>15）；其余算子 imm 恒 0。
+            imm = dfg.imm.get(n, 0) if op in ("shr", "shl") else 0
             mc.put(cyc, w, op, a=a, b=b, dst=dst, imm=imm)
             _touch(liveness, n, cyc)
             cyc += 1

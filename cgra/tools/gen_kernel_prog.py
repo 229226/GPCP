@@ -87,15 +87,29 @@ def _sym(name):
     return re.sub(r"[^A-Za-z0-9]+", "_", name).upper()
 
 
-def _write_dfg(f, spec, mc, nvals, nops, nleaves, nsinks, instances):
+def _write_dfg(f, spec, mc, nvals, nops, nleaves, nsinks, instances,
+               leaf_banks=None, sink_banks=None):
     sym = _sym(spec.get("name", "kernel"))
+    leaf_banks = leaf_banks or {}
+    sink_banks = sink_banks or {}
     f.write("/* 由 cgra/tools/gen_kernel_prog.py 生成，勿手改。\n"
             f" * 通用 DFG 调度（rule_map.schedule）：{nops} 算子 / {nleaves} 叶子 / {nsinks} 汇，\n"
             f" * {instances} 个实例各占 1 PE，共 {mc.cycles} 拍 × {NPES} PE。\n"
-            f" * 自检：{nvals} 个汇值、0 差异（模型）。 */\n")
+            f" * 自检：{nvals} 个汇值、0 差异（模型）。\n"
+            f" * 布局：每实例 1 个 spad word（word=实例号），叶子/汇 bank 见下方 BANK_*。 */\n")
     f.write(f"#ifndef {sym}_PROG_H\n#define {sym}_PROG_H\n\n")
     f.write(f"#define {sym}_PROG_CYCLES {mc.cycles}\n")
-    f.write(f"#define {sym}_PROG_PES    {NPES}\n\n")
+    f.write(f"#define {sym}_PROG_PES    {NPES}\n")
+    # 叶子/汇 → spad bank，供 C 基准按 bank 布局组织 DMA 缓冲
+    for n in sorted(leaf_banks, key=lambda k: leaf_banks[k]):
+        f.write(f"#define {sym}_BANK_{_sym(n)} {leaf_banks[n]}\n")
+    for n in sorted(sink_banks, key=lambda k: sink_banks[k]):
+        f.write(f"#define {sym}_BANK_{_sym(n)} {sink_banks[n]}\n")
+    all_banks = list(leaf_banks.values()) + list(sink_banks.values())
+    if all_banks:
+        f.write(f"#define {sym}_BANK_LO {min(all_banks)}\n")
+        f.write(f"#define {sym}_BANK_HI {max(all_banks)}\n")
+    f.write("\n")
     f.write(f"static const unsigned int {sym.lower()}_prog[{mc.cycles} * {NPES}]\n"
             f"    __attribute__((aligned(8))) = {{\n")
     f.write(_fmt_words(mc.build()))
@@ -132,9 +146,11 @@ def check_dfg(mc, dfg, banks, sink_addrs, instances):
             elif op == "xor":
                 vals[n] = x ^ y
             elif op == "shr":
-                vals[n] = _s32(_s32(x) >> 31)          # 与 rule_map.schedule 一致：imm 恒 31
+                _imm = dfg.imm.get(n, 0)        # 与 rule_map.schedule 一致：用节点 imm
+                vals[n] = _s32(_s32(x) >> _imm)
             elif op == "shl":
-                vals[n] = _s32(x << 0)                 # schedule 对 shl 给 imm=0
+                _imm = dfg.imm.get(n, 0)
+                vals[n] = _s32(x << _imm)
             elif op == "max":
                 vals[n] = x if _s32(x) > _s32(y) else y
             elif op == "min":
@@ -170,7 +186,7 @@ def run_spec(spec_path, out=None, rows=None):
         if e:
             print(f"[{spec_path}] 自检失败：{len(e)}/{nvals} 个值不同，拒绝生成", file=sys.stderr)
             return 1
-        with open(out, "w") as f:
+        with open(out, "w", newline="\n") as f:
             _write_bn(f, mc, nvals, rows)
         print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
               f"自检 {nvals} 值 0 差异")
@@ -182,7 +198,7 @@ def run_spec(spec_path, out=None, rows=None):
         if e:
             print(f"[{spec_path}] 自检失败：{len(e)}/{nvals} 个值不同，拒绝生成", file=sys.stderr)
             return 1
-        with open(out, "w") as f:
+        with open(out, "w", newline="\n") as f:
             _write_cn(f, mc, nvals)
         print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
               f"自检 {nvals} 值 0 差异")
@@ -222,9 +238,11 @@ def run_spec(spec_path, out=None, rows=None):
     if e:
         print(f"[{spec_path}] 自检失败：{len(e)}/{nvals} 个值不同，拒绝生成", file=sys.stderr)
         return 1
-    with open(out, "w") as f:
-        _write_dfg(f, spec, mc, nvals, len(dfg.order), len(dfg.leaves()),
-                   len(dfg.sinks()), instances)
+    with open(out, "w", newline="\n") as f:
+        # 算子数 = 总节点 - 叶子（叶子由消费者现场 LD，不算独立发射的算子）
+        _write_dfg(f, spec, mc, nvals, len(dfg.order) - len(dfg.leaves()),
+                   len(dfg.leaves()), len(dfg.sinks()), instances,
+                   leaf_banks=leaf_banks_final, sink_banks=sink_banks_final)
     print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
           f"自检 {nvals} 值 0 差异")
     return 0
@@ -265,7 +283,7 @@ def run_from_cgra(func, out=None):
         return 1
     out = out or os.path.join(ROOT, "sw", "soc", f"{func}_prog.h")
     sym = _sym(func)
-    with open(out, "w") as f:
+    with open(out, "w", newline="\n") as f:
         f.write(f"/* 由 cgra/tools/gen_kernel_prog.py --from-cgra {func} 生成，勿手改。 */\n")
         f.write(f"#ifndef {sym}_PROG_H\n#define {sym}_PROG_H\n\n")
         f.write(f"#define {sym}_PROG_CYCLES {cycles}\n")
@@ -292,9 +310,12 @@ def main():
         return run_from_cgra(a.from_cgra, a.out)
 
     if a.all:
+        # 规范布局：<repo>/cgra/kernels/*.yaml；扁平 checkout：与本脚本同目录的 *.yaml
         specs = sorted(glob.glob(os.path.join(ROOT, "cgra", "kernels", "*.yaml")))
         if not specs:
-            print("cgra/kernels/ 下没有 YAML", file=sys.stderr)
+            specs = sorted(glob.glob(os.path.join(HERE, "*.yaml")))
+        if not specs:
+            print("cgra/kernels/ 与本脚本目录下都没有 YAML", file=sys.stderr)
             return 1
         rc = 0
         for s in specs:

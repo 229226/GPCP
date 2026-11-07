@@ -1,0 +1,37 @@
+name: fft_butterfly
+kind: dfg
+desc: "Radix-2 DIT FFT 蝶形（单蝶）tile：16 个 PE 各算一只蝶形（实例并行）。
+      叶子 Ar/Ai/Br/Bi = 两个 Q15 复数点，Wr/Wi = 旋转因子（Q15）。
+      复数乘 t = W*B：tr=(Wr*Br - Wi*Bi)>>15, ti=(Wr*Bi + Wi*Br)>>15（Q30->Q15 缩放）。
+      输出 A'=(A+t)>>1, B'=(A-t)>>1（每级 1/2 缩放，保持 Q15）。
+      自检：随机复数输入，与黄金模型逐值对账（同有限精度语义）。"
+leaves:
+  Ar: {}
+  Ai: {}
+  Br: {}
+  Bi: {}
+  Wr: {}
+  Wi: {}
+ops:
+  - { name: tw_r0, op: mul, a: Wr, b: Br }
+  - { name: tw_r1, op: mul, a: Wi, b: Bi }
+  - { name: tr,    op: sub, a: tw_r0, b: tw_r1 }
+  - { name: tw_i0, op: mul, a: Wr, b: Bi }
+  - { name: tw_i1, op: mul, a: Wi, b: Br }
+  - { name: ti,    op: add, a: tw_i0, b: tw_i1 }
+  - { name: tr_s,  op: shr, a: tr, imm: 15 }
+  - { name: ti_s,  op: shr, a: ti, imm: 15 }
+  - { name: Aor_a, op: add, a: Ar, b: tr_s }
+  - { name: Aoi_a, op: add, a: Ai, b: ti_s }
+  - { name: Bor_a, op: sub, a: Ar, b: tr_s }
+  - { name: Boi_a, op: sub, a: Ai, b: ti_s }
+  - { name: Aor,   op: shr, a: Aor_a, imm: 1 }
+  - { name: Aoi,   op: shr, a: Aoi_a, imm: 1 }
+  - { name: Bor,   op: shr, a: Bor_a, imm: 1 }
+  - { name: Boi,   op: shr, a: Boi_a, imm: 1 }
+sinks:
+  Aor: {}
+  Aoi: {}
+  Bor: {}
+  Boi: {}
+instances: 16

@@ -21,7 +21,10 @@ def main():
     ap.add_argument("--rows", type=int, default=20)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    return gk.run_spec(os.path.join(ROOT, "cgra/kernels/bn_24.yaml"), a.out, a.rows)
+    spec = os.path.join(ROOT, "cgra/kernels/bn_24.yaml")
+    if not os.path.exists(spec):                 # 扁平 checkout 回退
+        spec = os.path.join(HERE, "bn_24.yaml")
+    return gk.run_spec(spec, a.out, a.rows)
 
 
 if __name__ == "__main__":

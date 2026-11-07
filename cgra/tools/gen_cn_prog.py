@@ -19,7 +19,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    return gk.run_spec(os.path.join(ROOT, "cgra/kernels/cn.yaml"), a.out)
+    spec = os.path.join(ROOT, "cgra/kernels/cn.yaml")
+    if not os.path.exists(spec):                 # 扁平 checkout 回退
+        spec = os.path.join(HERE, "cn.yaml")
+    return gk.run_spec(spec, a.out)
 
 
 if __name__ == "__main__":

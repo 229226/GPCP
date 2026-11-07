@@ -1,0 +1,43 @@
+name: mmse_2x1
+kind: dfg
+desc: "2-Rx / 1-Tx MMSE 合并 tile 的**向量相关部分**：num = conj(h1)*y1 + conj(h2)*y2（Q30）。
+      16 个 PE 各做 1 个 RE/层的相关累加；h1/h2/y1/y2 均为 Q15 int16 叶子。
+      边界说明：ISA 的 mul 是 16x16->32，32 位 Q30 结果不能再做 mul，故标量
+      1/(|h1|^2+|h2|^2+sigma2) 归 CVA6 标量侧（与 SoC 的 CVA6+CGRA 分工一致），
+      本 tile 只落 CGRA 上真正吃算力的复数相关。输入契约 |leaf| <= 20000 以免
+      4 项 Q30 求和在 int32 溢出。
+      自检：随机复数输入，与黄金模型逐值对账（同有限精度语义）。"
+leaves:
+  h1r: {}
+  h1i: {}
+  h2r: {}
+  h2i: {}
+  y1r: {}
+  y1i: {}
+  y2r: {}
+  y2i: {}
+ops:
+  # conj(h1)*y1 = (h1r*y1r + h1i*y1i) + j(h1r*y1i - h1i*y1r)
+  - { name: c1a, op: mul, a: h1r, b: y1r }
+  - { name: c1b, op: mul, a: h1i, b: y1i }
+  - { name: c1r, op: add, a: c1a, b: c1b }
+  # conj(h2)*y2
+  - { name: c2a, op: mul, a: h2r, b: y2r }
+  - { name: c2b, op: mul, a: h2i, b: y2i }
+  - { name: c2r, op: add, a: c2a, b: c2b }
+  # 实部合并（c1r/c2r 算完即合并，缩短活跃区间）
+  - { name: numr, op: add, a: c1r, b: c2r }
+  # 虚部：conj(h1)*y1 的虚部
+  - { name: c1c, op: mul, a: h1r, b: y1i }
+  - { name: c1d, op: mul, a: h1i, b: y1r }
+  - { name: c1i, op: sub, a: c1c, b: c1d }
+  # conj(h2)*y2 的虚部
+  - { name: c2c, op: mul, a: h2r, b: y2i }
+  - { name: c2d, op: mul, a: h2i, b: y2r }
+  - { name: c2i, op: sub, a: c2c, b: c2d }
+  # 虚部合并
+  - { name: numi, op: add, a: c1i, b: c2i }
+sinks:
+  numr: {}
+  numi: {}
+instances: 16

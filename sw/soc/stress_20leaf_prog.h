@@ -1,12 +1,36 @@
 /* 由 cgra/tools/gen_kernel_prog.py 生成，勿手改。
- * 通用 DFG 调度（rule_map.schedule）：39 算子 / 20 叶子 / 1 汇，
+ * 通用 DFG 调度（rule_map.schedule）：19 算子 / 20 叶子 / 1 汇，
  * 16 个实例各占 1 PE，共 40 拍 × 16 PE。
- * 自检：16 个汇值、0 差异（模型）。 */
+ * 自检：16 个汇值、0 差异（模型）。
+ * 布局：每实例 1 个 spad word（word=实例号），叶子/汇 bank 见下方 BANK_*。 */
 #ifndef STRESS_20LEAF_PROG_H
 #define STRESS_20LEAF_PROG_H
 
 #define STRESS_20LEAF_PROG_CYCLES 40
 #define STRESS_20LEAF_PROG_PES    16
+#define STRESS_20LEAF_BANK_A0 0
+#define STRESS_20LEAF_BANK_A1 1
+#define STRESS_20LEAF_BANK_A2 2
+#define STRESS_20LEAF_BANK_A3 3
+#define STRESS_20LEAF_BANK_A4 4
+#define STRESS_20LEAF_BANK_A5 5
+#define STRESS_20LEAF_BANK_A6 6
+#define STRESS_20LEAF_BANK_A7 7
+#define STRESS_20LEAF_BANK_A8 8
+#define STRESS_20LEAF_BANK_A9 9
+#define STRESS_20LEAF_BANK_A10 10
+#define STRESS_20LEAF_BANK_A11 11
+#define STRESS_20LEAF_BANK_A12 12
+#define STRESS_20LEAF_BANK_A13 13
+#define STRESS_20LEAF_BANK_A14 14
+#define STRESS_20LEAF_BANK_A15 15
+#define STRESS_20LEAF_BANK_A16 16
+#define STRESS_20LEAF_BANK_A17 17
+#define STRESS_20LEAF_BANK_A18 18
+#define STRESS_20LEAF_BANK_A19 19
+#define STRESS_20LEAF_BANK_S19 20
+#define STRESS_20LEAF_BANK_LO 0
+#define STRESS_20LEAF_BANK_HI 20
 
 static const unsigned int stress_20leaf_prog[40 * 16]
     __attribute__((aligned(8))) = {
