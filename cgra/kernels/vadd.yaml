@@ -1,0 +1,11 @@
+name: vadd
+kind: dfg
+desc: "C = A + B (single element) -- Morpher DFG XML 生成器验证"
+leaves:
+  a: {bank: 26}
+  b: {bank: 27}
+ops:
+  - {name: sum, op: add, a: a, b: b}
+sinks:
+  sum: {bank: 28}
+instances: 1

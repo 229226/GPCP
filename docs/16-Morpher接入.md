@@ -234,3 +234,20 @@ rule_map.simulate() 对拍 → 上硬件
   前端就该消失；
 - 不再尝试把 `SELECT/CMP/CMERGE` 映射到我们的指令 —— 我们的硬件没有谓词；
 - 不再指望 ADL 表达执行语义（link 更新规则、全局 PC），这些由后端与文档承担。
+## 7.2b 更正（2026-11-07，L3 实测后）
+
+§7.2 原写"写 16 条指令 + 8 寄存器 + acc 的 ADL → 映射成功 II=8 / 40 s"。
+**该结论错误，特此更正：**
+
+- 那次映射实际跑的是原始 `hycube_original_mem.json`（带 `LOAD/STORE` 算子 + `I1/I2/P`
+  端口命名），**不是**描述我们硬件的 `gpcp_cgra_v2.json`。
+- 实测 `gpcp_cgra_v2.json` 对 mapper **从未成功映射**：`array_add` 与手搭 4 节点 DFG
+  均在 `Module.cpp:748` getJSONPort 断言失败。根因是 v2 的算子词表（`LD/ST/MAC`）
+  与 FU 端口名（`DP0_I1`）和 Morpher mapper 期望的（`OLOAD/OSTORE`、`I1`）对不上。
+- 即使修好命名，Morpher 的**空间式**映射模型（节点铺到不同 PE、共享 SPM）也与我们的
+  **SIMD** 阵列（同指令流广播、各 PE 私有 SPM）不兼容。详见 `docs/18` §10。
+
+**结论**：Morpher 不能当我们的编译器后端；我们真正的编译器是 L1/L2 那套
+（`kernel_spec` + `gen_kernel_prog` + `rule_map.schedule` + `bank_alloc` + `cc.py` 的
+`fold_addresses`/`route_links`）。`docs/14`–`docs/16` 的"Morpher 当编译器"线应标记为
+**investigated-and-rejected**。
