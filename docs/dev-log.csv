@@ -30,3 +30,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-06,,,14,arch,experiment,Morpher 后端 v0：schedule→我们的微码，实测 0/20 可编码,269fc56,estimate,no_op 8 / no_addr 3 / no_route 8；结论转向只借映射器
 2026-11-07,,,75,infra,feature,L1 微码自动化：kernel_spec + gen_kernel_prog 统一入口，BN/CN 逐字节一致，dfg 通路用 add2 验证,a9416df,measured,bn_24 155cyc/2480w 整文件 cmp IDENTICAL；cn 172cyc/2752w 整文件 cmp IDENTICAL；add2 dfg 4cyc/64w 自检16/16 0差异；--all 三件全成；薄壳 cmp 一致
 2026-11-07,,,95,infra,feature,L2 后端：bank 分配器(A)淘汰6上限、资源断言(D)、地址折叠(B)+多跳路由(C)纯函数+合成测试,0038553,measured,stress_20leaf 20叶子 40cyc/640w 自检0差(旧>6即SystemExit)；BN/CN cmp 与L1逐字节一致；fold/route 纯函数 test_passes 5/5；cycles/bank/regs 生成前断言
+2026-11-07,,,120,arch,experiment,L3 DFG XML 生成器：建成+验证；实证 Morpher 不能当我们的编译器（v2 从未映射；空间式vsSIMD不兼容）,f35fdd2,measured,gen_dfg_xml 产出 schema 正确 XML（hycube ADL 解析+端口解析+进调度 II=1）；v2 ADL 对 mapper getJSONPort 断言失败；Nov6 II=8 是测错 ADL；docs/16 §7.2b 更正；docs/18 §10 记录
