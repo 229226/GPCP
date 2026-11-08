@@ -46,6 +46,6 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-08,,,50,microcode,infra,cn4.yaml + vn3.yaml 取代 pdsch_bm 手写 CN/VN（寄存器墙用增量折叠符号位解决）,e1e6929,measured,CN 34 拍/VN 15 拍自检 0 差；run-pdsch 硬判全对 41026 周期；白名单 5→4
 2026-11-08,,,55,microcode,infra,PRACH 路径统一到编译器微码 prach_corr_prog.h（删手写 kernel_zc_corr 的硬件产物）,fb5c213,measured,run-prach/pucch/rach 全 OK（129 拍）；删 gen_prach_prog.py + prach_prog.h；LEGACY_HEADERS 清空
 2026-11-08,,,80,microcode,infra,编译器加 variants 能力 + cn10/bn24 YAML 清退 pdsch_gather 手写 CN/BN,a10c030,measured,CN 96 拍、BN 123 拍自检 0 差；BN 结果改 host 窗口逐字读回避开 DMA out 边界漏字；run-pdsch-gather 0 差异；白名单 4→3
-2026-11-08,,,70,microcode,infra,kind: image 清退 rxchain 127 拍 4 阶段融合镜像（6 段 DFG 串接 139 拍）,,measured,各段自检 256 值 + 跨阶段串接 224 值 0 差；run-rxchain 结果匹配黄金模型；PIN 3→2
-2026-11-08,,,120,microcode,infra,kind: fft_image 蝶形专用调度器清退 FFT stage/block 两张手写镜像,,measured,448/336 拍，标量黄金模型 640 值 0 差；run-fft 256/1024/4096 逐位匹配；PIN 2→0
-2026-11-08,,,30,infra,infra,手写微码规则收口：白名单清空 PIN=0、文档与增量验收映射同步,,measured,所有 *_prog.h 带生成器横幅；新增 gpcp_cgra_inst() 直接判违规
+2026-11-08,,,70,microcode,infra,kind: image 清退 rxchain 127 拍 4 阶段融合镜像（6 段 DFG 串接 139 拍）,7c21999,measured,各段自检 256 值 + 跨阶段串接 224 值 0 差；run-rxchain 结果匹配黄金模型；PIN 3→2
+2026-11-08,,,120,microcode,infra,kind: fft_image 蝶形专用调度器清退 FFT stage/block 两张手写镜像,7c21999,measured,448/336 拍，标量黄金模型 640 值 0 差；run-fft 256/1024/4096 逐位匹配；PIN 2→0
+2026-11-08,,,30,infra,infra,手写微码规则收口：白名单清空 PIN=0、文档与增量验收映射同步,7c21999,measured,所有 *_prog.h 带生成器横幅；新增 gpcp_cgra_inst() 直接判违规
