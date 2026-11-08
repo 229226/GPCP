@@ -122,14 +122,14 @@ static const uint32_t candidates[NCAND] = {
 #define ZC            20
 #define MAXD          10
 #define SENTINEL      32767
-#define SENTINEL_BANK 30
+#define SENTINEL_BANK GPCP_LAYOUT_REGION_SENTINEL
 #define ITERS         8
 #define MSG_BASE      0x80030000ul
 #define RES_BASE      0x80039000ul
 #define LLR_BASE      0x8003C000ul
 #define GATH_BASE     0x8003E000ul
 #define BOUT_BASE     0x80059000ul
-#define GSPAD         (26 * ZC)
+#define GSPAD         ((GPCP_LAYOUT_REGION_HARD + 1) * ZC)
 #define YW_BASE       0x80390000ul
 #define LLRE_BASE     0x80391000ul
 #define DEM_BASE      0x80392000ul
@@ -318,8 +318,8 @@ static void node_run(uint32_t d, uint32_t o, uint32_t half,
         done += n_in;
         wait_desc(done);
         array_run(NODE_CYCLES);
-        dsc((uint32_t)(uintptr_t)fb, 16 * 32, n, 0, 1, 0, 0);
-        dsc((uint32_t)(uintptr_t)gb, 17 * 32, n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)fb, (GPCP_LAYOUT_REGION_OUT * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)gb, ((GPCP_LAYOUT_REGION_OUT + 1) * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
         gpcp_cgra_ring_push(CGRA_BASE, n_in + 2u);
         done += 2;
         wait_desc(done);
@@ -386,14 +386,14 @@ static void build_tables(void)
 
 static void cn_row_in(uint32_t r, uint32_t page)
 {
-    if (rt_dma_begin(CGRA_BASE, (uintptr_t)&msg[r][0][0], 0, MAXD * ZC, page, 0, 32, ZC))
+    if (rt_dma_begin(CGRA_BASE, (uintptr_t)&msg[r][0][0], 0, MAXD * ZC, page, 0, GPCP_LAYOUT_WORDS, ZC))
         errs++;
     dmas++;
 }
 
 static void cn_row_out(uint32_t r, uint32_t page)
 {
-    if (rt_dma_begin(CGRA_BASE, (uintptr_t)&res[r][0][0], 10 * 32, 3 * ZC, page, 1, 32, ZC))
+    if (rt_dma_begin(CGRA_BASE, (uintptr_t)&res[r][0][0], (GPCP_LAYOUT_REGION_MIN1 * GPCP_LAYOUT_WORDS), 3 * ZC, page, 1, GPCP_LAYOUT_WORDS, ZC))
         errs++;
     dmas++;
 }
@@ -431,7 +431,7 @@ static void bn_dma_in(uint32_t b)
 {
     int32_t *gath = g_all + b * GSPAD;
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-    if (rt_dma_begin(CGRA_BASE, (uintptr_t)gath, 0, 25 * ZC, 0, 0, 32, ZC))
+    if (rt_dma_begin(CGRA_BASE, (uintptr_t)gath, 0, 25 * ZC, 0, 0, GPCP_LAYOUT_WORDS, ZC))
         errs++;
     dmas++;
 }
@@ -441,13 +441,13 @@ static void bn_dma_out(uint32_t b, int want_hard)
     uint32_t n = blk_n[b];
     int32_t *bout = b_all + b * GSPAD;
     if (n) {
-        if (rt_dma_begin(CGRA_BASE, (uintptr_t)bout, 0, n * ZC, 0, 1, 32, ZC))
+        if (rt_dma_begin(CGRA_BASE, (uintptr_t)bout, 0, n * ZC, 0, 1, GPCP_LAYOUT_WORDS, ZC))
             errs++;
         dmas++;
     }
     if (want_hard) {
         if (rt_dma_begin(CGRA_BASE, (uintptr_t)(bout + n * ZC),
-                         GPCP_SPAD_IDX(25, 0), ZC, 0, 1, 0, 0))
+                         (GPCP_LAYOUT_REGION_HARD * GPCP_LAYOUT_WORDS), ZC, 0, 1, 0, 0))
             errs++;
         dmas++;
     }
@@ -630,7 +630,7 @@ int main(void)
 
     for (uint32_t i = 0; i < ZC; i++) {
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
-        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + 32, i), (uint32_t)SENTINEL);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i), (uint32_t)SENTINEL);
     }
     if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CN_PROG_CYCLES * NPES))
         errs++;

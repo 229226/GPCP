@@ -41,8 +41,8 @@
 #define TD_MAGIC         0x50424348u   /* "PBCH" */
 #define NW               16            /* 16 words x 32 bits = 512 bits */
 #define NPES             16
-#define MASK_WORD        32            /* in-word stage mask (broadcast) */
-#define WMASK_WORD       64            /* word-stage mask, one word per PE */
+#define MASK_WORD        (GPCP_LAYOUT_REGION_CONST * GPCP_LAYOUT_WORDS)            /* in-word stage mask (broadcast) */
+#define WMASK_WORD       (GPCP_LAYOUT_REGION_DATA * GPCP_LAYOUT_WORDS)            /* word-stage mask, one word per PE */
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
@@ -84,13 +84,13 @@ int main(void)
 
     /* codeword input (u, frozen bits already zeroed by the caller) */
     for (i = 0; i < NW; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(i / 32, i % 32), td[8 + i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(i), td[8 + i]);
 
     t0 = mtime();
     /* in-word stages: s = 1, 2, 4, 8, 16 */
     for (i = 0; i < 5; i++) {
         uint32_t s = 1u << i;
-        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(MASK_WORD / 32, MASK_WORD % 32),
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(MASK_WORD),
                         polar_mask(s));
         switch (i) {
         case 0: load_and_run(polar_inword_s0_prog, POLAR_INWORD_S0_PROG_CYCLES); break;
@@ -107,7 +107,7 @@ int main(void)
         uint32_t d = 1u << i, w2;
         for (w2 = 0; w2 < NW; w2++)
             gpcp_cgra_write(CGRA_BASE,
-                            GPCP_SPAD_ADDR((WMASK_WORD + w2) / 32, (WMASK_WORD + w2) % 32),
+                            GPCP_SPAD_FLAT_ADDR(WMASK_WORD + w2),
                             (w2 & d) ? 0u : 0xFFFFFFFFu);
         switch (i) {
         case 0: load_and_run(polar_word_d1_prog, POLAR_WORD_D1_PROG_CYCLES); break;
@@ -118,7 +118,7 @@ int main(void)
     }
 
     for (i = 0; i < NW; i++)
-        out[16 + i] = gpcp_cgra_read(CGRA_BASE, GPCP_SPAD_ADDR(i / 32, i % 32));
+        out[16 + i] = gpcp_cgra_read(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(i));
 
     out[0] = 0xCAFEBABEu;
     out[1] = 9;

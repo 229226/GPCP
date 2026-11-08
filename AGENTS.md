@@ -143,7 +143,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `rtl/soc/` | `gpcp_soc.sv`：CVA6 + RAM + CGRA 窗口 + PLIC + CLINT + UART | `R_CGRA` 分支、64-bit store 拆分 |
 | `sim/cgra/` | 纯 CGRA 台架（AXI 从机模型） | `tb_cgra.cpp`：`--prog/--dma-mem/--dma-ops/--ring-desc/--spad-dump` |
 | `sim/soc/` | SoC 台架 + 所有 `run-*` 目标 | `Makefile`（每个目标 = 一条 load + dump + check） |
-| `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
+| `sw/include/` | `gpcp_layout.h`（**编译器生成的布局契约**：几何/位宽/命名区域）、裸机 ABI `gpcp_cgra.h`（spad 算术引用契约）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
 | `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c`、`pbch_pack_bm.c`（**A2**：纯 CVA6 载荷装配） |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
 | `tools/` | 模型与检查 | `cgra.py`（ISA 编码与阵列几何**由 `cgra/target.yaml` 派生**，对外提供 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配 + **A2 发射装配黄金模型** `pbch_pack()` / `dump-pack`，`selftest-pack` 与 `ssb_plan`/`nr_pdcch` 交叉对账）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_pbch_pack.py`（A2 逐段对账）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
@@ -233,8 +233,14 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     在每档 verify 的预检里执行（指纹缓存跳过不了），`make yaml-check` 可单独跑。
     换阵列规模只改 target；`tools/cgra.py` / `rule_map.py` / `bank_alloc.py` /
     `gen_kernel_prog.py` / `image_spec.py` 的几何常量全部由它派生，不许再写第二套数字。
-    **边界**：C 侧 DMA 描述符仍按当前几何写死，跨 target 复用还需编译器下发
-    `*_layout.h` 布局契约（下一步）；FFT 专用调度器里的蝶形基址/拍号同理。
+    **C 侧同样解耦（同日续）**：`cgra/tools/layout_contract.py` 额外下发
+    `sw/include/gpcp_layout.h`（几何 / 位宽 / 命名区域）与
+    `sw/soc/<name>_layout.h`（每个 leaf/sink 的 flat 索引宏）。`gpcp_cgra.h` 的
+    `GPCP_SPAD_IDX/ADDR/PAGE` 由契约位宽驱动，另加 `GPCP_SPAD_FLAT_ADDR(flat)`；
+    C 里不得再写 `bank*32`、裸 `GPCP_SPAD_ADDR(23,7)` 或本地
+    `SENTINEL_BANK 30`。`make yaml-check` 同时检查 YAML 与 C 两侧。
+    **剩余边界**：`fft_image.py` 的蝶形基址 / 28 拍轮间隔仍在编译器内部；
+    RTL 的 spad 几何不在 C 契约里，真正换硬件还要同步 `rtl/cgra/`。
 
 ---
 
@@ -381,6 +387,10 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     与 `cgra/tools/target.py`，五个编译器模块的硬件常量改由 target 派生。
     验收口径是**34 个 `*_prog.h` 逐字不变** + 每份 YAML 逐项反算地址等价，
     `make yaml-check` 绿（规则见 §4.19）。
+    * **C 侧布局契约（同日续）**：`cgra/tools/layout_contract.py` 生成 1 份全局
+      `gpcp_layout.h` + 33 份 `<name>_layout.h`；ABI 宏、22 处裸 spad 坐标、
+      83 处 DMA `bank*32` 基址与本地布局宏全部改引用契约。全量重编 39 个
+      `.bin`、`verify-full` 58 门 0 failed，程序行为不变。
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。
 

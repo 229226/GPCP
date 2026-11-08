@@ -203,8 +203,8 @@ int main(void)
     for (uint32_t nid1 = 0; nid1 < NHYP; nid1++) {
         n_desc = 0;
         dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);                      /* rx every candidate */
-        dsc(REF_ALL + 4u * nid1 * REF_STRIDE, 8 * 32, NREP, 0, 0, 32, 8);
-        dsc(OUT_ALL + 4u * nid1 * OUT_STRIDE, 24 * 32, 32, 0, 1, 0, 0);
+        dsc(REF_ALL + 4u * nid1 * REF_STRIDE, (GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS), NREP, 0, 0, GPCP_LAYOUT_WORDS, 8);
+        dsc(OUT_ALL + 4u * nid1 * OUT_STRIDE, (GPCP_LAYOUT_REGION_LLR * GPCP_LAYOUT_WORDS), GPCP_LAYOUT_WORDS, 0, 1, 0, 0);
         uint32_t nin = 2u;
 
         ring_on(0, nin);
@@ -231,8 +231,8 @@ int main(void)
      * read from RAM (block `best` may already be cached) */
     n_desc = 0;
     dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);
-    dsc(REF_ALL + 4u * best * REF_STRIDE, 8 * 32, NREP, 0, 0, 32, 8);
-    dsc(OUT_ALL + 4u * NHYP * OUT_STRIDE, 24 * 32, 32, 0, 1, 0, 0);
+    dsc(REF_ALL + 4u * best * REF_STRIDE, (GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS), NREP, 0, 0, GPCP_LAYOUT_WORDS, 8);
+    dsc(OUT_ALL + 4u * NHYP * OUT_STRIDE, (GPCP_LAYOUT_REGION_LLR * GPCP_LAYOUT_WORDS), GPCP_LAYOUT_WORDS, 0, 1, 0, 0);
     ring_on(0, 2);
     done += 2;
     wait_desc(done);

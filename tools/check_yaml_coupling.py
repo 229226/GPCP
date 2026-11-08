@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""AGENTS.md 4.19：kernel YAML 不得直接描述硬件坐标。
+"""AGENTS.md 4.19：kernel YAML 与 C 代码都不得直接描述硬件坐标。
 
 在每档 verify 的预检里执行（与 check_handprog.py 并列，指纹缓存跳过不了）。
 硬件真相只允许出现在 cgra/target.yaml 与 cgra/tools/target.py；kernel YAML
-只能引用命名区域、逻辑槽位与 parallelism。
+只能引用命名区域、逻辑槽位与 parallelism；C 侧只能 include 编译器生成的
+gpcp_layout.h / <name>_layout.h 并引用其中的宏。
 """
 import glob
 import os
@@ -74,8 +75,44 @@ if "target.yaml" not in open(p, encoding="utf-8").read() and \
         "_T = _hw_mod.load()" not in open(p, encoding="utf-8").read():
     bad.append("tools/cgra.py 没有从 cgra/target.yaml 派生 ISA/几何")
 
+# ---------------------------------------------------------------- C 侧布局契约
+C_FORBIDDEN = [
+    (r"GPCP_SPAD_(?:IDX|ADDR)\(\s*\d+\s*,", "裸物理 spad 坐标（用契约宏）"),
+    (r"(?m)^#define\s+(?:SENTINEL_BANK|Y_SPAD|REF_SPAD|PART_SPAD|"
+     r"MASK_WORD|WMASK_WORD|GSPAD)\s+\d", "本地布局宏写死数字"),
+    (r",\s*\d+\s*\*\s*32u?\s*,", "DMA 描述符写死 bank*words"),
+    (r"\b(?:page|pg)\s*\*\s*32u\b", "硬编码每页 bank 数"),
+]
+c_files = sorted(glob.glob(os.path.join(ROOT, "sw", "soc", "*.c")) +
+                 glob.glob(os.path.join(ROOT, "sw", "soc", "*.inc")))
+n_contract = 0
+for p in c_files:
+    rel = os.path.relpath(p, ROOT).replace("\\", "/")
+    s = open(p, encoding="utf-8").read()
+    n_contract += len(re.findall(
+        r"GPCP_LAYOUT_|GPCP_SPAD_FLAT_|_SPAD_(?:LEAF|SINK)_", s))
+    for pat, msg in C_FORBIDDEN:
+        for m in re.finditer(pat, s):
+            line = s.count("\n", 0, m.start()) + 1
+            bad.append(f"{rel}:{line}  {msg}")
+
+abi = open(os.path.join(ROOT, "sw", "include", "gpcp_cgra.h"),
+           encoding="utf-8").read()
+if '#include "gpcp_layout.h"' not in abi:
+    bad.append("sw/include/gpcp_cgra.h 未 include 编译器生成的 gpcp_layout.h")
+for pat in ("<< 5)", "0x1Fu", "128u"):
+    if pat in abi:
+        bad.append(f"sw/include/gpcp_cgra.h 仍硬编码 spad 几何：{pat}")
+
+banner = "由 cgra/tools/layout_contract.py 生成"
+layout_hdrs = [os.path.join(ROOT, "sw", "include", "gpcp_layout.h")] + \
+              sorted(glob.glob(os.path.join(ROOT, "sw", "soc", "*_layout.h")))
+for p in layout_hdrs:
+    if not os.path.exists(p) or banner not in open(p, encoding="utf-8").read():
+        bad.append(f"{os.path.relpath(p, ROOT)} 缺失或不是编译器生成的布局契约")
+
 if bad:
-    print(f"[FAIL] kernel YAML 与硬件耦合 {len(bad)} 处：")
+    print(f"[FAIL] kernel YAML / C 侧与硬件耦合 {len(bad)} 处：")
     for b in bad[:40]:
         print("  -", b)
     if len(bad) > 40:
@@ -83,4 +120,6 @@ if bad:
     sys.exit(1)
 
 print(f"[ OK ] YAML 与硬件解耦：{n_yaml} 份 spec / {n_at} 处逻辑地址 / "
-      f"{n_parallel} 处 parallelism / 0 处物理坐标；target={T.name}")
+      f"{n_parallel} 处 parallelism / 0 处物理坐标；"
+      f"C 侧 {len(c_files)} 个文件 / {n_contract} 处契约引用 / 0 处裸坐标 / "
+      f"{len(layout_hdrs)} 份布局契约；target={T.name}")

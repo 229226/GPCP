@@ -32,6 +32,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "pss_corr_prog.h"      /* 编译器生成的 PSS/SSS 复数相关 */
+#include "pss_corr_layout.h"
 #include "polar_node_prog.h"      /* 编译器生成的 polar SC 节点微码 */
 
 #define CGRA_BASE        0x50000000ul
@@ -170,7 +171,7 @@ static void build_corr_uc(void)
 {
     for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
         gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, pss_corr_prog[i]);
-    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(23, 7), 0);   /* ref[127] 幻影 tap */
+    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(PSS_CORR_SPAD_LEAF_R7(GPCP_LAYOUT_NPES - 1u)), 0);   /* ref[127] 幻影 tap */
 }
 
 /* ---------------------------------------------------------------- ring glue */
@@ -196,7 +197,7 @@ static void corr_one(uint32_t ref_ram, int32_t *fb, int with_rx, int cap)
     n_desc = 0;
     uint32_t n_in;
     if (with_rx) dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);    /* rx: linear 254 words */
-    dsc(ref_ram, 8 * 32, NREP, 0, 0, 32, 8);              /* refs: 8 words/bank */
+    dsc(ref_ram, (GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS), NREP, 0, 0, GPCP_LAYOUT_WORDS, 8);              /* refs: 8 words/bank */
     n_in = n_desc;
 
     done = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
@@ -223,7 +224,7 @@ static void corr_one(uint32_t ref_ram, int32_t *fb, int with_rx, int cap)
         }
     }
     runs++;
-    dsc((uint32_t)(uintptr_t)fb, 24 * 32, 32, 0, 1, 0, 0); /* results: 2 words/bank */
+    dsc((uint32_t)(uintptr_t)fb, (GPCP_LAYOUT_REGION_LLR * GPCP_LAYOUT_WORDS), GPCP_LAYOUT_WORDS, 0, 1, 0, 0); /* results: 2 words/bank */
     gpcp_cgra_ring_push(CGRA_BASE, n_in + 1u);
     done += 1;
     wait_desc(done);
@@ -333,8 +334,8 @@ static void node_run(uint32_t d, uint32_t o, uint32_t half, const uint8_t *bp, u
         done += n_in;
         wait_desc(done);
         array_run(NODE_CYCLES);
-        dsc((uint32_t)(uintptr_t)fb, 16 * 32, n, 0, 1, 0, 0);
-        dsc((uint32_t)(uintptr_t)gb, 17 * 32, n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)fb, (GPCP_LAYOUT_REGION_OUT * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)gb, ((GPCP_LAYOUT_REGION_OUT + 1) * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
         gpcp_cgra_ring_push(CGRA_BASE, n_in + 2u);
         done += 2;
         wait_desc(done);
@@ -442,7 +443,7 @@ int main(void)
         if (c == 1) {
             uint32_t o = 12;
             for (uint32_t t = 0; t < NREP; t++)
-                RESULT_BASE[o + t] = spad_rd(8u * 32u + 32u * (t >> 3) + (t & 7u));
+                RESULT_BASE[o + t] = spad_rd((GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS) + GPCP_LAYOUT_WORDS * (t >> 3) + (t & 7u));
             for (uint32_t i = 0; i < 32u; i++)
                 RESULT_BASE[o + 128u + i] = (uint32_t)last_fb[i];
             for (uint32_t i = 0; i < 2u * NREP; i++)
@@ -450,7 +451,7 @@ int main(void)
             for (uint32_t i = 0; i < 4u; i++)
                 RESULT_BASE[o + 160u + 2u * NREP + i] = latch[i];
             for (uint32_t i = 0; i < 512u; i++)
-                RESULT_BASE[o + 160u + 2u * NREP + 4u + i] = spad_rd(8u * 32u + i);
+                RESULT_BASE[o + 160u + 2u * NREP + 4u + i] = spad_rd((GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS) + i);
         }
         int64_t mag = (re < 0 ? -re : re) + (im < 0 ? -im : im);
         if (mag > best) { best = mag; nid2 = (uint32_t)c; }

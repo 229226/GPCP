@@ -33,6 +33,7 @@
 
 #include "../include/gpcp_cgra.h"
 #include "cplx_mul_prog.h"      /* 编译器生成的单抽头复乘/LS 估计 */
+#include "cplx_mul_layout.h"
 
 #define CGRA_BASE    0x50000000ul
 #define RESULT_BASE  ((uint32_t *)0x80010000ul)
@@ -109,7 +110,7 @@ static void dma_in(int s, uint32_t page, uint32_t *spins)
 /* 32 results = 16 banks x 2 words taken from the upper half of the page. */
 static void dma_out(int s, uint32_t page, uint32_t *spins)
 {
-    dma_start((uintptr_t)&out[s][0], GPCP_SPAD_IDX(16, 0), 32, page, 1, 32, 2, spins);
+    dma_start((uintptr_t)&out[s][0], CPLX_MUL_SPAD_SINK_HR(0), 32, page, 1, 32, 2, spins);
 }
 
 /* --------------------------------------------------------------- array */

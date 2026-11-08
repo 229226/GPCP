@@ -55,7 +55,7 @@ static void dma_2d(uintptr_t ram, uint32_t spad, uint32_t len, uint32_t dir)
     uint32_t g = 0;
     while (mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_BUSY)
         if (++g > 200000u) { errs++; return; }
-    gpcp_cgra_dma_start(CGRA_BASE, ram, spad, len, 0, dir, 32, ZC);
+    gpcp_cgra_dma_start(CGRA_BASE, ram, spad, len, 0, dir, GPCP_LAYOUT_WORDS, ZC);
     g = 0;
     while (!(mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE))
         if (++g > 200000u) { errs++; return; }

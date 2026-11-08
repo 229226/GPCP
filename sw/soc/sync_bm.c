@@ -23,6 +23,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "pss_corr_prog.h"      /* 编译器生成的 PSS 复数相关 */
+#include "pss_corr_layout.h"
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
@@ -92,7 +93,7 @@ static void build_microcode(void)
 {
     for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
         gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, pss_corr_prog[i]);
-    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(23, 7), 0);   /* ref[127] 幻影 tap */
+    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(PSS_CORR_SPAD_LEAF_R7(GPCP_LAYOUT_NPES - 1u)), 0);   /* ref[127] 幻影 tap */
 }
 
 /* ---------------------------------------------------------------- ring glue */
@@ -160,9 +161,9 @@ int main(void)
     for (int c = 0; c < NCAND; c++) {
         n_desc = 0;
         dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);                       /* rx: linear */
-        dsc(REF_BASE + 4u * (uint32_t)(c * REF_STRIDE), 8 * 32, NREP, 0, 0, 32, 8);
+        dsc(REF_BASE + 4u * (uint32_t)(c * REF_STRIDE), (GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS), NREP, 0, 0, GPCP_LAYOUT_WORDS, 8);
         /* results are scattered: 2 words per bank (bank 16..31), stride 32 */
-        dsc(OUT_BASE + 4u * (uint32_t)(c * 32), 24 * 32, 32, 0, 1, 0, 0);
+        dsc(OUT_BASE + 4u * (uint32_t)(c * 32), (GPCP_LAYOUT_REGION_LLR * GPCP_LAYOUT_WORDS), GPCP_LAYOUT_WORDS, 0, 1, 0, 0);
 
         ring_on(0, 2);
         done += 2;

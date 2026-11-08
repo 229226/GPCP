@@ -47,7 +47,7 @@
 #define SENTINEL         32767
 #define LCG_SEED         7u
 #define BN_SLOTS         24
-#define SENTINEL_BANK    30   /* outside the BN slots (0..23) and results (10..12) */
+#define SENTINEL_BANK    GPCP_LAYOUT_REGION_SENTINEL   /* outside the BN slots (0..23) and results (10..12) */
 
 /* fixed buffers outside .bss (the linker would otherwise put them on top of
  * the result area at 0x8001_0000) */
@@ -159,12 +159,12 @@ int main(void)
 
     uint32_t t0 = mtime();
     for (uint32_t r = 0; r < BG2_ROWS; r++) {
-        dma_2d((uintptr_t)&msg[r][0][0], 0, NBANKS_IN * ZC, 0, 32, ZC);
+        dma_2d((uintptr_t)&msg[r][0][0], 0, NBANKS_IN * ZC, 0, GPCP_LAYOUT_WORDS, ZC);
         load_prog(0);
         array_run(0);
         load_prog(1);
         array_run(1);
-        dma_2d((uintptr_t)&res[r][0][0], 10 * 32, 3 * ZC, 1, 32, ZC);
+        dma_2d((uintptr_t)&res[r][0][0], (GPCP_LAYOUT_REGION_MIN1 * GPCP_LAYOUT_WORDS), 3 * ZC, 1, GPCP_LAYOUT_WORDS, ZC);
     }
     uint32_t cyc = mtime() - t0;
 
@@ -203,7 +203,7 @@ int main(void)
             out[500 + k * ZC + i] = (uint32_t)gath[k * ZC + i];
 
     /* BN with a separate output buffer: no in-place aliasing at all */
-    dma_2d((uintptr_t)gath, 0, 26 * ZC, 0, 32, ZC);
+    dma_2d((uintptr_t)gath, 0, 26 * ZC, 0, GPCP_LAYOUT_WORDS, ZC);
     /* dump what actually landed in the scratchpad, before the BN runs */
     for (uint32_t k = 0; k < 26; k++)
         for (uint32_t i = 0; i < ZC; i++)

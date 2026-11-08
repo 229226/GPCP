@@ -294,11 +294,13 @@ static inline void gpcp_cgra_irq_clear(uintptr_t base, uint32_t mask)
     gpcp_cgra_write(base, GPCP_CGRA_IRQ_STATUS, mask);
 }
 
-/* scratchpad helpers
- * Banks 0..31 are page 0, banks 32..63 are page 1.  LD/ST microcode addresses
- * are page-relative ({bank[4:0], word[4:0]}); the host window is absolute. */
-#define GPCP_SPAD_IDX(bank, word)   ((((bank) & 0x3Fu) << 5) | ((word) & 0x1Fu))
-#define GPCP_SPAD_ADDR(bank, word)  (GPCP_CGRA_SPAD_BASE + ((bank) * 128u) + ((word) * 4u))
-#define GPCP_SPAD_PAGE(bank)        (((bank) >> 5) & 1u)
+/* scratchpad helpers -- geometry comes from the compiler-generated
+ * gpcp_layout.h (cgra/target.yaml).  Do not hard-code words-per-bank here. */
+#include "gpcp_layout.h"
+#define GPCP_SPAD_FLAT_IDX(flat)    (flat)
+#define GPCP_SPAD_FLAT_ADDR(flat)   (GPCP_CGRA_SPAD_BASE + ((flat) * 4u))
+#define GPCP_SPAD_IDX(bank, word)   ((((bank) & GPCP_LAYOUT_IDX_BANK_MASK) << GPCP_LAYOUT_WORD_BITS) | ((word) & GPCP_LAYOUT_WORD_MASK))
+#define GPCP_SPAD_ADDR(bank, word)  (GPCP_CGRA_SPAD_BASE + ((bank) * (GPCP_LAYOUT_WORDS * 4u)) + ((word) * 4u))
+#define GPCP_SPAD_PAGE(bank)        (((bank) >> GPCP_LAYOUT_WORD_BITS) & 1u)
 
 #endif /* GPCP_CGRA_H */

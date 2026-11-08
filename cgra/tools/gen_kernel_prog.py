@@ -29,6 +29,7 @@ import rule_map as rm                         # noqa: E402
 import kernel_spec as ks                      # noqa: E402
 import bank_alloc as ba                       # noqa: E402  L2-A：区间图着色 bank 分配器
 import target as hw                           # noqa: E402  逻辑地址 lowering
+import layout_contract as lc                  # noqa: E402  C 侧布局契约
 
 
 # ---------------------------------------------------------------- 字格式化
@@ -204,6 +205,40 @@ def check_dfg(mc, dfg, banks, sink_addrs, instances, addrs=None):
     return errs, len(exp)
 
 
+# ---------------------------------------------------------------- 布局契约收集
+def _spec_entries(spec, shift=0):
+    """从 YAML 的 at 直接收集 (flat_base, stride)；image 的 parts 各自加前缀。"""
+    T = hw.load()
+    parts = spec.get("parts", []) if spec.get("kind") == "image" else [spec]
+    out = {}
+    for ps in parts:
+        pref = _sym(ps.get("name")) if len(parts) > 1 else ""
+        for role in ("leaves", "sinks"):
+            for key, v in (ps.get(role, {}) or {}).items():
+                if not isinstance(v, dict) or "at" not in v:
+                    continue
+                for i, n in enumerate(ks._expand_keys(key)):
+                    b, st = T.lower(v["at"], k=i, extra={"SHIFT": shift})
+                    k = (pref + "_" if pref else "") + role + "_" + n
+                    out[k] = (b, st)
+    return out
+
+
+def _dfg_entries(leaf_addrs, leaf_banks, sink_flat, sink_banks):
+    """编译后的最终布局：flat 地址 + bank 分配器结果（bank*W + 实例号）。"""
+    W = hw.load().words
+    out = {}
+    for n, v in leaf_addrs.items():
+        out["leaf_" + n] = v
+    for n, b in leaf_banks.items():
+        out["leaf_" + n] = (b * W, 1)
+    for n, v in sink_flat.items():
+        out["sink_" + n] = v
+    for n, b in sink_banks.items():
+        out["sink_" + n] = (b * W, 1)
+    return out
+
+
 # ---------------------------------------------------------------- 单 spec 生成
 def run_spec(spec_path, out=None, rows=None, _variant=None):
     """一个 spec 可以声明 `variants: [...]`，每个变体覆盖若干 spec 字段并各自
@@ -223,9 +258,13 @@ def run_spec(spec_path, out=None, rows=None, _variant=None):
         spec.update(_variant)
     if spec.get("kind") == "image":
         import image_spec
+        lc.write_kernel(spec["name"], _spec_entries(spec, int(spec.get("shift", 0))),
+                        hw.load(), note="kind: image，parts 的叶子/汇按段前缀展开")
         return image_spec.run_image(spec, out or ks.resolve_out(spec, spec_path, ROOT))
     if spec.get("kind") == "fft_image":
         import fft_image
+        lc.write_kernel(spec["name"], {}, hw.load(),
+                        note="蝶形布局由 fft_image.py 专用调度器管理")
         return fft_image.run(spec)
     if rows is not None and spec.get("kind") == "bn":
         spec["rows"] = rows
@@ -248,6 +287,8 @@ def run_spec(spec_path, out=None, rows=None, _variant=None):
             return 1
         with open(out, "w", newline="\n") as f:
             _write_bn(f, mc, nvals, rows)
+        lc.write_kernel(spec["name"], {}, hw.load(),
+                        note="kind: bn，规则调度器布局见 gpcp_layout.h 命名区域")
         print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
               f"自检 {nvals} 值 0 差异")
         return 0
@@ -265,6 +306,8 @@ def run_spec(spec_path, out=None, rows=None, _variant=None):
             return 1
         with open(out, "w", newline="\n") as f:
             _write_cn(f, mc, nvals, edges, sentinel_bank, res_banks)
+        lc.write_kernel(spec["name"], {}, hw.load(),
+                        note="kind: cn，规则调度器布局见 gpcp_layout.h 命名区域")
         print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
               f"自检 {nvals} 值 0 差异")
         return 0
@@ -323,6 +366,10 @@ def run_spec(spec_path, out=None, rows=None, _variant=None):
                    len(dfg.leaves()), len(dfg.sinks()), instances,
                    leaf_banks=leaf_banks_final, sink_banks=sink_banks_final,
                    addrs=leaf_addrs, sink_flat=sink_flat)
+    lc.write_kernel(spec["name"],
+                    _dfg_entries(leaf_addrs, leaf_banks_final, sink_flat,
+                                 sink_banks_final),
+                    hw.load(), note="编译后的最终 spad 布局（含自动 bank 分配）")
     print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
           f"自检 {nvals} 值 0 差异")
     return 0
@@ -395,6 +442,8 @@ def main():
     ap.add_argument("--from-cgra", metavar="FUNC",
                     help="兼容 path-A：调用 cgra.<FUNC>() 生成")
     a = ap.parse_args()
+
+    lc.write_global(hw.load())
 
     if a.from_cgra:
         return run_from_cgra(a.from_cgra, a.out)

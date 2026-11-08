@@ -158,7 +158,7 @@ compute_changed() {
             tools/dump_*.py|tools/check_*.py)
                 x=${f##*/}; x=${x%.py}; x=${x#dump_}; x=${x#check_}; x=${x//_/-}
                 add_soc "run-$x" ;;
-            cgra/target.yaml|tools/check_yaml_coupling.py) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
+            cgra/target.yaml|tools/check_yaml_coupling.py|sw/include/gpcp_layout.h|sw/soc/*_layout.h) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
             tools/gen_kernel_prog.py|cgra/tools/*|cgra/kernels/*|sw/soc/*_prog.h) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
             tools/fft_plan.py)       add_soc run-fft run-ssbfft run-ssb-fid run-ssb-slot ;;
             sw/soc/prach_corr_prog.h) add_soc run-prach run-rach run-pucch ;;

@@ -139,7 +139,7 @@ int main(void)
     /* the sentinel constant must exist in both pages (page-relative bank) */
     for (i = 0; i < PES; i++) {
         gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(CN_SENTINEL_BANK, i), SENTINEL);
-        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(CN_SENTINEL_BANK + 32, i), SENTINEL);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(CN_SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i), SENTINEL);
     }
 
     uint32_t t0 = mtime();
@@ -180,7 +180,7 @@ int main(void)
                 for (m = 0; m < 3; m++)
                     for (i = 0; i < PES; i++)
                         cn_res[r][j][m][i] = (int32_t)gpcp_cgra_read(
-                            CGRA_BASE, GPCP_SPAD_ADDR(CN_MIN1_BANK + m + (page ? 32 : 0), i));
+                            CGRA_BASE, GPCP_SPAD_ADDR(CN_MIN1_BANK + m + (page ? GPCP_LAYOUT_PAGE_BANKS : 0), i));
 
                 /* immediate VN update for this layer (= layered scheduling) */
                 for (k = 0; k < deg; k++) {

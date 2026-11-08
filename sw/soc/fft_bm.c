@@ -248,7 +248,7 @@ static void load_tail_twiddles(void)
         for (uint32_t i = 0; i < TAIL_WORDS; i++) {
             uint32_t idx = TW_BASE + i;
             uint32_t bank = (idx >> 5) & 0x1Fu, word = idx & 0x1Fu;
-            mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(page * 32u + bank, word),
+            mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(page * GPCP_LAYOUT_PAGE_BANKS + bank, word),
                    mmio_r(LUT_RAM + 4u * (LUT_TAIL + i)));
         }
     }

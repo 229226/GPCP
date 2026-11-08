@@ -26,6 +26,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "cplx_mul_prog.h"      /* 编译器生成的单抽头复乘/LS 估计 */
+#include "cplx_mul_layout.h"
 
 #define CGRA_BASE    0x50000000ul
 #define PLIC_BASE    0x0C000000ul
@@ -139,7 +140,7 @@ static void dma_in(int s, uint32_t page, uint32_t *spins)
 
 static void dma_out(int s, uint32_t page, uint32_t *spins)
 {
-    dma_start((uintptr_t)&out[s][0], GPCP_SPAD_IDX(16, 0), 32, page, 1, 32, 2, spins);
+    dma_start((uintptr_t)&out[s][0], CPLX_MUL_SPAD_SINK_HR(0), 32, page, 1, 32, 2, spins);
 }
 
 static void array_start(uint32_t page)

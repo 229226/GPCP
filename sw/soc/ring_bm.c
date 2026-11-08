@@ -24,6 +24,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "cplx_mul_prog.h"      /* 编译器生成的单抽头复乘/LS 估计 */
+#include "cplx_mul_layout.h"
 
 #define CGRA_BASE    0x50000000ul
 #define PLIC_BASE    0x0C000000ul
@@ -174,8 +175,8 @@ int main(void)
     /* ring: 2 input copies first, the output copies are pushed later */
     desc_set(0, (uintptr_t)&slots[0][0], 0,                  64, 0, 0, 32, 4);
     desc_set(1, (uintptr_t)&slots[1][0], 0,                  64, 1, 0, 32, 4);
-    desc_set(2, (uintptr_t)&out[0][0],   GPCP_SPAD_IDX(16, 0), 32, 0, 1, 32, 2);
-    desc_set(3, (uintptr_t)&out[1][0],   GPCP_SPAD_IDX(16, 0), 32, 1, 1, 32, 2);
+    desc_set(2, (uintptr_t)&out[0][0],   CPLX_MUL_SPAD_SINK_HR(0), 32, 0, 1, 32, 2);
+    desc_set(3, (uintptr_t)&out[1][0],   CPLX_MUL_SPAD_SINK_HR(0), 32, 1, 1, 32, 2);
 
     plic_setup();
     gpcp_cgra_irq_enable(CGRA_BASE, GPCP_CGRA_IRQ_ARR | GPCP_CGRA_IRQ_DMA);

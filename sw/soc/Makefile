@@ -16,7 +16,8 @@ PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_b
 all: $(PROGS:%=$(BUILD)/%.bin)
 
 # 共享运行时头：任何改动都必须触发全部基准重编，否则会悄悄跑旧二进制
-COMMON_HDRS := ../include/soc_io.h
+COMMON_HDRS := ../include/soc_io.h ../include/gpcp_cgra.h \
+               ../include/gpcp_layout.h $(wildcard *_layout.h)
 $(PROGS:%=$(BUILD)/%.elf): $(COMMON_HDRS)
 
 $(BUILD):

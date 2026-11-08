@@ -285,7 +285,7 @@ int main(void)
     /* 16-QAM 的 ×3 是广播常数（spad 地址 28，stride=0）：两页各预装 3。
      * DMA 输入只占 bank p 的 word 0..3，不会覆盖它。 */
     for (uint32_t pg = 0; pg < 2u; pg++)
-        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(pg * 32u, 28), 3);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(pg * GPCP_LAYOUT_PAGE_BANKS, 28), 3);
 
     /* ring: IN 4 words/bank, OUT 3 words/bank (min1,min2,sign) */
     desc_set(0, (uintptr_t)&in[0][0], 0, WORDS_IN, 0, 0, 32, 4);

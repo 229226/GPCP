@@ -33,7 +33,7 @@
 #define NPES          16
 #define MAXD          10
 #define SENTINEL      32767
-#define SENTINEL_BANK 30
+#define SENTINEL_BANK GPCP_LAYOUT_REGION_SENTINEL
 #ifndef ITERS
 #define ITERS         8           /* 可用 -DITERS=n 覆盖（调试时 n=1） */
 #endif
@@ -53,7 +53,7 @@
  *     之后每个块只写自己 n 条边（原来每块要重写 ~270 个零 + 20 个 LLR）。 */
 #define GATH_BASE  0x8003E000ul   /* 52 x 520 字 = 108 KiB -> 0x80058680 */
 #define BOUT_BASE  0x80059000ul   /* 52 x 520 字 = 108 KiB -> 0x80073680 */
-#define GSPAD      (26 * ZC)      /* 每块 26 bank x 20 字（bank 25 不参与搬入） */
+#define GSPAD      ((GPCP_LAYOUT_REGION_HARD + 1) * ZC)      /* 每块 26 bank x 20 字（bank 25 不参与搬入） */
 
 static int32_t (*msg)[MAXD][ZC] = (int32_t (*)[MAXD][ZC])MSG_BASE;
 static int32_t (*res)[3][ZC] = (int32_t (*)[3][ZC])RES_BASE;
@@ -98,13 +98,13 @@ static void build_tables(void)
 
 static void cn_row_in(uint32_t r, uint32_t page)
 {
-    if (rt_dma_begin(CGRA_BASE, (uintptr_t)&msg[r][0][0], 0, MAXD * ZC, page, 0, 32, ZC))
+    if (rt_dma_begin(CGRA_BASE, (uintptr_t)&msg[r][0][0], 0, MAXD * ZC, page, 0, GPCP_LAYOUT_WORDS, ZC))
         errs++;
     dmas++;
 }
 static void cn_row_out(uint32_t r, uint32_t page)
 {
-    if (rt_dma_begin(CGRA_BASE, (uintptr_t)&res[r][0][0], 10 * 32, 3 * ZC, page, 1, 32, ZC))
+    if (rt_dma_begin(CGRA_BASE, (uintptr_t)&res[r][0][0], (GPCP_LAYOUT_REGION_MIN1 * GPCP_LAYOUT_WORDS), 3 * ZC, page, 1, GPCP_LAYOUT_WORDS, ZC))
         errs++;
     dmas++;
 }
@@ -153,7 +153,7 @@ static void bn_dma_in(uint32_t b)
 {
     int32_t *gath = g_all + b * GSPAD;
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-    if (rt_dma_begin(CGRA_BASE, (uintptr_t)gath, 0, 25 * ZC, 0, 0, 32, ZC))
+    if (rt_dma_begin(CGRA_BASE, (uintptr_t)gath, 0, 25 * ZC, 0, 0, GPCP_LAYOUT_WORDS, ZC))
         errs++;
     dmas++;
 }
@@ -164,7 +164,7 @@ static void bn_dma_out(uint32_t b, int want_hard)
     uint32_t n = blk_n[b];
     int32_t *bout = b_all + b * GSPAD;
     if (n) {
-        if (rt_dma_begin(CGRA_BASE, (uintptr_t)bout, 0, n * ZC, 0, 1, 32, ZC))
+        if (rt_dma_begin(CGRA_BASE, (uintptr_t)bout, 0, n * ZC, 0, 1, GPCP_LAYOUT_WORDS, ZC))
             errs++;
         dmas++;
     }
@@ -237,7 +237,7 @@ int main(void)
     /* 两个页都放哨兵；CN 与 BN 各装一次程序 */
     for (uint32_t i = 0; i < ZC; i++) {
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
-        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + 32, i), (uint32_t)SENTINEL);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i), (uint32_t)SENTINEL);
     }
     /* IMEM 只有一份：CN 与 BN 程序必须按阶段重装（这里先装 CN） */
     if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CN_PROG_CYCLES * NPES))

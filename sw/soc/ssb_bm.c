@@ -24,6 +24,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "pss_corr_prog.h"      /* 编译器生成的 PSS/SSS 复数相关 */
+#include "pss_corr_layout.h"
 #include "polar_node_prog.h"      /* 编译器生成的 polar SC 节点微码 */
 
 #define CGRA_BASE        0x50000000ul
@@ -154,7 +155,7 @@ static void build_corr_uc(void)
 {
     for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
         gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, pss_corr_prog[i]);
-    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(23, 7), 0);   /* ref[127] 幻影 tap */
+    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(PSS_CORR_SPAD_LEAF_R7(GPCP_LAYOUT_NPES - 1u)), 0);   /* ref[127] 幻影 tap */
 }
 
 static void build_node_uc(void)
@@ -214,8 +215,8 @@ static void corr_run(uint32_t y_word_off, uint32_t ref_addr, int64_t *re, int64_
 
     n_desc = 0;
     dsc(Y_BASE + 4u * y_word_off, 0, 2 * NREP, 0, 0, 0, 0);
-    dsc(ref_addr, 8 * 32, NREP, 0, 0, 32, 8);
-    dsc((uint32_t)(uintptr_t)fb, 24 * 32, 32, 0, 1, 0, 0);
+    dsc(ref_addr, (GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS), NREP, 0, 0, GPCP_LAYOUT_WORDS, 8);
+    dsc((uint32_t)(uintptr_t)fb, (GPCP_LAYOUT_REGION_LLR * GPCP_LAYOUT_WORDS), GPCP_LAYOUT_WORDS, 0, 1, 0, 0);
 
     ring_on(0, 2);
     done += 2;
@@ -265,8 +266,8 @@ static void node_run(uint32_t d, uint32_t o, uint32_t half, const uint8_t *bp, u
         dsc((uint32_t)(uintptr_t)ain, 0, n, 0, 0, 0, 0);
         dsc((uint32_t)(uintptr_t)bin, 32, n, 0, 0, 0, 0);
         dsc((uint32_t)(uintptr_t)bet, 64, n, 0, 0, 0, 0);
-        dsc((uint32_t)(uintptr_t)fb, 16 * 32, n, 0, 1, 0, 0);
-        dsc((uint32_t)(uintptr_t)gb, 17 * 32, n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)fb, (GPCP_LAYOUT_REGION_OUT * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)gb, ((GPCP_LAYOUT_REGION_OUT + 1) * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
 
         ring_on(0, 3);
         done += 3;

@@ -156,8 +156,8 @@ static void node_run(uint32_t d, uint32_t o, uint32_t half,
         done += n_in;
         wait_desc(done);
         array_run(NODE_CYCLES);
-        dsc((uint32_t)(uintptr_t)fb, 16 * 32, n, 0, 1, 0, 0);
-        dsc((uint32_t)(uintptr_t)gb, 17 * 32, n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)fb, (GPCP_LAYOUT_REGION_OUT * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)gb, ((GPCP_LAYOUT_REGION_OUT + 1) * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
         gpcp_cgra_ring_push(CGRA_BASE, n_in + 2u);
         done += 2;
         wait_desc(done);

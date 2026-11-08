@@ -34,6 +34,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/gpcp_cgra_rt.h"
 #include "prach_corr_prog.h"   /* 编译器生成（prach_corr.yaml） */
+#include "prach_corr_layout.h"
 
 #define CGRA_BASE   0x50000000ul
 #define EXIT_ADDR   0x40010000ul
@@ -46,9 +47,9 @@
 #define NPES        16u
 #define NCAND       2u
 #define PAIR_WORDS  (2u * TAPS)         /* 254: one block of complex taps */
-#define Y_SPAD      0u
-#define REF_SPAD    256u
-#define PART_SPAD   512u
+#define Y_SPAD      (GPCP_LAYOUT_REGION_IN * GPCP_LAYOUT_WORDS)
+#define REF_SPAD    (GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS)
+#define PART_SPAD   (GPCP_LAYOUT_REGION_OUT * GPCP_LAYOUT_WORDS)
 #define OUT_WORDS   64u
 #define CS_ACK      0u
 #define CS_NACK     6u
@@ -81,8 +82,8 @@ int main(void)
     for (uint32_t c = 0; c < NCAND; c++) {
         if (dma(refs + 4u * c * PAIR_WORDS, REF_SPAD, PAIR_WORDS, 0) != 0)
             break;
-        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(15, 30), 0);
-        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(15, 31), 0);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(PRACH_CORR_SPAD_LEAF_R7(GPCP_LAYOUT_NPES - 1u)), 0);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(PRACH_CORR_SPAD_LEAF_RI7(GPCP_LAYOUT_NPES - 1u)), 0);
         if (rt_array_run(CGRA_BASE, 0, PRACH_CORR_PROG_CYCLES) != 0) {
             errs++;
             break;

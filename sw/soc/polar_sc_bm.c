@@ -156,10 +156,10 @@ static void node_run(uint32_t d, uint32_t o, uint32_t half, const uint8_t *bp,
 
         n_desc = 0;
         dsc((uint32_t)(uintptr_t)ain, 0, n, 0, 0, 0, 0);
-        dsc((uint32_t)(uintptr_t)bin, 1 * 32, n, 0, 0, 0, 0);
-        dsc((uint32_t)(uintptr_t)bet, 2 * 32, n, 0, 0, 0, 0);
-        dsc((uint32_t)(uintptr_t)fb, 16 * 32, n, 0, 1, 0, 0);
-        dsc((uint32_t)(uintptr_t)gb, 17 * 32, n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)bin, (GPCP_LAYOUT_REGION_CONST * GPCP_LAYOUT_WORDS), n, 0, 0, 0, 0);
+        dsc((uint32_t)(uintptr_t)bet, (GPCP_LAYOUT_REGION_DATA * GPCP_LAYOUT_WORDS), n, 0, 0, 0, 0);
+        dsc((uint32_t)(uintptr_t)fb, (GPCP_LAYOUT_REGION_OUT * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
+        dsc((uint32_t)(uintptr_t)gb, ((GPCP_LAYOUT_REGION_OUT + 1) * GPCP_LAYOUT_WORDS), n, 0, 1, 0, 0);
 
         ring_on(0, 3);
         done += 3;

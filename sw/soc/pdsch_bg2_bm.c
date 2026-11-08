@@ -39,7 +39,7 @@
 #define NPES             16
 #define NBANKS_IN        10        /* 10 edges, sentinel-padded */
 #define SENTINEL         32767
-#define SENTINEL_BANK    30   /* outside the BN slots (0..23) and results (10..12) */
+#define SENTINEL_BANK    GPCP_LAYOUT_REGION_SENTINEL   /* outside the BN slots (0..23) and results (10..12) */
 #define CYC_HALF         (CN_PROG_CYCLES / 2)
 #define CYC_TOTAL        CN_PROG_CYCLES
 #define LCG_SEED         1u
@@ -120,7 +120,7 @@ int main(void)
      * page-relative (bank 30 of buf_page = absolute bank 30 or 62) */
     for (uint32_t i = 0; i < ZC; i++) {
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
-        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + 32, i), (uint32_t)SENTINEL);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i), (uint32_t)SENTINEL);
     }
 
     /* -------- M1 运行时：双页 ping-pong，DMA 与阵列重叠 --------
@@ -128,13 +128,13 @@ int main(void)
      * 阵列结束后再从页 r&1 把结果搬出（此时阵列空闲，页可以复用给 r+2）。 */
     uint32_t t0 = mtime();
     uint32_t acc_in = 0, acc_arr = 0, acc_out = 0;
-    dma_begin((uintptr_t)&msg[0][0][0], 0, NBANKS_IN * ZC, 0, 0, 32, ZC);
+    dma_begin((uintptr_t)&msg[0][0][0], 0, NBANKS_IN * ZC, 0, 0, GPCP_LAYOUT_WORDS, ZC);
     dma_wait();
     for (uint32_t r = 0; r < BG2_ROWS; r++) {
         uint32_t ta = mtime();
         if (r + 1 < BG2_ROWS)
             dma_begin((uintptr_t)&msg[r + 1][0][0], 0, NBANKS_IN * ZC, 0,
-                      (r + 1) & 1u, 32, ZC);
+                      (r + 1) & 1u, GPCP_LAYOUT_WORDS, ZC);
         array_run(r & 1u);                 /* 与预取并行 */
         acc_arr += mtime() - ta;
         ta = mtime();
@@ -142,7 +142,7 @@ int main(void)
             dma_wait();                    /* 预取还没完就等它 */
         acc_in += mtime() - ta;
         ta = mtime();
-        dma_begin((uintptr_t)&res[r][0][0], 10 * 32, 3 * ZC, 1, r & 1u, 32, ZC);
+        dma_begin((uintptr_t)&res[r][0][0], (GPCP_LAYOUT_REGION_MIN1 * GPCP_LAYOUT_WORDS), 3 * ZC, 1, r & 1u, GPCP_LAYOUT_WORDS, ZC);
         dma_wait();
         acc_out += mtime() - ta;
     }
