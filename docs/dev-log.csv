@@ -49,4 +49,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-08,,,70,microcode,infra,kind: image 清退 rxchain 127 拍 4 阶段融合镜像（6 段 DFG 串接 139 拍）,7c21999,measured,各段自检 256 值 + 跨阶段串接 224 值 0 差；run-rxchain 结果匹配黄金模型；PIN 3→2
 2026-11-08,,,120,microcode,infra,kind: fft_image 蝶形专用调度器清退 FFT stage/block 两张手写镜像,7c21999,measured,448/336 拍，标量黄金模型 640 值 0 差；run-fft 256/1024/4096 逐位匹配；PIN 2→0
 2026-11-08,,,30,infra,infra,手写微码规则收口：白名单清空 PIN=0、文档与增量验收映射同步,7c21999,measured,所有 *_prog.h 带生成器横幅；新增 gpcp_cgra_inst() 直接判违规
-2026-11-08,,,90,sw,infra,A2 PBCH 载荷装配（MIB→[CRC24C]→frozen→polar→E=720 速率匹配→加扰→360 QPSK）纯 CVA6 落地,7024419,measured,run-pbch-pack 双模式逐段 0 差；模型与 ssb_plan/nr_pdcch 交叉自检；0 array runs；verify-full 58/0
+2026-11-08,,,25,sw,infra,A2 PBCH 载荷装配（MIB→[CRC24C]→frozen→polar→E=720 速率匹配→加扰→360 QPSK）纯 CVA6 落地,7024419,measured,run-pbch-pack 双模式逐段 0 差；模型与 ssb_plan/nr_pdcch 交叉自检；0 array runs；verify-full 58/0；minutes 为实测墙钟，人做估约 90 min
