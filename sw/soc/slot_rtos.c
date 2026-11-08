@@ -26,6 +26,7 @@
 
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "cplx_mul_prog.h"      /* 编译器生成的单抽头复乘/LS 估计 */
 
 #define CGRA_BASE      0x50000000ul
 #define PLIC_BASE      0x0C000000ul
@@ -43,7 +44,7 @@
 #define NPES           16
 #define WORDS_IN       64      /* 4 words per bank (Yr,Yi,Xr,Xi) */
 #define WORDS_OUT      32      /* 2 words per bank (Hr,Hi)      */
-#define CYC_LS         15
+#define CYC_LS         CPLX_MUL_PROG_CYCLES
 #define SLOT_PERIOD    1200    /* cycles between slot ticks (1 tick = 1 slot) */
 
 #define MSTATUS_MIE    0x8u
@@ -55,7 +56,6 @@
 
 static int32_t  in[SLOTS][WORDS_IN]  __attribute__((aligned(8)));
 static int32_t  out[SLOTS][WORDS_OUT] __attribute__((aligned(8)));
-static uint32_t prog[CYC_LS * NPES];
 
 static volatile uint32_t ticks, irq_count, arr_count, ring_done_count, bad_traps;
 static volatile uint32_t slot_pending;
@@ -141,31 +141,6 @@ static void slot_job(uint32_t k)
 }
 
 /* --------------------------------------------------------------- microcode */
-static void build_ls(void)
-{
-    for (uint32_t i = 0; i < CYC_LS * NPES; i++)
-        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-
-    for (uint32_t p = 0; p < NPES; p++) {
-        uint32_t a = GPCP_SPAD_IDX(p, 0);
-        prog[0 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, 0));
-        prog[1 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, 1));
-        prog[2 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, 2));
-        prog[3 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, 3));
-        prog[4 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_MUL, 0, 2, 4, 0);
-        prog[5 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_MUL, 1, 3, 5, 0);
-        prog[6 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_ADD, 4, 5, 4, 0);
-        prog[7 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_SHR, 4, 0, 4, 15);
-        prog[8 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_MUL, 1, 2, 5, 0);
-        prog[9 * NPES + p]  = gpcp_cgra_inst(GPCP_OP_MUL, 0, 3, 6, 0);
-        prog[10 * NPES + p] = gpcp_cgra_inst(GPCP_OP_SUB, 5, 6, 5, 0);
-        prog[11 * NPES + p] = gpcp_cgra_inst(GPCP_OP_SHR, 5, 0, 5, 15);
-        prog[12 * NPES + p] = gpcp_cgra_inst(GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(16 + p, 0));
-        prog[13 * NPES + p] = gpcp_cgra_inst(GPCP_OP_ST, 5, 0, 0, GPCP_SPAD_IDX(16 + p, 1));
-        (void)a;
-    }
-}
-
 /* ----------------------------------------------------------------- payload */
 static int32_t pseudo(int seed, int mod)
 {
@@ -214,9 +189,8 @@ int main(void)
     for (int s = 0; s < SLOTS; s++)
         fill_slot(s);
 
-    build_ls();
     for (uint32_t i = 0; i < CYC_LS * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, cplx_mul_prog[i]);
 
     /* PLIC: CGRA completion is source 1 */
     mmio_w(PLIC_PRIO(CGRA_SRC_ID), 1);

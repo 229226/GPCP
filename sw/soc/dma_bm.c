@@ -32,13 +32,14 @@
  */
 
 #include "../include/gpcp_cgra.h"
+#include "cplx_mul_prog.h"      /* 编译器生成的单抽头复乘/LS 估计 */
 
 #define CGRA_BASE    0x50000000ul
 #define RESULT_BASE  ((uint32_t *)0x80010000ul)
 #define EXIT_ADDR    0x40010000ul
 
 #define SLOTS   3
-#define CYCLES  14
+#define CYCLES   CPLX_MUL_PROG_CYCLES
 
 /* The copy engine moves 64-bit beats, so both ends must be 8-byte aligned */
 static int32_t slots[SLOTS][64] __attribute__((aligned(8)));
@@ -61,28 +62,8 @@ static void fill_slot(int s)
 static void load_program(void)
 {
     if (GPCP_CGRA_MAX_CYCLES < CYCLES) { errs++; return; }
-
-    for (uint32_t p = 0; p < 16; p++) {
-        uint32_t prog[CYCLES];
-        prog[0]  = gpcp_cgra_inst(GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, 0));
-        prog[1]  = gpcp_cgra_inst(GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, 1));
-        prog[2]  = gpcp_cgra_inst(GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, 2));
-        prog[3]  = gpcp_cgra_inst(GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, 3));
-        prog[4]  = gpcp_cgra_inst(GPCP_OP_LACC, GPCP_SRC_ZERO, 0, 0, 0);
-        prog[5]  = gpcp_cgra_inst(GPCP_OP_MAC, 0, 2, 0, 0);
-        prog[6]  = gpcp_cgra_inst(GPCP_OP_MAC, 1, 3, 0, 0);
-        prog[7]  = gpcp_cgra_inst(GPCP_OP_SHR, GPCP_SRC_ACC, 0, 4, 15);
-        prog[8]  = gpcp_cgra_inst(GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(16 + p, 0));
-        prog[9]  = gpcp_cgra_inst(GPCP_OP_MUL, 0, 3, 5, 0);
-        prog[10] = gpcp_cgra_inst(GPCP_OP_MUL, 1, 2, 6, 0);
-        prog[11] = gpcp_cgra_inst(GPCP_OP_SUB, 6, 5, 7, 0);
-        prog[12] = gpcp_cgra_inst(GPCP_OP_SHR, 7, 0, 7, 15);
-        prog[13] = gpcp_cgra_inst(GPCP_OP_ST, 7, 0, 0, GPCP_SPAD_IDX(16 + p, 1));
-
-        for (uint32_t c = 0; c < CYCLES; c++)
-            gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + (c * 16 + p) * 4u,
-                            prog[c]);
-    }
+    for (uint32_t i = 0; i < CYCLES * 16; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, cplx_mul_prog[i]);
 }
 
 /* ------------------------------------------------------------------ DMA */
