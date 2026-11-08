@@ -1,11 +1,13 @@
 name: polar_word_d4
 kind: dfg
-desc: "Polar 编码字间级 d=4：w[i] ^= w[i+4]（原地）"
+desc: "Polar 编码字间级 d=4：w[i] ^= w[i+4] & m[i]（m 逐 PE 预装到 flat 64..79：该更新的字全 1，其余 0）"
 leaves:
   wa: {addr: {base: 0, stride: 1}}
   wb: {addr: {base: 4, stride: 1}}
+  m:  {addr: {base: 64, stride: 1}}
 ops:
-  - {name: x, op: xor, a: wa, b: wb}
+  - {name: t, op: and, a: wb, b: m}
+  - {name: x, op: xor, a: wa, b: t}
 sinks:
   x: {addr: {base: 0, stride: 1}}
 instances: 16

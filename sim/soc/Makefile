@@ -126,6 +126,21 @@ run-pdsch-bg1-zc64: all
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_pdsch_zc64.py $(ROOT)/$(OBJ)/pdsch_bg1_zc64_dump.txt $(BG1_TD)
 
+PBCH_TD = $(ROOT)/build/pbch/pbch_tx.td
+
+# gNB 发射链 G1：PBCH 的 polar 变换（N=512）过 CGRA（docs/19）
+run-pbch-tx: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PBCH_TD))
+	python3 $(ROOT)/tools/nr_pbch.py dump --out $(PBCH_TD)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pbch_tx_bm.bin@0x80000000 \
+		--load $(PBCH_TD)@0x80400000 \
+		--results 0x80010000 --nwords 16 \
+		--dump $(ROOT)/$(OBJ)/pbch_tx_dump.txt \
+		--max-cycles 10000000
+	python3 $(ROOT)/tools/check_pbch_tx.py $(ROOT)/$(OBJ)/pbch_tx_dump.txt $(PBCH_TD)
+
 run-pdsch-zc64: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(ZC64_TD))

@@ -218,8 +218,40 @@ def rate_recover_pbch(e, n):
     return subblock_deinterleave(y)     # = d (N LLRs for the polar decoder)
 
 
+# ------------------------------------------------------- hardware test vector
+TD_MAGIC = 0x50424348          # "PBCH"
+
+
+def dump_td(path, nbits=512, seed=7):
+    """Write the 512-bit polar input for sw/soc/pbch_tx_bm.c (LSB first)."""
+    import random
+    import struct
+    rnd = random.Random(seed)
+    u = [rnd.randint(0, 1) for _ in range(nbits)]
+    words = [TD_MAGIC, nbits, 0, 0, 0, 0, 0, 0]
+    for i in range(0, nbits, 32):
+        w = 0
+        for b in range(32):
+            if u[i + b]:
+                w |= 1 << b
+        words.append(w)
+    with open(path, "wb") as f:
+        f.write(struct.pack("<%dI" % len(words), *words))
+    print("wrote %s: %d-bit polar input, seed %d" % (path, nbits, seed))
+    return 0
+
+
 # --------------------------------------------------------------------- self test
 if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "dump":
+        ap = __import__("argparse").ArgumentParser()
+        ap.add_argument("dump")
+        ap.add_argument("--out", required=True)
+        ap.add_argument("--nbits", type=int, default=512)
+        ap.add_argument("--seed", type=int, default=7)
+        a = ap.parse_args()
+        raise SystemExit(dump_td(a.out, a.nbits, a.seed))
     # c_init sanity
     ci = pbch_dmrs_cinit(200, 1, 3, 0)
     print("pbch_dmrs_cinit(200,1,3,0) =", ci)

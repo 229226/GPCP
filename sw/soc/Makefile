@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -39,6 +39,7 @@ pdsch_cn20_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map
 $(BUILD)/pdsch_bn1_bm.elf: pdsch_bn_prog.h
 $(BUILD)/pdsch_bg2_bm.elf: pdsch_cn_prog.h
 $(BUILD)/pdsch_zc64_bm.elf: pdsch_cn_prog.h ../include/ldpc_bg2_ils0.h
+$(BUILD)/pbch_tx_bm.elf: polar_inword_s0_prog.h polar_inword_s1_prog.h polar_inword_s2_prog.h polar_inword_s3_prog.h polar_inword_s4_prog.h polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h polar_word_d8_prog.h
 $(BUILD)/pdsch_bg1_bm.elf: pdsch_cn20_prog.h ../include/ldpc_bg1.h
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DUSE_BG1=1 $(LDFLAGS) start.S pdsch_zc64_bm.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/pdsch_bg1_bm.dis
