@@ -33,6 +33,8 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "cn4_prog.h"       /* 编译器生成的 4 消息校验节点 */
+#include "vn3_prog.h"       /* 编译器生成的 3 消息变量节点 */
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
@@ -42,15 +44,14 @@
 #define NVAR             8
 #define NCHK             4
 #define EDGES_PER_CHK    4
-#define CYC_CN           50
-#define CYC_BN           12
+#define CYC_CN           CN4_PROG_CYCLES
+#define CYC_BN           VN3_PROG_CYCLES
 #define ITERS            8
 #define LCG_SEED         1u
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 #define SPAD(bank, word)  (CGRA_BASE + GPCP_SPAD_ADDR((bank), (word)))
-#define SPAD_IDX(bank, word) GPCP_SPAD_IDX((bank), (word))
 
 /* edge tables: check -> 4 variables, and variable -> its two (check, edge) */
 static const int chk_var[NCHK][EDGES_PER_CHK] = {
@@ -62,8 +63,6 @@ static const int var_edge[NVAR][2][2] = {
     {{1, 0}, {3, 2}}, {{1, 1}, {3, 3}}, {{1, 2}, {2, 2}}, {{1, 3}, {2, 3}}
 };
 
-static uint32_t prog_cn[CYC_CN * NPES];
-static uint32_t prog_bn[CYC_BN * NPES];
 
 static int32_t  ch_llr[NVAR];
 static int32_t  msg_cv[NCHK][EDGES_PER_CHK];    /* check -> variable */
@@ -71,83 +70,18 @@ static int32_t  hard[NVAR];
 static uint32_t errs, runs;
 static uint32_t t_cycle;
 
-static void emit(uint32_t *p, uint32_t cyc, uint32_t pe, uint32_t op,
-                 uint32_t a, uint32_t b, uint32_t dst, uint32_t imm)
-{
-    p[cyc * NPES + pe] = gpcp_cgra_inst(op, a, b, dst, imm);
-}
-
 /* ---- check node: 4 messages in words 0..3 -> min1/min2/signin 8/9/10 ---- */
 static void build_cn(void)
 {
-    for (uint32_t c = 0; c < NCHK; c++) {
-        uint32_t p = c;
-        emit(prog_cn, 0, p, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(c, 0));
-        emit(prog_cn, 1, p, GPCP_OP_LD, 0, 0, 1, SPAD_IDX(c, 1));
-        emit(prog_cn, 2, p, GPCP_OP_LD, 0, 0, 2, SPAD_IDX(c, 2));
-        emit(prog_cn, 3, p, GPCP_OP_LD, 0, 0, 3, SPAD_IDX(c, 3));
-        /* abs(x) = (x ^ (x>>31)) - (x>>31) */
-        uint32_t cyc = 4;
-        for (uint32_t k = 0; k < 4; k++) {
-            emit(prog_cn, cyc + 0, p, GPCP_OP_SHR, k, 0, 4, 31);
-            emit(prog_cn, cyc + 1, p, GPCP_OP_XOR, k, 4, 5, 0);
-            emit(prog_cn, cyc + 2, p, GPCP_OP_SUB, 5, 4, 5, 0);
-            emit(prog_cn, cyc + 3, p, GPCP_OP_ST, 5, 0, 0, SPAD_IDX(c, 12 + k));
-            cyc += 4;
-        }
-        /* sign product */
-        emit(prog_cn, 20, p, GPCP_OP_SHR, 0, 0, 6, 31);
-        emit(prog_cn, 21, p, GPCP_OP_SHR, 1, 0, 7, 31);
-        emit(prog_cn, 22, p, GPCP_OP_XOR, 6, 7, 6, 0);
-        emit(prog_cn, 23, p, GPCP_OP_SHR, 2, 0, 7, 31);
-        emit(prog_cn, 24, p, GPCP_OP_XOR, 6, 7, 6, 0);
-        emit(prog_cn, 25, p, GPCP_OP_SHR, 3, 0, 7, 31);
-        emit(prog_cn, 26, p, GPCP_OP_XOR, 6, 7, 6, 0);
-        emit(prog_cn, 27, p, GPCP_OP_ST, 6, 0, 0, SPAD_IDX(c, 10));
-        /* min1 / min2 over the four |x| (words 12..15 hold |x|) */
-        emit(prog_cn, 28, p, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(c, 12));
-        emit(prog_cn, 29, p, GPCP_OP_LD, 0, 0, 1, SPAD_IDX(c, 13));
-        emit(prog_cn, 30, p, GPCP_OP_MIN, 0, 1, 4, 0);
-        emit(prog_cn, 31, p, GPCP_OP_ST, 4, 0, 0, SPAD_IDX(c, 12));   /* s1 */
-        emit(prog_cn, 32, p, GPCP_OP_MAX, 0, 1, 5, 0);
-        emit(prog_cn, 33, p, GPCP_OP_ST, 5, 0, 0, SPAD_IDX(c, 13));   /* h1 */
-        emit(prog_cn, 34, p, GPCP_OP_LD, 0, 0, 2, SPAD_IDX(c, 14));
-        emit(prog_cn, 35, p, GPCP_OP_LD, 0, 0, 3, SPAD_IDX(c, 15));
-        emit(prog_cn, 36, p, GPCP_OP_MIN, 2, 3, 6, 0);
-        emit(prog_cn, 37, p, GPCP_OP_ST, 6, 0, 0, SPAD_IDX(c, 14));   /* s2 */
-        emit(prog_cn, 38, p, GPCP_OP_MAX, 2, 3, 7, 0);
-        emit(prog_cn, 39, p, GPCP_OP_ST, 7, 0, 0, SPAD_IDX(c, 15));   /* h2 */
-        emit(prog_cn, 40, p, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(c, 12));
-        emit(prog_cn, 41, p, GPCP_OP_LD, 0, 0, 1, SPAD_IDX(c, 14));
-        emit(prog_cn, 42, p, GPCP_OP_MIN, 0, 1, 4, 0);
-        emit(prog_cn, 43, p, GPCP_OP_ST, 4, 0, 0, SPAD_IDX(c, 8));    /* min1 */
-        emit(prog_cn, 44, p, GPCP_OP_MAX, 0, 1, 5, 0);                /* max(s1,s2) */
-        emit(prog_cn, 45, p, GPCP_OP_LD, 0, 0, 2, SPAD_IDX(c, 13));
-        emit(prog_cn, 46, p, GPCP_OP_LD, 0, 0, 3, SPAD_IDX(c, 15));
-        emit(prog_cn, 47, p, GPCP_OP_MIN, 2, 3, 6, 0);                /* min(h1,h2) */
-        emit(prog_cn, 48, p, GPCP_OP_MIN, 5, 6, 7, 0);
-        emit(prog_cn, 49, p, GPCP_OP_ST, 7, 0, 0, SPAD_IDX(c, 9));    /* min2 */
-    }
+    for (uint32_t i = 0; i < CYC_CN * NPES; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, cn4_prog[i]);
 }
 
 /* ---- variable node: ch + m0 + m1 in words 0..2 -> words 3..6 ---- */
 static void build_bn(void)
 {
-    for (uint32_t v = 0; v < NVAR; v++) {
-        uint32_t p = v, b = 8 + v;
-        emit(prog_bn, 0, p, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(b, 0));
-        emit(prog_bn, 1, p, GPCP_OP_LD, 0, 0, 1, SPAD_IDX(b, 1));
-        emit(prog_bn, 2, p, GPCP_OP_LD, 0, 0, 2, SPAD_IDX(b, 2));
-        emit(prog_bn, 3, p, GPCP_OP_ADD, 0, 1, 3, 0);
-        emit(prog_bn, 4, p, GPCP_OP_ADD, 3, 2, 3, 0);
-        emit(prog_bn, 5, p, GPCP_OP_ST, 3, 0, 0, SPAD_IDX(b, 3));
-        emit(prog_bn, 6, p, GPCP_OP_SUB, 3, 1, 4, 0);
-        emit(prog_bn, 7, p, GPCP_OP_ST, 4, 0, 0, SPAD_IDX(b, 4));
-        emit(prog_bn, 8, p, GPCP_OP_SUB, 3, 2, 5, 0);
-        emit(prog_bn, 9, p, GPCP_OP_ST, 5, 0, 0, SPAD_IDX(b, 5));
-        emit(prog_bn, 10, p, GPCP_OP_SHR, 3, 0, 6, 31);
-        emit(prog_bn, 11, p, GPCP_OP_ST, 6, 0, 0, SPAD_IDX(b, 6));
-    }
+    for (uint32_t i = 0; i < CYC_BN * NPES; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, vn3_prog[i]);
 }
 
 static void load_prog(const uint32_t *p, uint32_t words)
@@ -207,7 +141,7 @@ int main(void)
         for (uint32_t c = 0; c < NCHK; c++)
             for (uint32_t k = 0; k < EDGES_PER_CHK; k++)
                 spad_wr(c, k, msg_cv[c][k]);
-        load_prog(prog_cn, CYC_CN * NPES);
+        load_prog(cn4_prog, CYC_CN * NPES);
         array_run(CYC_CN);
 
         /* reconstruct the per-edge messages: magnitude is min1 unless the
@@ -233,7 +167,7 @@ int main(void)
             spad_wr(8 + v, 1, msg_cv[var_edge[v][0][0]][var_edge[v][0][1]]);
             spad_wr(8 + v, 2, msg_cv[var_edge[v][1][0]][var_edge[v][1][1]]);
         }
-        load_prog(prog_bn, CYC_BN * NPES);
+        load_prog(vn3_prog, CYC_BN * NPES);
         array_run(CYC_BN);
 
         /* next check inputs come from the variable-node outputs */

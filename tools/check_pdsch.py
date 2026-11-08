@@ -89,7 +89,7 @@ def main(path):
         print(f"[FAIL] PDSCH LDPC loop: mismatches at variables {bad}, "
               f"marker 0x{vals[8]:08x}, errors {vals[12]}")
         return 1
-    print(f"[ OK ] PDSCH LDPC iteration loop (CN 50 + BN 12 cycles x {ITERS}): "
+    print(f"[ OK ] PDSCH LDPC iteration loop (compiler CN/VN microcode x {ITERS}): "
           f"hard decisions match the golden model, {vals[11]} cycles")
     return 0
 

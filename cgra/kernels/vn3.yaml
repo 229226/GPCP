@@ -1,0 +1,20 @@
+name: vn3
+kind: dfg
+desc: "3 消息 min-sum 变量节点：sum=ch+m0+m1；out word3=sum, word4=sum-m0, word5=sum-m1, word6=sign(sum)；叶子 bank 8+v word 0/1/2（flat stride=32）"
+leaves:
+  ch: {addr: {base: 256, stride: 32}}
+  m0: {addr: {base: 257, stride: 32}}
+  m1: {addr: {base: 258, stride: 32}}
+ops:
+  - {name: s1, op: add, a: ch, b: m0}
+  - {name: sum, op: add, a: s1, b: m1}
+  - {name: om0, op: sub, a: sum, b: m0}
+  - {name: om1, op: sub, a: sum, b: m1}
+  - {name: sg, op: shr, a: sum, imm: 31}
+  - {name: sum_out, op: mov, a: sum}
+sinks:
+  sum_out: {addr: {base: 259, stride: 32}}
+  om0: {addr: {base: 260, stride: 32}}
+  om1: {addr: {base: 261, stride: 32}}
+  sg: {addr: {base: 262, stride: 32}}
+instances: 8
