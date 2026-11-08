@@ -14,8 +14,11 @@ What is actually implemented and verified here:
     with a bit-exact paging-vs-monolithic equivalence check,
   * convergence comparison (layered should need fewer iterations).
 """
+import argparse
 import math
 import random
+import struct
+import sys
 
 import ldpc5g as L
 
@@ -34,14 +37,17 @@ def make_codeword(zc, seed=5):
     return info, cw
 
 
-def channel_llr(cw, snr_db, seed=9):
+def channel_llr(cw, snr_db, seed=9, sigma=0.5):
+    """Channel LLRs.  sigma is the additive noise on the un-punctured bits: the
+    0.5 default is a nearly noiseless channel (any SNR converges in one
+    iteration), larger values are what actually exercise the iteration count."""
     rnd = random.Random(seed)
     zc = len(cw) // L.COLS
     var = 10 ** (-snr_db / 10)
     llr = [int((1 - 2 * b) * 4.0 / var) for b in cw]
     llr[:PUNCT_ZC * zc] = [0] * (PUNCT_ZC * zc)   # punctured systematic bits
     for i in range(PUNCT_ZC * zc, len(llr)):
-        llr[i] += int(rnd.gauss(0, 0.5))
+        llr[i] += int(rnd.gauss(0, sigma))
     return llr
 
 
@@ -98,6 +104,31 @@ def layered_decode(llr, zc, iters=8, scale=0.75):
     return bits, L.syndrome(bits, zc)
 
 
+TD_MAGIC = 0x5A433634          # "ZC64"
+
+
+def dump_td(path, zc=64, snr_db=3.0, iters=1, seed=5, nseed=9, sigma=0.5):
+    """Write the hardware test data for sw/soc/pdsch_zc64_bm.c.
+
+    Layout (little-endian 32-bit words):
+      [0] magic  [1] zc  [2] rows  [3] cols  [4] iters  [5] nllr  [6] ninfo  [7] 0
+      [8 ..] channel LLR (cols*zc, punctured columns already zeroed)
+      [...]  information bits (KB*zc, one 0/1 per word)
+    """
+    info, cw = make_codeword(zc, seed)
+    llr = channel_llr(cw, snr_db, nseed, sigma)
+    chk, _ = L._graph(zc)
+    words = [TD_MAGIC, zc, len(chk), L.COLS, iters, L.COLS * zc, KB * zc, 0]
+    words += [v & 0xFFFFFFFF for v in llr]
+    words += [int(b) for b in info]
+    with open(path, "wb") as f:
+        f.write(struct.pack("<%dI" % len(words), *words))
+    print("wrote %s: Zc=%d rows=%d cols=%d iters=%d snr=%.1f dB sigma=%.2f, "
+          "%d LLR + %d info words"
+          % (path, zc, len(chk), L.COLS, iters, snr_db, sigma, len(llr), len(info)))
+    return 0
+
+
 def main():
     print("QC-LDPC extension: BG2 graph, Zc list %s, PE width %d" % (ZC_LIST, PES))
     ok = True
@@ -130,4 +161,16 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "dump":
+        ap = argparse.ArgumentParser(prog="nr_ldpc.py dump")
+        ap.add_argument("dump")
+        ap.add_argument("--out", required=True)
+        ap.add_argument("--zc", type=int, default=64)
+        ap.add_argument("--snr", type=float, default=3.0)
+        ap.add_argument("--iters", type=int, default=1)
+        ap.add_argument("--seed", type=int, default=5)
+        ap.add_argument("--nseed", type=int, default=9)
+        ap.add_argument("--sigma", type=float, default=5.0)
+        a = ap.parse_args()
+        raise SystemExit(dump_td(a.out, a.zc, a.snr, a.iters, a.seed, a.nseed, a.sigma))
     raise SystemExit(main())

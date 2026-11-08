@@ -103,6 +103,26 @@ run-pdsch: all
 
 # Real BG2 block, DMA-blocked: every check node streamed in/out, 10-input
 # min-sum with sentinel padding, one summary + 42x3x20 result words
+ZC64_ITERS = $(if $(ITERS),$(ITERS),4)
+ZC64_SNR   = $(if $(SNR),$(SNR),3)
+ZC64_SIGMA = $(if $(SIGMA),$(SIGMA),5)
+ZC64_TD    = $(ROOT)/build/ldpc/pdsch_zc64.td
+
+# Zc=64 的边消息按 4 x 16 分页过 16 PE 阵列：每个 (检查节点, 页) 一次 DMA + 一次 86 拍
+# 半镜像；CN 结果回主机窗口，CPU 就地做分层 VN 更新。TD 由 tools/nr_ldpc.py 生成。
+run-pdsch-zc64: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(ZC64_TD))
+	python3 $(ROOT)/tools/nr_ldpc.py dump --out $(ZC64_TD) --zc 64 \
+		--snr $(ZC64_SNR) --iters $(ZC64_ITERS) --sigma $(ZC64_SIGMA)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pdsch_zc64_bm.bin@0x80000000 \
+		--load $(ZC64_TD)@0x80400000 \
+		--results 0x80010000 --nwords 5704 \
+		--dump $(ROOT)/$(OBJ)/pdsch_zc64_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_pdsch_zc64.py $(ROOT)/$(OBJ)/pdsch_zc64_dump.txt $(ZC64_TD)
+
 run-pdsch-bg2: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_bg2_bm.bin@0x80000000 --results 0x80010000 --nwords 1270 \
