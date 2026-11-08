@@ -204,8 +204,22 @@ def check_dfg(mc, dfg, banks, sink_addrs, instances, addrs=None):
 
 
 # ---------------------------------------------------------------- 单 spec 生成
-def run_spec(spec_path, out=None, rows=None):
+def run_spec(spec_path, out=None, rows=None, _variant=None):
+    """一个 spec 可以声明 `variants: [...]`，每个变体覆盖若干 spec 字段并各自
+    输出一份头文件。`name` 决定文件名（<name>_prog.h）与宏前缀；`base_offset`
+    把所有 flat 叶子/汇地址整体平移（Zc=20 的 word_base=16、FFT 的分块轮次）。
+    所有指令字仍由 rule_map.schedule + check_dfg 编译并逐值自检，C 里只剩编排。
+    """
     spec = ks.load_spec(spec_path)
+    variants = spec.get("variants")
+    if variants and _variant is None:
+        rc = 0
+        for v in variants:
+            rc = rc or run_spec(spec_path, rows=rows, _variant=v)
+        return rc
+    if _variant:
+        spec.pop("variants", None)
+        spec.update(_variant)
     if rows is not None and spec.get("kind") == "bn":
         spec["rows"] = rows
     errs = ks.validate(spec)
@@ -252,8 +266,9 @@ def run_spec(spec_path, out=None, rows=None):
     dfg = ks.build_dfg(spec)
     instances = spec.get("instances", 16)
     # flat 地址（base + stride*instance）：长数组/广播系数；不参与 bank 分配
-    leaf_addrs = ks.expand_addr_mapping(spec.get("leaves", {}))
-    sink_flat = ks.expand_addr_mapping(spec.get("sinks", {}))
+    offset = int(spec.get("base_offset", 0))
+    leaf_addrs = ks.expand_addr_mapping(spec.get("leaves", {}), offset)
+    sink_flat = ks.expand_addr_mapping(spec.get("sinks", {}), offset)
     flat = set(leaf_addrs) | set(sink_flat)
     # ---- L2-A：两阶段 bank 分配（淘汰 leaf_banks/sink_bank 硬编码的 6 上限）----
     plan_leaves, plan_sinks = _plan_assign(dfg, skip=flat)

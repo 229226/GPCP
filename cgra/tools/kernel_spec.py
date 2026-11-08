@@ -105,7 +105,7 @@ def expand_mapping(mapping):
     return out
 
 
-def expand_addr_mapping(mapping):
+def expand_addr_mapping(mapping, offset=0):
     """{key: {addr: {base: X, stride: S}}} → {name: (base, stride)}。
 
     寻址公式：spad 平坦地址 = base + stride*instance（instance = PE 号）。
@@ -128,7 +128,7 @@ def expand_addr_mapping(mapping):
         for name, base in zip(names, bases):
             if name in out:
                 raise ValueError(f"名字重复：{name!r}")
-            out[name] = (int(base), stride)
+            out[name] = (int(base) + offset, stride)
     return out
 
 
@@ -141,6 +141,7 @@ def validate(spec):
     errs = []
     if not isinstance(spec, dict):
         return ["spec 顶层必须是映射"]
+    offset = int(spec.get("base_offset", 0))
     kind = spec.get("kind", "dfg")
     if kind not in ("bn", "cn", "dfg"):
         errs.append(f"未知 kind: {kind!r}（应为 bn/cn/dfg）")
@@ -173,7 +174,7 @@ def validate(spec):
             if bank is not None and not (0 <= bank <= 31):
                 errs.append(f"{field} {name} 的 bank {bank} 越界（必须 0..31）")
         try:
-            addrs = expand_addr_mapping(m)
+            addrs = expand_addr_mapping(m, offset)
         except ValueError as e:
             errs.append(f"{field}: {e}")
             continue
@@ -217,7 +218,8 @@ def build_dfg(spec):
         # 叶子无前驱；给占位 opcode，schedule 会跳过无前驱节点、只当 LD 源
         d.node(name, "add")
     # flat 地址（base + stride*instance）：长数组/广播系数走这里，不用 bank
-    d.addr.update(expand_addr_mapping(spec.get("leaves", {})))
+    d.addr.update(expand_addr_mapping(spec.get("leaves", {}),
+                                     int(spec.get("base_offset", 0))))
     for op in spec.get("ops", []):
         n = op["name"]
         # imm 仅 shr/shl 使用（Q15 缩放）；op.get("imm", 0) 缺省即 0

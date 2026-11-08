@@ -46,9 +46,7 @@ STAGES = {
 
 # 文件 -> (阶段, 说明)。迁移完成一项就删一行，并把 PIN 减一。
 ALLOW = {
-    # ---- P1：编译器已有对应产物，只是没接线 ----
-    "sw/soc/pdsch_gather_bm.c":("P1", "BN 24 槽 + llr（pdsch_bn_prog.h；需核 bank 布局）"),
-    # ---- P3：编译器能力缺口（MAC/acc + 每 PE 多实例） ----
+    # ---- P3：编译器能力缺口（每 PE 时间复用 + 指令级分块 DFG） ----
     "sw/soc/fft_bm.c":         ("P3", "FFT 引擎 448 拍 stage + 336 拍 block（28 个蝶形 emit）"),
     "sw/soc/ssb_fft.inc":      ("P3", "同一 FFT 引擎，被 4 个 SSB 基准 include"),
     # ---- P4：编译器能力缺口 ----
@@ -56,7 +54,7 @@ ALLOW = {
 }
 
 # 白名单总数（只减不增）。迁移一项就减一，diff 里看得见。
-PIN = 4
+PIN = 3
 
 # 旧路径产物：由 tools/gen_prach_prog.py 从 tools/cgra.py 的手写 kernel 导出。
 LEGACY_HEADERS = {}   # 旧路径头文件已全部清退（prach_prog.h 于 2026-11-08 删除）

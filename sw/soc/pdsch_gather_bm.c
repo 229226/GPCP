@@ -30,6 +30,12 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "../include/ldpc_bg2.h"
+/* 编译器产物（cgra/kernels/cn10.yaml、bn24.yaml）：Zc=20 > 16 PE，
+ * word_base 0 / 16 两份镜像各跑一次。所有指令字由 rule_map.schedule 生成。 */
+#include "cn10_w0_prog.h"
+#include "cn10_w16_prog.h"
+#include "bn24_w0_prog.h"
+#include "bn24_w16_prog.h"
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
@@ -39,9 +45,7 @@
 #define NPES             16
 #define NBANKS_IN        10        /* 10 edges, sentinel-padded */
 #define SENTINEL         32767
-#define CYC_HALF         90
 #define LCG_SEED         7u
-#define CYC_BN           130
 #define BN_SLOTS         24
 #define SENTINEL_BANK    30   /* outside the BN slots (0..23) and results (10..12) */
 
@@ -57,109 +61,45 @@ static int32_t (*llr)[ZC] = (int32_t (*)[ZC])LLR_BASE;
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
-#define SPAD_IDX(bank, word) GPCP_SPAD_IDX((bank), (word))
-
-static uint32_t prog_half[2][CYC_HALF * NPES];
-static uint32_t prog_bn[2][CYC_BN * NPES];
 static int32_t bout[26 * ZC] __attribute__((aligned(8)));   /* BN output buffer (separate from the input) */
 static uint32_t errs, runs, dmas;
 
-static void emit(uint32_t *p, uint32_t cyc, uint32_t pe, uint32_t op,
-                 uint32_t a, uint32_t b, uint32_t dst, uint32_t imm)
-{
-    p[cyc * NPES + pe] = gpcp_cgra_inst(op, a, b, dst, imm);
-}
-
-/* One min-sum check node over 10 (sentinel-padded) edges.
- * word_base = 0 for lifted rows 0..15, 16 for rows 16..19 (4 PEs only). */
-static void build_half(uint32_t which, uint32_t word_base)
-{
-    for (uint32_t pe = 0; pe < NPES; pe++) {
-        uint32_t w = word_base + pe;
-        if (w >= ZC)
-            continue;
-        uint32_t cyc = 0;
-        /* k = 0: |x| -> min1, min2 = +inf (bank 13 holds the sentinel) */
-        emit(prog_half[which], cyc++, pe, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(0, w));
-        emit(prog_half[which], cyc++, pe, GPCP_OP_SHR, 0, 0, 1, 31);
-        emit(prog_half[which], cyc++, pe, GPCP_OP_XOR, 0, 1, 2, 0);
-        emit(prog_half[which], cyc++, pe, GPCP_OP_SUB, 2, 1, 3, 0);
-        emit(prog_half[which], cyc++, pe, GPCP_OP_MOV, 3, 0, 5, 0);          /* min1 */
-        emit(prog_half[which], cyc++, pe, GPCP_OP_LD, 0, 0, 6, SPAD_IDX(SENTINEL_BANK, w)); /* +inf */
-        emit(prog_half[which], cyc++, pe, GPCP_OP_SHR, 1, 0, 7, 0);          /* sign = x0>>31 */
-        for (uint32_t k = 1; k < NBANKS_IN; k++) {
-            emit(prog_half[which], cyc++, pe, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(k, w));
-            emit(prog_half[which], cyc++, pe, GPCP_OP_SHR, 0, 0, 1, 31);
-            emit(prog_half[which], cyc++, pe, GPCP_OP_XOR, 0, 1, 2, 0);
-            emit(prog_half[which], cyc++, pe, GPCP_OP_SUB, 2, 1, 3, 0);      /* |x| */
-            emit(prog_half[which], cyc++, pe, GPCP_OP_XOR, 7, 1, 7, 0);      /* sign ^= */
-            /* min2' = max(min1, min(min2, |x|)); min1' = min(min1, |x|) */
-            emit(prog_half[which], cyc++, pe, GPCP_OP_MIN, 6, 3, 4, 0);
-            emit(prog_half[which], cyc++, pe, GPCP_OP_MAX, 5, 4, 6, 0);
-            emit(prog_half[which], cyc++, pe, GPCP_OP_MIN, 5, 3, 5, 0);
-        }
-        emit(prog_half[which], cyc++, pe, GPCP_OP_ST, 5, 0, 0, SPAD_IDX(10, w));   /* min1 */
-        emit(prog_half[which], cyc++, pe, GPCP_OP_ST, 6, 0, 0, SPAD_IDX(11, w));   /* min2 */
-        emit(prog_half[which], cyc++, pe, GPCP_OP_ST, 7, 0, 0, SPAD_IDX(12, w));   /* sign */
-    }
-}
-
-
-/* ---- variable node: 24 slots + llr (bank 24) -> updated slots + hard (25) */
-static void build_bn(uint32_t which, uint32_t word_base)
-{
-    for (uint32_t pe = 0; pe < NPES; pe++) {
-        uint32_t w = word_base + pe;
-        if (w >= ZC)
-            continue;
-        uint32_t cyc = 0;
-        emit(prog_bn[which], cyc++, pe, GPCP_OP_XOR, 1, 1, 1, 0);
-        for (uint32_t k = 0; k < BN_SLOTS; k++) {
-            emit(prog_bn[which], cyc++, pe, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(k, w));
-            emit(prog_bn[which], cyc++, pe, GPCP_OP_ADD, 1, 0, 1, 0);
-        }
-        emit(prog_bn[which], cyc++, pe, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(BN_SLOTS, w));
-        emit(prog_bn[which], cyc++, pe, GPCP_OP_ADD, 1, 0, 1, 0);
-        for (uint32_t k = 0; k < BN_SLOTS; k++) {
-            emit(prog_bn[which], cyc++, pe, GPCP_OP_LD, 0, 0, 0, SPAD_IDX(k, w));
-            emit(prog_bn[which], cyc++, pe, GPCP_OP_SUB, 1, 0, 2, 0);
-            emit(prog_bn[which], cyc++, pe, GPCP_OP_ST, 2, 0, 0, SPAD_IDX(k, w));
-        }
-        emit(prog_bn[which], cyc++, pe, GPCP_OP_SHR, 1, 0, 0, 31);
-        emit(prog_bn[which], cyc++, pe, GPCP_OP_ST, 0, 0, 0, SPAD_IDX(BN_SLOTS + 1, w));
-    }
-}
-
-static void load_prog_bn(uint32_t which)
-{
-    for (uint32_t i = 0; i < CYC_BN * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog_bn[which][i]);
-}
-
-static void array_run_bn(void)
-{
-    gpcp_cgra_array_start(CGRA_BASE, 0, CYC_BN);
-    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-    uint32_t spins = 0;
-    while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_BUSY)
-        if (++spins > 2000000u) { errs++; break; }
-    runs++;
-}
-
 static void load_prog(uint32_t which)
 {
-    for (uint32_t i = 0; i < CYC_HALF * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog_half[which][i]);
+    const uint32_t *p = which ? cn10_w16_prog : cn10_w0_prog;
+    uint32_t n = which ? CN10_W16_PROG_CYCLES : CN10_W0_PROG_CYCLES;
+    for (uint32_t i = 0; i < n * NPES; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, p[i]);
 }
 
-static void array_run(void)
+static void array_run(uint32_t which)
 {
-    gpcp_cgra_array_start(CGRA_BASE, 0, CYC_HALF);
+    gpcp_cgra_array_start(CGRA_BASE, 0,
+                          which ? CN10_W16_PROG_CYCLES : CN10_W0_PROG_CYCLES);
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     uint32_t spins = 0;
     while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_BUSY) {
         if (++spins > 200000u) { errs++; break; }
     }
+    runs++;
+}
+
+static void load_prog_bn(uint32_t which)
+{
+    const uint32_t *p = which ? bn24_w16_prog : bn24_w0_prog;
+    uint32_t n = which ? BN24_W16_PROG_CYCLES : BN24_W0_PROG_CYCLES;
+    for (uint32_t i = 0; i < n * NPES; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, p[i]);
+}
+
+static void array_run_bn(uint32_t which)
+{
+    gpcp_cgra_array_start(CGRA_BASE, 0,
+                          which ? BN24_W16_PROG_CYCLES : BN24_W0_PROG_CYCLES);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    uint32_t spins = 0;
+    while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_BUSY)
+        if (++spins > 2000000u) { errs++; break; }
     runs++;
 }
 
@@ -214,8 +154,6 @@ int main(void)
                                ? llr[bg2_col[r][k]][(i + bg2_sh[r][k]) % ZC]
                                : SENTINEL;
 
-    build_half(0, 0);
-    build_half(1, 16);
     for (uint32_t i = 0; i < ZC; i++)
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
 
@@ -223,9 +161,9 @@ int main(void)
     for (uint32_t r = 0; r < BG2_ROWS; r++) {
         dma_2d((uintptr_t)&msg[r][0][0], 0, NBANKS_IN * ZC, 0, 32, ZC);
         load_prog(0);
-        array_run();
+        array_run(0);
         load_prog(1);
-        array_run();
+        array_run(1);
         dma_2d((uintptr_t)&res[r][0][0], 10 * 32, 3 * ZC, 1, 32, ZC);
     }
     uint32_t cyc = mtime() - t0;
@@ -265,8 +203,6 @@ int main(void)
             out[500 + k * ZC + i] = (uint32_t)gath[k * ZC + i];
 
     /* BN with a separate output buffer: no in-place aliasing at all */
-    build_bn(0, 0);
-    build_bn(1, 16);
     dma_2d((uintptr_t)gath, 0, 26 * ZC, 0, 32, ZC);
     /* dump what actually landed in the scratchpad, before the BN runs */
     for (uint32_t k = 0; k < 26; k++)
@@ -274,10 +210,16 @@ int main(void)
             out[1540 + k * ZC + i] =
                 (uint32_t)mmio_r(CGRA_BASE + GPCP_SPAD_ADDR(k, i));
     load_prog_bn(0);
-    array_run_bn();
+    array_run_bn(0);
     load_prog_bn(1);
-    array_run_bn();
-    dma_2d((uintptr_t)bout, 0, 26 * ZC, 1, 32, ZC);
+    array_run_bn(1);
+    /* BN 结果用 host 窗口逐字读回：spad 里的值是对的，DMA out 的 2D
+     * 搬回在这块 26-bank 布局的首尾边界会漏字（见 spad 输入 dump 的
+     * 同一条读法）。这是 debug bench，520 次 MMIO 读的代价可接受。 */
+    for (uint32_t k = 0; k < 26; k++)
+        for (uint32_t i = 0; i < ZC; i++)
+            bout[k * ZC + i] =
+                (int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_ADDR(k, i));
     for (uint32_t k = 0; k < 26; k++)
         for (uint32_t i = 0; i < ZC; i++)
             out[1020 + k * ZC + i] = (uint32_t)bout[k * ZC + i];

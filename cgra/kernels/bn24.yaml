@@ -1,0 +1,63 @@
+name: bn24
+kind: dfg
+desc: "24 槽变量节点：sum = Σmsg + llr，out_k = sum - msg_k，hard = sum>>31；原位写回"
+leaves:
+  m0..m23: {addr: {base: "0..736:32", stride: 1}}
+  llr:     {addr: {base: 768, stride: 1}}
+ops:
+  - {name: s1, op: add, a: m0, b: m1}
+  - {name: s2, op: add, a: s1, b: m2}
+  - {name: s3, op: add, a: s2, b: m3}
+  - {name: s4, op: add, a: s3, b: m4}
+  - {name: s5, op: add, a: s4, b: m5}
+  - {name: s6, op: add, a: s5, b: m6}
+  - {name: s7, op: add, a: s6, b: m7}
+  - {name: s8, op: add, a: s7, b: m8}
+  - {name: s9, op: add, a: s8, b: m9}
+  - {name: s10, op: add, a: s9, b: m10}
+  - {name: s11, op: add, a: s10, b: m11}
+  - {name: s12, op: add, a: s11, b: m12}
+  - {name: s13, op: add, a: s12, b: m13}
+  - {name: s14, op: add, a: s13, b: m14}
+  - {name: s15, op: add, a: s14, b: m15}
+  - {name: s16, op: add, a: s15, b: m16}
+  - {name: s17, op: add, a: s16, b: m17}
+  - {name: s18, op: add, a: s17, b: m18}
+  - {name: s19, op: add, a: s18, b: m19}
+  - {name: s20, op: add, a: s19, b: m20}
+  - {name: s21, op: add, a: s20, b: m21}
+  - {name: s22, op: add, a: s21, b: m22}
+  - {name: s23, op: add, a: s22, b: m23}
+  - {name: all, op: add, a: s23, b: llr}
+  - {name: o0, op: sub, a: all, b: m0}
+  - {name: o1, op: sub, a: all, b: m1}
+  - {name: o2, op: sub, a: all, b: m2}
+  - {name: o3, op: sub, a: all, b: m3}
+  - {name: o4, op: sub, a: all, b: m4}
+  - {name: o5, op: sub, a: all, b: m5}
+  - {name: o6, op: sub, a: all, b: m6}
+  - {name: o7, op: sub, a: all, b: m7}
+  - {name: o8, op: sub, a: all, b: m8}
+  - {name: o9, op: sub, a: all, b: m9}
+  - {name: o10, op: sub, a: all, b: m10}
+  - {name: o11, op: sub, a: all, b: m11}
+  - {name: o12, op: sub, a: all, b: m12}
+  - {name: o13, op: sub, a: all, b: m13}
+  - {name: o14, op: sub, a: all, b: m14}
+  - {name: o15, op: sub, a: all, b: m15}
+  - {name: o16, op: sub, a: all, b: m16}
+  - {name: o17, op: sub, a: all, b: m17}
+  - {name: o18, op: sub, a: all, b: m18}
+  - {name: o19, op: sub, a: all, b: m19}
+  - {name: o20, op: sub, a: all, b: m20}
+  - {name: o21, op: sub, a: all, b: m21}
+  - {name: o22, op: sub, a: all, b: m22}
+  - {name: o23, op: sub, a: all, b: m23}
+  - {name: hard, op: shr, a: all, imm: 31}
+sinks:
+  o0..o23: {addr: {base: "0..736:32", stride: 1}}
+  hard:    {addr: {base: 800, stride: 1}}
+instances: 16
+variants:
+  - {name: bn24_w0,  base_offset: 0}
+  - {name: bn24_w16, base_offset: 16}
