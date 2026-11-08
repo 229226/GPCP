@@ -39,3 +39,6 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-08,,,180,arch,feature,官方 38.212 移位表入库（双源验证）+ BG1 Zc=64 分页分层落硬件；修正 Zc=64 应用 i_LS=0,de1aa06,measured,BG1 46x68 Kb=22 736 阵列/7.19M 周期/1408-1408 信息位；BG2 改 set0 672/4.06M/384-384；table ingest 三项校验全过；verify-smart 57 passed/0 failed/867s
 2026-11-08,,,90,arch,feature,开发计划改为 gNB 功能视角（docs/19 G1-G7）；G1 第一步 PBCH polar 编码落 CGRA（9 级/512 位全对）,4d59487,measured,run-pbch-tx 512/512 位 = 模型；9 次阵列运行/4327 周期；字间级需逐 PE 掩码（否则 178/512 位错）；verify-smart 58 passed/0 failed/828s
 2026-11-08,,,45,infra,infra,立法：微码只许编译器生成（AGENTS §4.18/§6.19）+ 可执行门禁 check_handprog,e3e8c24,measured,存量 18 文件/90 处钉住 PIN 只减不增；注入 1 处违例 exit=1、撤销后 OK；预检在指纹缓存之前跑
+2026-11-08,,,50,microcode,infra,polar node ×7 统一到编译器产物 polar_node_prog.h（22→25 拍）,9fdf5a6,measured,run-ssb/ssbfft/ssb-fid/ssb-slot/pdcch/rach/link-e2e 全 OK；白名单 18→15
+2026-11-08,,,60,microcode,infra,cplx_mul.yaml 取代 dma/irq/ring/slot_rtos 手写单抽头复乘（14→18 拍）,076f41d,measured,run-dma/irq/ring/slot 全 OK；白名单 15→11；corr 系重归类 P3
+2026-11-08,,,25,sw,infra,CGRA 示例 cgra_matmul 改用编译器微码 matmul.yaml,b8eec0f,measured,sw-check RV32/RV64 通过；白名单 11→10；P2 清空
