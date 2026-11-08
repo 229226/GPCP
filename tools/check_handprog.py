@@ -20,8 +20,11 @@ gpcp_cgra_inst() 现拼指令的做法都算手写微码 —— 它绕过了 YAM
 
     P1  已有编译器产物，纯重复，可直接清退
     P2  基础设施自测/示例程序，需要先写一份 YAML
-    P3  编译器能力缺口：FFT 引擎（MAC/acc、每 PE 多实例、二维 spad 地址、>512 拍分块）
-    P4  编译器能力缺口：多 kernel 融合（spad 传值），即 rxchain 的 127 拍镜像
+    P3  编译器能力缺口：FFT 引擎（已由 kind: fft_image 专用调度器解决）
+    P4  编译器能力缺口：多 kernel 融合（已由 kind: image 串接解决）
+
+2026-11-08 全部清退完成：ALLOW 为空、PIN=0。之后任何新的 gpcp_cgra_inst()
+都直接判违规，没有过渡白名单。
 
 用法：
     python3 tools/check_handprog.py          # 门禁
@@ -40,21 +43,15 @@ BLESSED = ("gen_kernel_prog.py", "gen_bn_prog.py", "gen_cn_prog.py")
 STAGES = {
     "P1": "已有编译器产物，纯重复",
     "P2": "自测/示例程序，需先写 YAML",
-    "P3": "编译器缺 MAC/acc + 每 PE 多实例 + 二维地址",
-    "P4": "编译器缺多 kernel 融合（spad 传值）",
+    "P3": "编译器缺镜像编排（已解决）",
+    "P4": "编译器缺阶段串接（已解决）",
 }
 
 # 文件 -> (阶段, 说明)。迁移完成一项就删一行，并把 PIN 减一。
-ALLOW = {
-    # ---- P3：编译器能力缺口（每 PE 时间复用 + 指令级分块 DFG） ----
-    "sw/soc/fft_bm.c":         ("P3", "FFT 引擎 448 拍 stage + 336 拍 block（28 个蝶形 emit）"),
-    "sw/soc/ssb_fft.inc":      ("P3", "同一 FFT 引擎，被 4 个 SSB 基准 include"),
-    # ---- P4：编译器能力缺口 ----
-    "sw/soc/rxchain_bm.c":     ("P4", "4 阶段融合 127 拍镜像（chNest/MMSE/16QAM/CN，95 个 emit）"),
-}
+ALLOW = {}   # 存量已全部清退；新出现的 gpcp_cgra_inst() 一律判违规
 
-# 白名单总数（只减不增）。迁移一项就减一，diff 里看得见。
-PIN = 3
+# 白名单总数（只减不增）。已归零，不许再扩充。
+PIN = 0
 
 # 旧路径产物：由 tools/gen_prach_prog.py 从 tools/cgra.py 的手写 kernel 导出。
 LEGACY_HEADERS = {}   # 旧路径头文件已全部清退（prach_prog.h 于 2026-11-08 删除）

@@ -196,7 +196,7 @@ def _touch(liv, name, cyc):
 
 
 def schedule(dfg, instances=16, banks=None, sink_addrs=None, addrs=None,
-             return_liveness=False):
+             return_liveness=False, cache_leaves=()):
     """规则映射：一个实例一条串行指令流，跑在自己的 PE 上。
 
     返回 (Microcode, 层号表, 汇地址表, 叶子地址表)；return_liveness=True 时额外返回
@@ -204,7 +204,12 @@ def schedule(dfg, instances=16, banks=None, sink_addrs=None, addrs=None,
 
     banks / sink_addrs：若给定则使用（L2-A 由 bank_alloc 分配）；否则沿用旧的
     leaf_banks / sink_bank 硬编码（与 rule_map.main 的 --dfg/--bn 路径保持兼容）。
+
+    cache_leaves：这些名字的叶子只 LD 一次，结果留在寄存器里保活到最后一个
+    消费者（默认行为是每次引用都重新 LD）。用于 FFT 蝶形的 Q15 旋转因子，
+    让编译出的指令流与手写 28 拍/轮布局对齐。
     """
+    cache_leaves = set(cache_leaves or ())
     mc = Microcode()
     lv = dfg.levels()
     if banks is None:
@@ -256,7 +261,10 @@ def schedule(dfg, instances=16, banks=None, sink_addrs=None, addrs=None,
                 _touch(liveness, s, cyc)
                 cyc += 1
                 srcs.append(r)
-                tmp.append(r)
+                if s in cache_leaves:
+                    reg_of[s] = r          # 保活，由 lastuse 释放
+                else:
+                    tmp.append(r)
             if not free:
                 raise SystemExit(f"寄存器不够：{n} 的结果无处可放")
             dst = free.pop()

@@ -37,6 +37,8 @@
 
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "fft_stage_prog.h"   /* 编译器 image：16 轮 × 4 m 组 */
+#include "fft_block_prog.h"   /* 编译器 image：radix-16 融合尾 */
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
@@ -44,7 +46,6 @@
 #define LUT_RAM          0x80100000ul
 
 #define NPES             16
-#define MAX_CYC          512
 #define TILE_BFLIES      64
 #define DATA_WORDS       512
 #define TW_BASE          512
@@ -53,8 +54,6 @@
 #define TAIL_BLOCK       64
 #define TAIL_BLOCK_WORDS 128
 
-#define CYCLES_STAGE     448
-#define CYCLES_BLOCK     336
 
 /* twiddle ROM layout (words) - must match tools/fft_plan.py */
 #define LUT_OFS_256      0ul
@@ -79,7 +78,6 @@ static int32_t *d256  = (int32_t *)DATA_256;
 static int32_t *d1024 = (int32_t *)DATA_1024;
 static int32_t *d4096 = (int32_t *)DATA_4096;
 
-static uint32_t prog[MAX_CYC * NPES];
 
 static uint32_t t_dstart[MAX_TILES], t_in_end[MAX_TILES], t_out_end[MAX_TILES];
 static uint32_t t_in[MAX_TILES], t_out[MAX_TILES];
@@ -103,130 +101,15 @@ static int32_t rnd(int32_t mod)
 }
 
 /* ------------------------------------------------------------- microcode */
-static void emit(uint32_t cyc, uint32_t pe, uint32_t op,
-                 uint32_t a, uint32_t b, uint32_t dst, uint32_t imm)
+/* 两张镜像全部由 cgra/kernels/fft_stage.yaml / fft_block.yaml 编译：
+ * 每个 (轮, m) 是一个 radix-4 蝶形 DFG，rule_map.schedule 编译后由 image
+ * 编译器按 at=轮*30、pe_map=[m,m+4,m+8,m+12] 拼回 480 / 360 拍镜像。 */
+static void load_prog(uint32_t which)
 {
-    prog[cyc * NPES + pe] = gpcp_cgra_inst(op, a, b, dst, imm);
-}
-
-/* one PE, one butterfly output over 28 cycles:
- *   r0/r1 accumulator, r4/r5 loaded point, r6/r7 twiddle, r2/r3 product
- *   tw < 0: shift-only output (m = 0, and every output of the L = 4 pass)
- *   tw >= 0: multiply by the Q15 twiddle at that scratchpad word
- */
-static void emit_round(uint32_t base, uint32_t pe, uint32_t m,
-                       int32_t j0, int32_t jstep,
-                       int32_t st0, int32_t mstep, int32_t tw)
-{
-    int32_t j;
-    uint32_t f, shift;
-
-    emit(base + 0, pe, GPCP_OP_LD, 0, 0, 4, (uint32_t)j0);
-    emit(base + 1, pe, GPCP_OP_LD, 0, 0, 5, (uint32_t)(j0 + 1));
-    emit(base + 2, pe, GPCP_OP_MOV, 4, 0, 0, 0);
-    emit(base + 3, pe, GPCP_OP_MOV, 5, 0, 1, 0);
-    for (j = 1; j <= 3; j++) {
-        int32_t w = j0 + j * jstep;
-        f = ((uint32_t)j * m) & 3u;          /* W4^(j*m) = 1, -i, -1, i */
-        emit(base + 4 * j + 0, pe, GPCP_OP_LD, 0, 0, 4, (uint32_t)w);
-        emit(base + 4 * j + 1, pe, GPCP_OP_LD, 0, 0, 5, (uint32_t)(w + 1));
-        switch (f) {
-        case 0:   /* +v */
-            emit(base + 4 * j + 2, pe, GPCP_OP_ADD, 0, 4, 0, 0);
-            emit(base + 4 * j + 3, pe, GPCP_OP_ADD, 1, 5, 1, 0);
-            break;
-        case 1:   /* -i*v = ( v_i, -v_r) */
-            emit(base + 4 * j + 2, pe, GPCP_OP_ADD, 0, 5, 0, 0);
-            emit(base + 4 * j + 3, pe, GPCP_OP_SUB, 1, 4, 1, 0);
-            break;
-        case 2:   /* -v */
-            emit(base + 4 * j + 2, pe, GPCP_OP_SUB, 0, 4, 0, 0);
-            emit(base + 4 * j + 3, pe, GPCP_OP_SUB, 1, 5, 1, 0);
-            break;
-        default:  /* +i*v = (-v_i,  v_r) */
-            emit(base + 4 * j + 2, pe, GPCP_OP_SUB, 0, 5, 0, 0);
-            emit(base + 4 * j + 3, pe, GPCP_OP_ADD, 1, 4, 1, 0);
-            break;
-        }
-    }
-
-    shift = (tw >= 0) ? 17u : 2u;
-    if (tw >= 0) {
-        emit(base + 16, pe, GPCP_OP_LD, 0, 0, 6, (uint32_t)tw);
-        emit(base + 17, pe, GPCP_OP_LD, 0, 0, 7, (uint32_t)(tw + 1));
-        emit(base + 18, pe, GPCP_OP_MUL, 0, 6, 2, 0);      /* r0*Wr */
-        emit(base + 19, pe, GPCP_OP_MUL, 1, 7, 3, 0);      /* r1*Wi */
-        emit(base + 20, pe, GPCP_OP_SUB, 2, 3, 2, 0);      /* re */
-        emit(base + 21, pe, GPCP_OP_MUL, 0, 7, 3, 0);      /* r0*Wi */
-        emit(base + 22, pe, GPCP_OP_MUL, 1, 6, 4, 0);      /* r1*Wr */
-        emit(base + 23, pe, GPCP_OP_ADD, 3, 4, 3, 0);      /* im */
-    } else {
-        emit(base + 22, pe, GPCP_OP_MOV, 0, 0, 2, 0);
-        emit(base + 23, pe, GPCP_OP_MOV, 1, 0, 3, 0);
-    }
-    emit(base + 24, pe, GPCP_OP_SHR, 2, 0, 2, shift);
-    emit(base + 25, pe, GPCP_OP_SHR, 3, 0, 3, shift);
-    emit(base + 26, pe, GPCP_OP_ST, 2, 0, 0, (uint32_t)(st0 + (int32_t)m * mstep));
-    emit(base + 27, pe, GPCP_OP_ST, 3, 0, 0, (uint32_t)(st0 + (int32_t)m * mstep + 1));
-}
-
-static void clear_prog(void)
-{
-    for (uint32_t i = 0; i < MAX_CYC * NPES; i++)
-        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-}
-
-/* image 1: one radix-4 stage, 64 butterflies, 16 rounds of 4 butterflies */
-static void build_stage_image(void)
-{
-    clear_prog();
-    for (uint32_t r = 0; r < 16; r++) {
-        for (uint32_t pe = 0; pe < NPES; pe++) {
-            uint32_t b = pe >> 2, m = pe & 3;
-            uint32_t bi = 4 * r + b;
-            int32_t j0 = (int32_t)(2 * bi);             /* word = 128*j + 2*bi */
-            int32_t tw = m ? (int32_t)(TW_BASE + (m - 1) * 128 + bi * 2) : -1;
-            emit_round(r * 28, pe, m, j0, 128, j0, 128, tw);
-        }
-    }
-}
-
-/* image 2: fused 64-point block (radix-16 tail = L=64, L=16, L=4 passes) */
-static void build_block_image(void)
-{
-    clear_prog();
-    for (uint32_t r = 0; r < 4; r++) {           /* pass A: L = 64, M = 16 */
-        for (uint32_t pe = 0; pe < NPES; pe++) {
-            uint32_t b = pe >> 2, m = pe & 3;
-            uint32_t t = 4 * r + b;
-            int32_t site = (int32_t)(t * 2);
-            int32_t tw = m ? (int32_t)(TW_BASE + (m - 1) * 32 + t * 2) : -1;
-            emit_round(r * 28, pe, m, site, 32, site, 32, tw);
-        }
-    }
-    for (uint32_t r = 0; r < 4; r++) {           /* pass B: L = 16, M = 4 */
-        for (uint32_t pe = 0; pe < NPES; pe++) {
-            uint32_t b = pe >> 2, m = pe & 3;
-            uint32_t beta = 4 * r + b, sb = beta >> 2, t2 = beta & 3;
-            int32_t site = (int32_t)((sb * 16 + t2) * 2);
-            int32_t tw = m ? (int32_t)(TW_BASE + 96 + (m - 1) * 8 + t2 * 2) : -1;
-            emit_round(112 + r * 28, pe, m, site, 8, site, 8, tw);
-        }
-    }
-    for (uint32_t r = 0; r < 4; r++) {           /* pass C: L = 4, M = 1 */
-        for (uint32_t pe = 0; pe < NPES; pe++) {
-            uint32_t b = pe >> 2, m = pe & 3;
-            uint32_t sbn = 4 * r + b;
-            int32_t site = (int32_t)(sbn * 4 * 2);
-            emit_round(224 + r * 28, pe, m, site, 2, site, 2, -1);
-        }
-    }
-}
-
-static void load_prog(uint32_t cycles)
-{
-    for (uint32_t i = 0; i < cycles * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+    const uint32_t *p = which ? fft_block_prog : fft_stage_prog;
+    uint32_t n = which ? FFT_BLOCK_PROG_CYCLES : FFT_STAGE_PROG_CYCLES;
+    for (uint32_t i = 0; i < n * NPES; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, p[i]);
 }
 
 /* --------------------------------------------------------------- ring setup */
@@ -276,7 +159,7 @@ static void desc_full_stages(uint32_t n, int32_t *data, uint32_t lut_ofs,
             uint32_t base = q * TILE_BFLIES;
             uint32_t blk = base / M, t0 = base % M;
 
-            tile_begin(page & 1u, CYCLES_STAGE);
+            tile_begin(page & 1u, FFT_STAGE_PROG_CYCLES);
             for (uint32_t j = 0; j < 4; j++) {
                 uint32_t g0 = blk * L + j * M + t0;
                 dsc((uintptr_t)&data[2 * g0], j * 128, 128, page & 1u, 0, 0, 0);
@@ -298,7 +181,7 @@ static void desc_tail(uint32_t n, int32_t *data, uint32_t *page_toggle)
 {
     for (uint32_t b = 0; b < n / TAIL_BLOCK; b++) {
         uint32_t page = (*page_toggle)++;
-        tile_begin(page & 1u, CYCLES_BLOCK);
+        tile_begin(page & 1u, FFT_BLOCK_PROG_CYCLES);
         dsc((uintptr_t)&data[b * TAIL_BLOCK * 2], 0, TAIL_BLOCK_WORDS, page & 1u, 0, 0, 0);
         t_in_end[n_tiles] = n_desc;
         dsc((uintptr_t)&data[b * TAIL_BLOCK * 2], 0, TAIL_BLOCK_WORDS, page & 1u, 1, 0, 0);
@@ -393,8 +276,7 @@ int main(void)
     fill_input(d4096, 4096, 0x369Cu);
 
     /* ---- phase 1: every full stage (L >= 256) of all three sizes ---- */
-    build_stage_image();
-    load_prog(CYCLES_STAGE);
+    load_prog(0);
     n_tiles = 0; n_desc = 0;
     {
         uint32_t pg = 0;
@@ -478,8 +360,7 @@ int main(void)
     }
 
     /* ---- phase 2: fused radix-16 tails ---- */
-    build_block_image();
-    load_prog(CYCLES_BLOCK);
+    load_prog(1);
     load_tail_twiddles();
     n_tiles = 0; n_desc = 0;
     {

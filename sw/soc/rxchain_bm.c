@@ -28,6 +28,7 @@
  */
 
 #include "../include/gpcp_cgra.h"
+#include "rxchain_prog.h"    /* 编译器 image：6 段 DFG 串接，勿手改 */
 #include "../include/soc_io.h"
 
 #define CGRA_BASE    0x50000000ul
@@ -46,11 +47,6 @@
 #define WORDS_IN    64      /* 4 words per bank (Yr,Yi,Xr,Xi)        */
 #define WORDS_OUT   48      /* 3 words per bank (min1,min2,sign)     */
 
-#define CYC_A       15      /* LS channel estimate      */
-#define CYC_B       20      /* MMSE numerator + |H|^2   */
-#define CYC_D       40      /* 16-QAM max-log demapper  */
-#define CYC_C       52      /* LDPC check node          */
-#define CHAIN_CYCLES (CYC_A + CYC_B + CYC_D + CYC_C)     /* 127 */
 
 /* per-bank scratchpad word map (page relative) */
 #define W_YR   0
@@ -76,7 +72,6 @@
 static int32_t  in[SLOTS][WORDS_IN] __attribute__((aligned(8)));
 static int32_t  out[SLOTS][WORDS_OUT] __attribute__((aligned(8)));
 static uint32_t desc[16][8] __attribute__((aligned(64)));
-static uint32_t chain_prog[CHAIN_CYCLES * NPES];
 
 static uint32_t t_array;     /* cycles spent waiting for the array */
 static uint32_t t_ring;      /* cycles spent waiting for descriptors  */
@@ -152,7 +147,7 @@ static void array_run(uint32_t page)
 {
     uint32_t t0 = mmio_r(CLINT_MTIME);
     uint32_t want = arr_count + 1;
-    gpcp_cgra_array_start(CGRA_BASE, page, CHAIN_CYCLES);
+    gpcp_cgra_array_start(CGRA_BASE, page, RXCHAIN_PROG_CYCLES);
     uint32_t g = 0;
     while (arr_count < want) {
         __asm__ __volatile__("csrci mstatus, 8");
@@ -165,156 +160,13 @@ static void array_run(uint32_t page)
 }
 
 /* --------------------------------------------------------------- microcode */
-static void emit(uint32_t cyc, uint32_t pe, uint32_t op, uint32_t a, uint32_t b,
-                 uint32_t dst, uint32_t imm)
-{
-    chain_prog[cyc * NPES + pe] = gpcp_cgra_inst(op, a, b, dst, imm);
-}
-
-static void build_chain(void)
-{
-    for (uint32_t c = 0; c < CHAIN_CYCLES * NPES; c++)
-        chain_prog[c] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-
-    for (uint32_t p = 0; p < NPES; p++) {
-        /* ---- stage A: LS channel estimate (chnest16) ---- */
-        emit(0,  p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, W_YR));
-        emit(1,  p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, W_YI));
-        emit(2,  p, GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, W_XR));
-        emit(3,  p, GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, W_XI));
-        emit(4,  p, GPCP_OP_MUL, 0, 2, 4, 0);           /* Yr*Xr */
-        emit(5,  p, GPCP_OP_MUL, 1, 3, 5, 0);           /* Yi*Xi */
-        emit(6,  p, GPCP_OP_ADD, 4, 5, 4, 0);
-        emit(7,  p, GPCP_OP_SHR, 4, 0, 4, 15);          /* Hr */
-        emit(8,  p, GPCP_OP_MUL, 1, 2, 5, 0);           /* Yi*Xr */
-        emit(9,  p, GPCP_OP_MUL, 0, 3, 6, 0);           /* Yr*Xi */
-        emit(10, p, GPCP_OP_SUB, 5, 6, 5, 0);
-        emit(11, p, GPCP_OP_SHR, 5, 0, 5, 15);          /* Hi */
-        emit(12, p, GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(p, W_HR));
-        emit(13, p, GPCP_OP_ST, 5, 0, 0, GPCP_SPAD_IDX(p, W_HI));
-
-        /* ---- stage B: MMSE numerator + |H|^2 (mmse16) ---- */
-        emit(CYC_A + 0,  p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, W_HR));
-        emit(CYC_A + 1,  p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, W_HI));
-        emit(CYC_A + 2,  p, GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, W_YR));
-        emit(CYC_A + 3,  p, GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, W_YI));
-        emit(CYC_A + 4,  p, GPCP_OP_MUL, 0, 2, 4, 0);    /* Hr*Yr */
-        emit(CYC_A + 5,  p, GPCP_OP_MUL, 1, 3, 5, 0);    /* Hi*Yi */
-        emit(CYC_A + 6,  p, GPCP_OP_ADD, 4, 5, 4, 0);
-        emit(CYC_A + 7,  p, GPCP_OP_SHR, 4, 0, 4, 15);   /* Nr */
-        emit(CYC_A + 8,  p, GPCP_OP_MUL, 1, 2, 5, 0);    /* Hi*Yr */
-        emit(CYC_A + 9,  p, GPCP_OP_MUL, 0, 3, 6, 0);    /* Hr*Yi */
-        emit(CYC_A + 10, p, GPCP_OP_SUB, 5, 6, 5, 0);
-        emit(CYC_A + 11, p, GPCP_OP_SHR, 5, 0, 5, 15);   /* Ni */
-        emit(CYC_A + 12, p, GPCP_OP_MUL, 0, 0, 6, 0);    /* Hr^2 */
-        emit(CYC_A + 13, p, GPCP_OP_MUL, 1, 1, 7, 0);    /* Hi^2 */
-        emit(CYC_A + 14, p, GPCP_OP_ADD, 6, 7, 6, 0);
-        emit(CYC_A + 15, p, GPCP_OP_SHR, 6, 0, 6, 15);   /* |H|^2 */
-        emit(CYC_A + 16, p, GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(p, W_NR));
-        emit(CYC_A + 17, p, GPCP_OP_ST, 5, 0, 0, GPCP_SPAD_IDX(p, W_NI));
-        emit(CYC_A + 18, p, GPCP_OP_ST, 6, 0, 0, GPCP_SPAD_IDX(p, W_MAG));
-
-        /* ---- stage D: 16-QAM max-log soft demapper ----
-         * Works on the matched-filter output (Nr,Ni) and the channel gain
-         * |H|^2, so the decision metric M(s) = |H|^2 s^2 - 2 Re{y conj(H)} s
-         * needs no division.  PAM-4 Gray label on each axis:
-         *   a=-3:"10"  a=-1:"11"  a=+1:"01"  a=+3:"00"
-         * LLR(bit) = min_{b=1} M - min_{b=0} M, normalised by >> LLR_SHIFT. */
-        {
-            const uint32_t b = CYC_A + CYC_B;
-            for (uint32_t axis = 0; axis < 2; axis++) {
-                const uint32_t base = b + axis * 20;
-                const uint32_t rw   = axis ? W_NI : W_NR;
-                const uint32_t l1   = axis ? W_LLR_Q1 : W_LLR_I1;
-                const uint32_t l0   = axis ? W_LLR_Q0 : W_LLR_I0;
-
-                emit(base + 0,  p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, rw));   /* r  */
-                emit(base + 1,  p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, W_MAG));/* m  */
-                emit(base + 2,  p, GPCP_OP_SHL, 0, 0, 2, 1);                      /* 2r */
-                emit(base + 3,  p, GPCP_OP_MUL, 2, GPCP_SRC_IMM, 3, 3);          /* 6r */
-                emit(base + 4,  p, GPCP_OP_SHL, 1, 0, 0, 3);                      /* 8m */
-                emit(base + 5,  p, GPCP_OP_ADD, 0, 1, 4, 0);                      /* 9m */
-                emit(base + 6,  p, GPCP_OP_SUB, 1, 2, 5, 0);                      /* M(+1) */
-                emit(base + 7,  p, GPCP_OP_ADD, 1, 2, 6, 0);                      /* M(-1) */
-                emit(base + 8,  p, GPCP_OP_SUB, 4, 3, 0, 0);                      /* M(+3) */
-                emit(base + 9,  p, GPCP_OP_ADD, 4, 3, 7, 0);                      /* M(-3) */
-                /* MSB: 1 for the negative half */
-                emit(base + 10, p, GPCP_OP_MIN, 6, 7, 1, 0);                      /* min(M-1,M-3) */
-                emit(base + 11, p, GPCP_OP_MIN, 5, 0, 2, 0);                      /* min(M+1,M+3) */
-                emit(base + 12, p, GPCP_OP_SUB, 1, 2, 3, 0);
-                emit(base + 13, p, GPCP_OP_SHR, 3, 0, 4, LLR_SHIFT);
-                emit(base + 14, p, GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(p, l1));
-                /* LSB: 1 for {-3,+1} */
-                emit(base + 15, p, GPCP_OP_MIN, 7, 5, 1, 0);                      /* min(M-3,M+1) */
-                emit(base + 16, p, GPCP_OP_MIN, 6, 0, 2, 0);                      /* min(M-1,M+3) */
-                emit(base + 17, p, GPCP_OP_SUB, 1, 2, 3, 0);
-                emit(base + 18, p, GPCP_OP_SHR, 3, 0, 4, LLR_SHIFT);
-                emit(base + 19, p, GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(p, l0));
-            }
-        }
-
-        /* ---- stage C: min-sum check node (ldpc_cn) ---- */
-        {
-            const uint32_t b = CYC_A + CYC_B + CYC_D;
-            /* the four soft bits of the 16-QAM symbol are the four messages */
-            emit(b + 0, p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, W_LLR_I1));
-            emit(b + 1, p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, W_LLR_I0));
-            emit(b + 2, p, GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, W_LLR_Q1));
-            emit(b + 3, p, GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, W_LLR_Q0));
-
-            /* abs(x) = (x ^ (x>>31)) - (x>>31), stored to word 8..11 */
-            uint32_t cyc = b + 4;
-            for (uint32_t k = 0; k < 4; k++) {
-                emit(cyc + 0, p, GPCP_OP_SHR, k, 0, 4, 31);
-                emit(cyc + 1, p, GPCP_OP_XOR, k, 4, 5, 0);
-                emit(cyc + 2, p, GPCP_OP_SUB, 5, 4, 5, 0);
-                emit(cyc + 3, p, GPCP_OP_ST, 5, 0, 0, GPCP_SPAD_IDX(p, 8 + k));
-                cyc += 4;
-            }
-
-            /* sign product of the four messages -> word 6 */
-            emit(b + 20, p, GPCP_OP_SHR, 0, 0, 6, 31);
-            emit(b + 21, p, GPCP_OP_SHR, 1, 0, 7, 31);
-            emit(b + 22, p, GPCP_OP_XOR, 6, 7, 6, 0);
-            emit(b + 23, p, GPCP_OP_SHR, 2, 0, 7, 31);
-            emit(b + 24, p, GPCP_OP_XOR, 6, 7, 6, 0);
-            emit(b + 25, p, GPCP_OP_SHR, 3, 0, 7, 31);
-            emit(b + 26, p, GPCP_OP_XOR, 6, 7, 6, 0);
-            emit(b + 27, p, GPCP_OP_ST, 6, 0, 0, GPCP_SPAD_IDX(p, W_SIGN));
-
-            /* pair min/max of |a|,|b| and |c|,|d| -> words 12..15 */
-            emit(b + 28, p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, 8));
-            emit(b + 29, p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, 9));
-            emit(b + 30, p, GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, 10));
-            emit(b + 31, p, GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, 11));
-            emit(b + 32, p, GPCP_OP_MIN, 0, 1, 4, 0);
-            emit(b + 33, p, GPCP_OP_MAX, 0, 1, 5, 0);
-            emit(b + 34, p, GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(p, 12));
-            emit(b + 35, p, GPCP_OP_ST, 5, 0, 0, GPCP_SPAD_IDX(p, 13));
-            emit(b + 36, p, GPCP_OP_MIN, 2, 3, 6, 0);
-            emit(b + 37, p, GPCP_OP_MAX, 2, 3, 7, 0);
-            emit(b + 38, p, GPCP_OP_ST, 6, 0, 0, GPCP_SPAD_IDX(p, 14));
-            emit(b + 39, p, GPCP_OP_ST, 7, 0, 0, GPCP_SPAD_IDX(p, 15));
-
-            /* min1 = min(s1,s2); min2 = min(max(s1,s2), min(h1,h2)) */
-            emit(b + 40, p, GPCP_OP_LD, 0, 0, 0, GPCP_SPAD_IDX(p, 12));
-            emit(b + 41, p, GPCP_OP_LD, 0, 0, 1, GPCP_SPAD_IDX(p, 14));
-            emit(b + 42, p, GPCP_OP_MIN, 0, 1, 4, 0);
-            emit(b + 43, p, GPCP_OP_ST, 4, 0, 0, GPCP_SPAD_IDX(p, W_HR));
-            emit(b + 44, p, GPCP_OP_MAX, 0, 1, 5, 0);
-            emit(b + 45, p, GPCP_OP_LD, 0, 0, 2, GPCP_SPAD_IDX(p, 13));
-            emit(b + 46, p, GPCP_OP_LD, 0, 0, 3, GPCP_SPAD_IDX(p, 15));
-            emit(b + 47, p, GPCP_OP_MIN, 2, 3, 6, 0);
-            emit(b + 48, p, GPCP_OP_MIN, 5, 6, 7, 0);
-            emit(b + 49, p, GPCP_OP_ST, 7, 0, 0, GPCP_SPAD_IDX(p, W_HI));
-        }
-    }
-}
-
+/* 全部指令字来自 cgra/kernels/rxchain.yaml -> rxchain_prog.h：
+ * ls / mmse / llr_i / llr_q / cn_abs / cn_min 六段 DFG 由 rule_map.schedule
+ * 编译后按 (cycle, pe) 拼成一张镜像，段与段通过 spad word 传值。 */
 static void load_chain(void)
 {
-    for (uint32_t i = 0; i < CHAIN_CYCLES * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, chain_prog[i]);
+    for (uint32_t i = 0; i < RXCHAIN_PROG_CYCLES * NPES; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, rxchain_prog[i]);
 }
 
 /* ----------------------------------------------------------------- payload */
@@ -429,8 +281,11 @@ int main(void)
     for (int s = 0; s < SLOTS; s++)
         fill_slot(s);
 
-    build_chain();
     load_chain();
+    /* 16-QAM 的 ×3 是广播常数（spad 地址 28，stride=0）：两页各预装 3。
+     * DMA 输入只占 bank p 的 word 0..3，不会覆盖它。 */
+    for (uint32_t pg = 0; pg < 2u; pg++)
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(pg * 32u, 28), 3);
 
     /* ring: IN 4 words/bank, OUT 3 words/bank (min1,min2,sign) */
     desc_set(0, (uintptr_t)&in[0][0], 0, WORDS_IN, 0, 0, 32, 4);

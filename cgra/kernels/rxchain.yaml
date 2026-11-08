@@ -1,0 +1,142 @@
+name: rxchain
+kind: image
+desc: "LS -> MMSE -> 16QAM(I/Q) -> LDPC CN(abs/sign) -> min-sum；段间靠 spad word 传值"
+instances: 16
+parts:
+  - name: ls
+    leaves:
+      yr: {addr: {base: 0, stride: 32}}
+      yi: {addr: {base: 1, stride: 32}}
+      xr: {addr: {base: 2, stride: 32}}
+      xi: {addr: {base: 3, stride: 32}}
+    ops:
+      - {name: pr, op: mul, a: yr, b: xr}
+      - {name: pi, op: mul, a: yi, b: xi}
+      - {name: hr0, op: add, a: pr, b: pi}
+      - {name: hr, op: shr, a: hr0, imm: 15}
+      - {name: qr, op: mul, a: yi, b: xr}
+      - {name: qi, op: mul, a: yr, b: xi}
+      - {name: hi0, op: sub, a: qr, b: qi}
+      - {name: hi, op: shr, a: hi0, imm: 15}
+    sinks:
+      hr: {addr: {base: 4, stride: 32}}
+      hi: {addr: {base: 5, stride: 32}}
+  - name: mmse
+    leaves:
+      hr: {addr: {base: 4, stride: 32}}
+      hi: {addr: {base: 5, stride: 32}}
+      yr: {addr: {base: 0, stride: 32}}
+      yi: {addr: {base: 1, stride: 32}}
+    ops:
+      - {name: npr, op: mul, a: hr, b: yr}
+      - {name: npi, op: mul, a: hi, b: yi}
+      - {name: nr0, op: add, a: npr, b: npi}
+      - {name: nr, op: shr, a: nr0, imm: 15}
+      - {name: nqr, op: mul, a: hi, b: yr}
+      - {name: nqi, op: mul, a: hr, b: yi}
+      - {name: ni0, op: sub, a: nqr, b: nqi}
+      - {name: ni, op: shr, a: ni0, imm: 15}
+      - {name: m2r, op: mul, a: hr, b: hr}
+      - {name: m2i, op: mul, a: hi, b: hi}
+      - {name: mag0, op: add, a: m2r, b: m2i}
+      - {name: mag, op: shr, a: mag0, imm: 15}
+    sinks:
+      nr: {addr: {base: 20, stride: 32}}
+      ni: {addr: {base: 21, stride: 32}}
+      mag: {addr: {base: 22, stride: 32}}
+  - name: llr_i
+    leaves:
+      r: {addr: {base: 20, stride: 32}}
+      m: {addr: {base: 22, stride: 32}}
+      three: {addr: {base: 28, stride: 0}}
+    ops:
+      - {name: two, op: shl, a: r, imm: 1}
+      - {name: six, op: mul, a: two, b: three}
+      - {name: m8, op: shl, a: m, imm: 3}
+      - {name: m9, op: add, a: m8, b: m}
+      - {name: mp1, op: sub, a: m, b: two}
+      - {name: mm1, op: add, a: m, b: two}
+      - {name: mp3, op: sub, a: m9, b: six}
+      - {name: mm3, op: add, a: m9, b: six}
+      - {name: npos, op: min, a: mp1, b: mp3}
+      - {name: nneg, op: min, a: mm1, b: mm3}
+      - {name: dmsb, op: sub, a: nneg, b: npos}
+      - {name: msb, op: shr, a: dmsb, imm: 10}
+      - {name: lsb1, op: min, a: mm3, b: mp1}
+      - {name: lsb0, op: min, a: mm1, b: mp3}
+      - {name: dlsb, op: sub, a: lsb1, b: lsb0}
+      - {name: lsb, op: shr, a: dlsb, imm: 10}
+    sinks:
+      msb: {addr: {base: 24, stride: 32}}
+      lsb: {addr: {base: 25, stride: 32}}
+  - name: llr_q
+    leaves:
+      r: {addr: {base: 21, stride: 32}}
+      m: {addr: {base: 22, stride: 32}}
+      three: {addr: {base: 28, stride: 0}}
+    ops:
+      - {name: two, op: shl, a: r, imm: 1}
+      - {name: six, op: mul, a: two, b: three}
+      - {name: m8, op: shl, a: m, imm: 3}
+      - {name: m9, op: add, a: m8, b: m}
+      - {name: mp1, op: sub, a: m, b: two}
+      - {name: mm1, op: add, a: m, b: two}
+      - {name: mp3, op: sub, a: m9, b: six}
+      - {name: mm3, op: add, a: m9, b: six}
+      - {name: npos, op: min, a: mp1, b: mp3}
+      - {name: nneg, op: min, a: mm1, b: mm3}
+      - {name: dmsb, op: sub, a: nneg, b: npos}
+      - {name: msb, op: shr, a: dmsb, imm: 10}
+      - {name: lsb1, op: min, a: mm3, b: mp1}
+      - {name: lsb0, op: min, a: mm1, b: mp3}
+      - {name: dlsb, op: sub, a: lsb1, b: lsb0}
+      - {name: lsb, op: shr, a: dlsb, imm: 10}
+    sinks:
+      msb: {addr: {base: 26, stride: 32}}
+      lsb: {addr: {base: 27, stride: 32}}
+  - name: cn_abs
+    leaves:
+      i1: {addr: {base: 24, stride: 32}}
+      i0: {addr: {base: 25, stride: 32}}
+      q1: {addr: {base: 26, stride: 32}}
+      q0: {addr: {base: 27, stride: 32}}
+    ops:
+      - {name: s0, op: shr, a: i1, imm: 31}
+      - {name: x0, op: xor, a: i1, b: s0}
+      - {name: a0, op: sub, a: x0, b: s0}
+      - {name: s1, op: shr, a: i0, imm: 31}
+      - {name: x1, op: xor, a: i0, b: s1}
+      - {name: a1, op: sub, a: x1, b: s1}
+      - {name: s2, op: shr, a: q1, imm: 31}
+      - {name: x2, op: xor, a: q1, b: s2}
+      - {name: a2, op: sub, a: x2, b: s2}
+      - {name: s3, op: shr, a: q0, imm: 31}
+      - {name: x3, op: xor, a: q0, b: s3}
+      - {name: a3, op: sub, a: x3, b: s3}
+      - {name: sg01, op: xor, a: s0, b: s1}
+      - {name: sg012, op: xor, a: sg01, b: s2}
+      - {name: sg, op: xor, a: sg012, b: s3}
+    sinks:
+      a0: {addr: {base: 8, stride: 32}}
+      a1: {addr: {base: 9, stride: 32}}
+      a2: {addr: {base: 10, stride: 32}}
+      a3: {addr: {base: 11, stride: 32}}
+      sg: {addr: {base: 6, stride: 32}}
+  - name: cn_min
+    leaves:
+      a0: {addr: {base: 8, stride: 32}}
+      a1: {addr: {base: 9, stride: 32}}
+      a2: {addr: {base: 10, stride: 32}}
+      a3: {addr: {base: 11, stride: 32}}
+    ops:
+      - {name: s1, op: min, a: a0, b: a1}
+      - {name: h1, op: max, a: a0, b: a1}
+      - {name: s2, op: min, a: a2, b: a3}
+      - {name: h2, op: max, a: a2, b: a3}
+      - {name: min1, op: min, a: s1, b: s2}
+      - {name: lo, op: max, a: s1, b: s2}
+      - {name: hi2, op: min, a: h1, b: h2}
+      - {name: min2, op: min, a: lo, b: hi2}
+    sinks:
+      min1: {addr: {base: 4, stride: 32}}
+      min2: {addr: {base: 5, stride: 32}}

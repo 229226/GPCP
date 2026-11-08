@@ -220,6 +220,12 @@ def run_spec(spec_path, out=None, rows=None, _variant=None):
     if _variant:
         spec.pop("variants", None)
         spec.update(_variant)
+    if spec.get("kind") == "image":
+        import image_spec
+        return image_spec.run_image(spec, out or ks.resolve_out(spec, spec_path, ROOT))
+    if spec.get("kind") == "fft_image":
+        import fft_image
+        return fft_image.run(spec)
     if rows is not None and spec.get("kind") == "bn":
         spec["rows"] = rows
     errs = ks.validate(spec)

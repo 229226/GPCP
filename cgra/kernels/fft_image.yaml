@@ -1,0 +1,6 @@
+name: fft_image
+kind: fft_image
+desc: "radix-4 DIF FFT 的两张镜像：stage 448 拍（16 轮）、block 336 拍（radix-16 尾）"
+# 专用蝶形调度器见 cgra/tools/fft_image.py；参数（jstep/mstep/twiddle 基址）
+# 由该编译器模块按 tools/fft_plan.py 的分块方案固定，输出 fft_stage_prog.h /
+# fft_block_prog.h，各带独立标量黄金模型逐值自检。

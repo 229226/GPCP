@@ -146,7 +146,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
 | `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
-| `tools/` | 模型与检查 | `cgra.py`（ISA 编码唯一来源 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`verify.sh` |
+| `tools/` | 模型与检查 | `cgra.py`（ISA 编码唯一来源 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
 | `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_{bn,cn}_prog.py`（生成 `sw/soc/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py` |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
@@ -331,26 +331,25 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     * **刻意保留的简化**：64QAM 仅模型（硬件待 P4 后续）；无 BG1 之外的基图、无 REG/CCE/PC/PDCCH-DMRS、无 CSI-RS 测量（用理想 SINR 上报）、无子带 CQI/PMI/RI、无 256QAM（MCS table 3）；OLLA 的 BLER 用解析近似而非实测 LDPC 瀑布；16QAM 的 RE 利用率只有一半（真实 gNB 会提高 E 或缩减分配）。
     * **仍未做**：P5–P8。`run-mimo` / `run-csi` / Zc=64 / BG1 均已落。
 
-19. **手写微码清退（2026-11-08 立规）**：规则见 §4.18，`tools/check_handprog.py`
-    在每档验收的预检里执行，白名单 PIN 只减不增。起点 **18 个文件 / 90 处
-    `gpcp_cgra_inst()`**，现已降到 **3 个文件 / 6 处**；`cgra.py` 的 15 个手写
-    kernel 冻结为模块自测，`gen_prach_prog.py` 与 `prach_prog.h` 已删除，所有
-    `*_prog.h` 都是编译器产物。
-    * **已清退**：polar node ×7 → `polar_node.yaml`；单抽头复乘 ×4 → `cplx_mul.yaml`；
-      `cgra_matmul` 示例 → `matmul.yaml`；PSS/SSS 相关 ×5 → `pss_corr.yaml`；
-      LDPC CN/VN → `cn4.yaml` + `vn3.yaml`；PRACH 三门禁 → `prach_corr_prog.h`；
-      `pdsch_gather_bm` 的 10 边 CN / 24 槽 BN → `cn10.yaml` + `bn24.yaml`。
-    * **`variants`（编译器能力，2026-11-08）**：一个 YAML 可声明多个变体，每个
-      覆盖 `name` / `base_offset` 等字段并各自输出一份头；`base_offset` 把所有
-      flat 叶子/汇地址整体平移。用于 Zc=20 > 16 PE 的 `word_base=0/16` 两半
-      （`cn10_w0/w16`、`bn24_w0/w16`）。指令字仍全部由 `rule_map.schedule` 编译
-      并逐值自检，C 只做装载与编排。
-    * **剩余 3 项（真·编译器能力缺口）**：`fft_bm.c` / `ssb_fft.inc` 的 448 拍
-      stage + 336 拍 block 引擎（每 PE 时间复用 16 轮、按 m 分四种蝶形旋转、
-      需要 ≤28 拍/轮的显式寄存器复用），`rxchain_bm.c` 的 127 拍 4 阶段融合
-      镜像（阶段间 spad 传值）。需要的是「单 DFG 多实例」之外的**镜像编排**
-      能力：多个已编译子图按 (cycle, pe) 拼装 + 跨阶段 spad 自检。
-    清退顺序按 PIN 递减；每清退一项同时删白名单行、减 PIN、跑对应门禁留证。
+19. **手写微码清退（2026-11-08 完成）**：规则见 §4.18，`tools/check_handprog.py`
+    在每档验收的预检里执行。起点 **18 个文件 / 90 处 `gpcp_cgra_inst()`**，
+    现为 **0 / 0**，白名单 `ALLOW` 已清空、`PIN = 0`；`cgra.py` 的 14 个手写
+    kernel 冻结为模块自测，`gen_prach_prog.py` 与 `prach_prog.h` 已删除，
+    `sw/soc/*_prog.h` 全部带生成器横幅。以后新写一条 `gpcp_cgra_inst()` 直接失败。
+    * **已清退**：polar node ×7、单抽头复乘 ×4、`cgra_matmul` 示例、
+      PSS/SSS 相关 ×5、LDPC CN/VN、PRACH 三门禁、`pdsch_gather` 的 10 边 CN /
+      24 槽 BN、`rxchain` 四阶段融合、`fft_bm.c` / `ssb_fft.inc` 的 FFT 引擎。
+    * **编译器新增能力**：`variants`（一个 YAML 多个地址变体，
+      `base_offset` 平移 flat 地址，用于 Zc=20 的 word_base 0/16 两半）；
+      `kind: image`（`cgra/tools/image_spec.py`）——多个已编译 DFG 子图按
+      `at` / `pe_map` 拼成一张镜像，按 at 分组做跨阶段 spad 串接自检；
+      `kind: fft_image`（`cgra/tools/fft_image.py`）——radix-4 蝶形专用调度器，
+      与既有 `schedule_cn` / `schedule_bn_split` 同类，输出 448 拍 stage /
+      336 拍 block，带独立标量黄金模型逐值自检。FFT 的累加器常驻寄存器约定
+      在 RTL 的「同步 ST / 组合 LD」时序下不可重排，通用 DFG 调度器会改变
+      结果，因此该 kernel 必须有专用调度器。
+    * **全量证据**：`make verify-smart` 58 门 0 failed；`run-fft` 三种尺寸
+      逐位匹配黄金模型；`make devcheck` 0 error 0 warn。
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。
 

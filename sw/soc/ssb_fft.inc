@@ -7,136 +7,37 @@
  * Included from sw/soc/ssb_bm.c (it relies on NPES, RING_DEPTH, DESC_BASE,
  * desc[], mmio_r/mmio_w, CGRA_BASE and the GPCP_* macros from gpcp_cgra.h).
  * -------------------------------------------------------------------------- */
-#define FFT_MAX_CYC      448
 #define FFT_TW_BASE      512
 #define FFT_TW_WORDS     384
 #define FFT_TILE_BFLIES  64
 #define FFT_TAIL_BLOCK   64
 #define FFT_TAIL_WORDS   128
-#define FFT_CYCLES_STAGE 448
-#define FFT_CYCLES_BLOCK 336
+#include "fft_stage_prog.h"   /* 编译器 image：与 fft_bm.c 共用 */
+#include "fft_block_prog.h"
 #define FFT_LUT_4096     3456ul
 #define FFT_LUT_TAIL     21888ul
 #define FFT_LUT_RAM      0x80100000ul
 #define FFT_TD_RAM       0x80300000ul
 #define FFT_N            4096
-#define FFT_MAX_TILES    128
+/* 4096 点最多 64 个 tail tile / 48 个 stage tile；留 80 足够。
+ * 必须收紧：两张编译器镜像是 static const，占约 50 KB .rodata，
+ * 若这里仍按 128 预留，.bss 末尾会越过 RESULT_BASE(0x80010000)，
+ * FFT 的 tile 数组和结果区互相踩（run-ssbfft / run-ssb-slot 会挂）。 */
+#define FFT_MAX_TILES    80
 
-static uint32_t fprog[FFT_MAX_CYC * NPES];
 static uint32_t f_dstart[FFT_MAX_TILES], f_in_end[FFT_MAX_TILES];
 static uint32_t f_out_end[FFT_MAX_TILES], f_page[FFT_MAX_TILES];
 static uint32_t f_cyc[FFT_MAX_TILES], f_in[FFT_MAX_TILES], f_out[FFT_MAX_TILES];
 static uint32_t f_ntiles, f_ndesc, f_done;
 
-static void fe_emit(uint32_t cyc, uint32_t pe, uint32_t op, uint32_t a,
-                    uint32_t b, uint32_t dst, uint32_t imm)
+/* 两张镜像由 cgra/kernels/fft_stage.yaml / fft_block.yaml 编译，
+ * 与 sw/soc/fft_bm.c 用的是同一对头文件（含 include guard）。 */
+static void fe_load(uint32_t which)
 {
-    fprog[cyc * NPES + pe] = gpcp_cgra_inst(op, a, b, dst, imm);
-}
-
-/* one PE, one butterfly output over 28 cycles (see docs/07 4.6) */
-static void fe_round(uint32_t base, uint32_t pe, uint32_t m, int32_t j0,
-                     int32_t jstep, int32_t st0, int32_t mstep, int32_t tw)
-{
-    int32_t j;
-    uint32_t f, shift;
-
-    fe_emit(base + 0, pe, GPCP_OP_LD, 0, 0, 4, (uint32_t)j0);
-    fe_emit(base + 1, pe, GPCP_OP_LD, 0, 0, 5, (uint32_t)(j0 + 1));
-    fe_emit(base + 2, pe, GPCP_OP_MOV, 4, 0, 0, 0);
-    fe_emit(base + 3, pe, GPCP_OP_MOV, 5, 0, 1, 0);
-    for (j = 1; j <= 3; j++) {
-        int32_t w = j0 + j * jstep;
-        f = ((uint32_t)j * m) & 3u;
-        fe_emit(base + 4 * j + 0, pe, GPCP_OP_LD, 0, 0, 4, (uint32_t)w);
-        fe_emit(base + 4 * j + 1, pe, GPCP_OP_LD, 0, 0, 5, (uint32_t)(w + 1));
-        switch (f) {
-        case 0:
-            fe_emit(base + 4 * j + 2, pe, GPCP_OP_ADD, 0, 4, 0, 0);
-            fe_emit(base + 4 * j + 3, pe, GPCP_OP_ADD, 1, 5, 1, 0);
-            break;
-        case 1:
-            fe_emit(base + 4 * j + 2, pe, GPCP_OP_ADD, 0, 5, 0, 0);
-            fe_emit(base + 4 * j + 3, pe, GPCP_OP_SUB, 1, 4, 1, 0);
-            break;
-        case 2:
-            fe_emit(base + 4 * j + 2, pe, GPCP_OP_SUB, 0, 4, 0, 0);
-            fe_emit(base + 4 * j + 3, pe, GPCP_OP_SUB, 1, 5, 1, 0);
-            break;
-        default:
-            fe_emit(base + 4 * j + 2, pe, GPCP_OP_SUB, 0, 5, 0, 0);
-            fe_emit(base + 4 * j + 3, pe, GPCP_OP_ADD, 1, 4, 1, 0);
-            break;
-        }
-    }
-    shift = (tw >= 0) ? 17u : 2u;
-    if (tw >= 0) {
-        fe_emit(base + 16, pe, GPCP_OP_LD, 0, 0, 6, (uint32_t)tw);
-        fe_emit(base + 17, pe, GPCP_OP_LD, 0, 0, 7, (uint32_t)(tw + 1));
-        fe_emit(base + 18, pe, GPCP_OP_MUL, 0, 6, 2, 0);
-        fe_emit(base + 19, pe, GPCP_OP_MUL, 1, 7, 3, 0);
-        fe_emit(base + 20, pe, GPCP_OP_SUB, 2, 3, 2, 0);
-        fe_emit(base + 21, pe, GPCP_OP_MUL, 0, 7, 3, 0);
-        fe_emit(base + 22, pe, GPCP_OP_MUL, 1, 6, 4, 0);
-        fe_emit(base + 23, pe, GPCP_OP_ADD, 3, 4, 3, 0);
-    } else {
-        fe_emit(base + 22, pe, GPCP_OP_MOV, 0, 0, 2, 0);
-        fe_emit(base + 23, pe, GPCP_OP_MOV, 1, 0, 3, 0);
-    }
-    fe_emit(base + 24, pe, GPCP_OP_SHR, 2, 0, 2, shift);
-    fe_emit(base + 25, pe, GPCP_OP_SHR, 3, 0, 3, shift);
-    fe_emit(base + 26, pe, GPCP_OP_ST, 2, 0, 0, (uint32_t)(st0 + (int32_t)m * mstep));
-    fe_emit(base + 27, pe, GPCP_OP_ST, 3, 0, 0, (uint32_t)(st0 + (int32_t)m * mstep + 1));
-}
-
-static void fe_clear(void)
-{
-    for (uint32_t i = 0; i < FFT_MAX_CYC * NPES; i++)
-        fprog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-}
-
-static void fe_build_stage(void)
-{
-    fe_clear();
-    for (uint32_t r = 0; r < 16; r++)
-        for (uint32_t pe = 0; pe < NPES; pe++) {
-            uint32_t b = pe >> 2, m = pe & 3, bi = 4 * r + b;
-            int32_t j0 = (int32_t)(2 * bi);
-            int32_t tw = m ? (int32_t)(FFT_TW_BASE + (m - 1) * 128 + bi * 2) : -1;
-            fe_round(r * 28, pe, m, j0, 128, j0, 128, tw);
-        }
-}
-
-static void fe_build_block(void)
-{
-    fe_clear();
-    for (uint32_t r = 0; r < 4; r++)
-        for (uint32_t pe = 0; pe < NPES; pe++) {
-            uint32_t b = pe >> 2, m = pe & 3, t = 4 * r + b;
-            int32_t site = (int32_t)(t * 2);
-            int32_t tw = m ? (int32_t)(FFT_TW_BASE + (m - 1) * 32 + t * 2) : -1;
-            fe_round(r * 28, pe, m, site, 32, site, 32, tw);
-        }
-    for (uint32_t r = 0; r < 4; r++)
-        for (uint32_t pe = 0; pe < NPES; pe++) {
-            uint32_t b = pe >> 2, m = pe & 3, beta = 4 * r + b;
-            uint32_t sb = beta >> 2, t2 = beta & 3;
-            int32_t site = (int32_t)((sb * 16 + t2) * 2);
-            int32_t tw = m ? (int32_t)(FFT_TW_BASE + 96 + (m - 1) * 8 + t2 * 2) : -1;
-            fe_round(112 + r * 28, pe, m, site, 8, site, 8, tw);
-        }
-    for (uint32_t r = 0; r < 4; r++)
-        for (uint32_t pe = 0; pe < NPES; pe++) {
-            uint32_t b = pe >> 2, m = pe & 3, sbn = 4 * r + b;
-            int32_t site = (int32_t)(sbn * 4 * 2);
-            fe_round(224 + r * 28, pe, m, site, 2, site, 2, -1);
-        }
-}
-
-static void fe_load(uint32_t cycles)
-{
-    for (uint32_t i = 0; i < cycles * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, fprog[i]);
+    const uint32_t *p = which ? fft_block_prog : fft_stage_prog;
+    uint32_t n = which ? FFT_BLOCK_PROG_CYCLES : FFT_STAGE_PROG_CYCLES;
+    for (uint32_t i = 0; i < n * NPES; i++)
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, p[i]);
 }
 
 static void fe_dsc(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
@@ -178,7 +79,7 @@ static void fe_desc_stages(uint32_t n, int32_t *data, uint32_t lut_ofs, uint32_t
             uint32_t page = (*pg)++;
             uint32_t base = q * FFT_TILE_BFLIES;
             uint32_t blk = base / M, t0 = base % M;
-            fe_tile_begin(page & 1u, FFT_CYCLES_STAGE);
+            fe_tile_begin(page & 1u, FFT_STAGE_PROG_CYCLES);
             for (uint32_t j = 0; j < 4; j++) {
                 uint32_t g0 = blk * L + j * M + t0;
                 fe_dsc((uint32_t)(uintptr_t)&data[2 * g0], j * 128, 128, page & 1u, 0, 0, 0);
@@ -199,7 +100,7 @@ static void fe_desc_tail(uint32_t n, int32_t *data, uint32_t *pg)
 {
     for (uint32_t b = 0; b < n / FFT_TAIL_BLOCK; b++) {
         uint32_t page = (*pg)++;
-        fe_tile_begin(page & 1u, FFT_CYCLES_BLOCK);
+        fe_tile_begin(page & 1u, FFT_BLOCK_PROG_CYCLES);
         fe_dsc((uint32_t)(uintptr_t)&data[b * FFT_TAIL_BLOCK * 2], 0,
                FFT_TAIL_WORDS, page & 1u, 0, 0, 0);
         fe_dsc(FFT_LUT_RAM + 4u * FFT_LUT_TAIL, FFT_TW_BASE, 120, page & 1u, 0, 0, 0);
@@ -242,15 +143,13 @@ static void fe_exec(uint32_t first, uint32_t last)
 static void fft4096(int32_t *data)
 {
     uint32_t pg = 0;
-    fe_build_stage();
-    fe_load(FFT_CYCLES_STAGE);
+    fe_load(0);
     f_ntiles = 0;
     f_ndesc = 0;
     fe_desc_stages(FFT_N, data, FFT_LUT_4096, &pg);
     fe_exec(0, f_ntiles);
 
-    fe_build_block();
-    fe_load(FFT_CYCLES_BLOCK);
+    fe_load(1);
     f_ntiles = 0;
     f_ndesc = 0;
     fe_desc_tail(FFT_N, data, &pg);
