@@ -1,0 +1,7 @@
+name: cn20
+kind: cn
+desc: "BG1 校验节点：19 条边 + 哨兵补到 20（bank 0..19），min1/min2/sign 到 20/21/22"
+out: sw/soc/pdsch_cn20_prog.h
+edges: 20
+sentinel_bank: 28
+res_banks: [20, 21, 22]

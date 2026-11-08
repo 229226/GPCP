@@ -110,6 +110,22 @@ ZC64_TD    = $(ROOT)/build/ldpc/pdsch_zc64.td
 
 # Zc=64 的边消息按 4 x 16 分页过 16 PE 阵列：每个 (检查节点, 页) 一次 DMA + 一次 86 拍
 # 半镜像；CN 结果回主机窗口，CPU 就地做分层 VN 更新。TD 由 tools/nr_ldpc.py 生成。
+BG1_TD = $(ROOT)/build/ldpc/pdsch_bg1_zc64.td
+
+# 同一个分页/分层基准，换成 38.212 BG1（46 x 68，Kb=22，行度最大 19 -> 20 bank）
+run-pdsch-bg1-zc64: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(BG1_TD))
+	python3 $(ROOT)/tools/nr_ldpc.py dump --out $(BG1_TD) --bg 1 --zc 64 \
+		--snr $(ZC64_SNR) --iters $(ZC64_ITERS) --sigma $(ZC64_SIGMA)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pdsch_bg1_bm.bin@0x80000000 \
+		--load $(BG1_TD)@0x80400000 \
+		--results 0x80010000 --nwords 6600 \
+		--dump $(ROOT)/$(OBJ)/pdsch_bg1_zc64_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_pdsch_zc64.py $(ROOT)/$(OBJ)/pdsch_bg1_zc64_dump.txt $(BG1_TD)
+
 run-pdsch-zc64: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(ZC64_TD))

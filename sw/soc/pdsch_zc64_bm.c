@@ -1,26 +1,28 @@
 /* -----------------------------------------------------------------------------
- * 38.212 BG2 code block at Zc = 64: one layered min-sum iteration with the
- * check-node work paged 4 x 16 through the 16-PE CGRA array.
+ * One layered min-sum iteration of a 38.212 LDPC code block at Zc = 64, with
+ * the check-node work paged 4 x 16 through the 16-PE CGRA array.
+ *
+ * Built twice from this one source:
+ *   pdsch_zc64_bm   -DBG2 (default): BG2, 42 x 52, Kb = 10, 10 edges per node
+ *   pdsch_bg1_bm    -DUSE_BG1:       BG1, 46 x 68, Kb = 22, 19 edges (padded 20)
  *
  * Why paging: one PE holds one lifting value, so a Zc = 64 edge message needs
- * four pages of 16 values.  The CN microcode is the same 86-cycle half image
- * the Zc = 20 gate uses (PE p owns lifting value p, 10 edges live in banks 0..9,
- * min1/min2/sign come back in banks 10..12); what changes is that every
- * (check node, page) pair is its own DMA + array run, and the messages are
- * gathered/scattered through a 160-word staging buffer.
+ * four pages of 16 values.  The CN microcode is the same half image shape the
+ * Zc = 20 gate uses (PE p owns lifting value p, one edge per bank, min1/min2/sign
+ * into three result banks); what changes is that every (check node, page) pair is
+ * its own DMA + array run, and the messages are gathered/scattered through a
+ * staging buffer.
  *
  * Layered scheduling: as soon as a layer's CN outputs come back the CPU applies
  *   total[v] += c2v_new - c2v_old
- * for that edge, so the next layer already sees the updated total.  That is
- * what makes layered decoding converge in fewer iterations than flooding; the
- * model side lives in tools/nr_ldpc.py (layered_decode).
+ * for that edge, so the next layer already sees the updated total.
  *
- *   TD (0x8040_0000): magic, zc, rows, cols, iters, nllr, ninfo, -
- *                     chan LLR (cols*zc int32), info bits (KB*zc words)
- *   results   0x8001_0000 : 16 summary words, then
- *             cn_res[42][4][3][16] (min1, min2, sign per check node / page)
- *             total[52][64]       (the variable totals after the last iteration)
- *   messages  c2v[42][4][10][16] at 0x8003_0000, total at 0x8007_0000
+ *   TD (0x8040_0000): magic, bg, zc, rows, cols, iters, nllr, ninfo,
+ *                     chan LLR (cols*zc int32), info bits (ninfo words)
+ *   results 0x8001_0000 : 16 summary words, then
+ *             cn_res[rows][4][3][16] (min1, min2, sign per check node / page)
+ *             total[cols][64]         (variable totals after the last iteration)
+ *   messages c2v[rows][4][edges][16] at 0x8003_0000, total at 0x8007_0000
  *
  * The CN outputs are read back through the spad host window (uncached MMIO)
  * instead of a DMA-out + D-cache flush: the value-by-value check then cannot be
@@ -29,8 +31,32 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "../include/gpcp_cgra_rt.h"
+
+#ifndef USE_BG1
+#define USE_BG1 0
+#endif
+
+#if USE_BG1
+#include "../include/ldpc_bg1.h"
+#include "pdsch_cn20_prog.h"
+#define LDPC_BG   1
+#define LROWS     BG1_ROWS
+#define LCOLS     BG1_COLS
+#define l_deg     bg1_deg
+#define l_col     bg1_col
+#define l_sh      bg1_sh
+#else
+/* Zc=64 lives in lifting set i_LS = 0, so this build needs the set-0 table --
+ * sw/include/ldpc_bg2.h holds i_LS = 2 for the Zc=20 benches (BG2_A5). */
+#include "../include/ldpc_bg2_ils0.h"
 #include "pdsch_cn_prog.h"
-#include "../include/ldpc_bg2.h"
+#define LDPC_BG   2
+#define LROWS     BG2_ROWS
+#define LCOLS     BG2_COLS
+#define l_deg     bg2_deg
+#define l_col     bg2_col
+#define l_sh      bg2_sh
+#endif
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
@@ -40,11 +66,8 @@
 #define ZC               64
 #define PES              16
 #define PAGES            (ZC / PES)
-#define EDGES            10              /* BG2 max check-node degree */
-#define KB               6               /* systematic columns in use */
 #define SENTINEL         32767
-#define SENTINEL_BANK    30
-#define CYC_CN           (CN_PROG_CYCLES / 2)   /* first half: PEs 0..15 = 16 rows */
+#define CYC_CN           (CN_PROG_CYCLES / 2)   /* first half: PEs 0..15 */
 #define TD_MAGIC         0x5A433634u
 
 #define CNRES_OFF        16
@@ -53,11 +76,12 @@
 #define TOTAL_BASE       0x80070000ul
 #define STAGE_BASE       0x80080000ul
 
-/* PAGES*3 results per (row, page): min1, min2, sign */
-static int32_t (*cn_res)[PAGES][3][PES] = (int32_t (*)[PAGES][3][PES])CNRES_BASE;
-static int32_t (*c2v)[PAGES][EDGES][PES] = (int32_t (*)[PAGES][EDGES][PES])C2V_BASE;
+static int32_t (*cn_res)[PAGES][3][PES] =
+    (int32_t (*)[PAGES][3][PES])CNRES_BASE;
+static int32_t (*c2v)[PAGES][CN_EDGES][PES] =
+    (int32_t (*)[PAGES][CN_EDGES][PES])C2V_BASE;
 static int32_t (*total)[ZC] = (int32_t (*)[ZC])TOTAL_BASE;
-static int32_t *stage = (int32_t *)STAGE_BASE;          /* 10*16 gathered CN inputs */
+static int32_t *stage = (int32_t *)STAGE_BASE;   /* CN_EDGES * PES gathered inputs */
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
@@ -73,47 +97,61 @@ int main(void)
 {
     uint32_t *out = RESULT_BASE;
     const uint32_t *td = (const uint32_t *)TD_BASE;
-    const int32_t *chan = (const int32_t *)(TD_BASE + 8 * 4);
+    const int32_t *chan;
     const uint32_t *info;
     uint32_t cyc, it, r, j, k, i, m;
     uint32_t syn_ones = 0, info_bad = 0;
+    uint32_t trows, tcols, nllr, ninfo, iters;
 
-    if (td[0] != TD_MAGIC) {
+    if (td[0] != TD_MAGIC || td[1] != LDPC_BG || td[2] != ZC) {
         out[0] = td[0];
         out[7] = 0xDEADu;
         __asm__ __volatile__("fence iorw, iorw" ::: "memory");
         *(volatile uint32_t *)EXIT_ADDR = 0x600Du;
         return 1;
     }
-    info = (const uint32_t *)(TD_BASE + 8 * 4 + td[5] * 4);
+    trows = td[3];
+    tcols = td[4];
+    iters = td[5];
+    nllr = td[6];
+    ninfo = td[7];
+    if (trows != LROWS || tcols != LCOLS || nllr != LCOLS * ZC) {
+        out[0] = trows * 100 + tcols;
+        out[7] = 0xBEEFu;
+        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+        *(volatile uint32_t *)EXIT_ADDR = 0x600Du;
+        return 1;
+    }
+    chan = (const int32_t *)(TD_BASE + 8 * 4);
+    info = (const uint32_t *)(TD_BASE + 8 * 4 + nllr * 4);
 
-    for (uint32_t v = 0; v < BG2_COLS; v++)
+    for (uint32_t v = 0; v < LCOLS; v++)
         for (i = 0; i < ZC; i++)
             total[v][i] = chan[v * ZC + i];
-    for (r = 0; r < BG2_ROWS; r++)
+    for (r = 0; r < LROWS; r++)
         for (j = 0; j < PAGES; j++)
-            for (k = 0; k < EDGES; k++)
+            for (k = 0; k < CN_EDGES; k++)
                 for (i = 0; i < PES; i++)
                     c2v[r][j][k][i] = 0;
 
     load_prog();
 
-    /* the sentinel constant must exist in both pages (page-relative bank 30) */
+    /* the sentinel constant must exist in both pages (page-relative bank) */
     for (i = 0; i < PES; i++) {
-        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(SENTINEL_BANK, i), SENTINEL);
-        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(SENTINEL_BANK + 32, i), SENTINEL);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(CN_SENTINEL_BANK, i), SENTINEL);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(CN_SENTINEL_BANK + 32, i), SENTINEL);
     }
 
     uint32_t t0 = mtime();
-    for (it = 0; it < td[4]; it++) {
-        for (r = 0; r < BG2_ROWS; r++) {
-            uint32_t deg = bg2_deg[r];
+    for (it = 0; it < iters; it++) {
+        for (r = 0; r < LROWS; r++) {
+            uint32_t deg = l_deg[r];
             for (j = 0; j < PAGES; j++) {
                 uint32_t page = (r * PAGES + j) & 1u;
 
                 /* v2c = total - c2v, gathered with the edge's lifting shift */
-                for (k = 0; k < EDGES; k++) {
-                    uint32_t col = bg2_col[r][k], sh = bg2_sh[r][k];
+                for (k = 0; k < CN_EDGES; k++) {
+                    uint32_t col = l_col[r][k], sh = l_sh[r][k];
                     for (i = 0; i < PES; i++) {
                         if (k >= deg) {
                             stage[k * PES + i] = SENTINEL;
@@ -126,9 +164,9 @@ int main(void)
                 /* the copy engine reads RAM directly: drain the store buffer
                  * (the D-cache is write-through, the store buffer is not) */
                 __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-                (void)stage[EDGES * PES - 1];
+                (void)stage[CN_EDGES * PES - 1];
 
-                if (rt_dma_begin(CGRA_BASE, (uintptr_t)stage, 0, EDGES * PES,
+                if (rt_dma_begin(CGRA_BASE, (uintptr_t)stage, 0, CN_EDGES * PES,
                                  page, 0, 32, PES) != 0)
                     errs++;
                 dmas++;
@@ -142,17 +180,17 @@ int main(void)
                 for (m = 0; m < 3; m++)
                     for (i = 0; i < PES; i++)
                         cn_res[r][j][m][i] = (int32_t)gpcp_cgra_read(
-                            CGRA_BASE, GPCP_SPAD_ADDR(10 + m + (page ? 32 : 0), i));
+                            CGRA_BASE, GPCP_SPAD_ADDR(CN_MIN1_BANK + m + (page ? 32 : 0), i));
 
                 /* immediate VN update for this layer (= layered scheduling) */
                 for (k = 0; k < deg; k++) {
-                    uint32_t col = bg2_col[r][k], sh = bg2_sh[r][k];
+                    uint32_t col = l_col[r][k], sh = l_sh[r][k];
                     for (i = 0; i < PES; i++) {
                         int32_t old = c2v[r][j][k][i];
-                        int32_t x = stage[k * PES + i];       /* the CN input of this edge */
+                        int32_t x = stage[k * PES + i];   /* the CN input of this edge */
                         int32_t ax = x < 0 ? -x : x;
-                        /* min-sum with only min1/min2: an edge that *is* the minimum
-                         * takes min2, everything else takes min1 */
+                        /* min-sum with only min1/min2: an edge that *is* the
+                         * minimum takes min2, everything else takes min1 */
                         int32_t mag = (ax == cn_res[r][j][0][i]) ? cn_res[r][j][1][i]
                                                                  : cn_res[r][j][0][i];
                         int32_t val = (mag * 3) >> 2;          /* normalised 0.75 */
@@ -163,7 +201,6 @@ int main(void)
                         c2v[r][j][k][i] = nw;
                     }
                 }
-
             }
         }
     }
@@ -172,33 +209,33 @@ int main(void)
     /* syndrome: s[i] = XOR over the row's edges of bit[col][(i+sh) % Zc] */
     for (i = 0; i < ZC; i++) {
         uint8_t s = 0;
-        for (r = 0; r < BG2_ROWS; r++)
-            for (k = 0; k < bg2_deg[r]; k++) {
-                uint32_t sh = bg2_sh[r][k];
-                s ^= (uint8_t)(total[bg2_col[r][k]][(i + sh) & (ZC - 1u)] < 0);
+        for (r = 0; r < LROWS; r++)
+            for (k = 0; k < l_deg[r]; k++) {
+                uint32_t sh = l_sh[r][k];
+                s ^= (uint8_t)(total[l_col[r][k]][(i + sh) & (ZC - 1u)] < 0);
             }
         syn_ones += s;
     }
-    for (i = 0; i < KB * ZC; i++)
+    for (i = 0; i < ninfo; i++)
         info_bad += (((total[i / ZC][i % ZC] < 0) ? 1u : 0u) != (info[i] & 1u));
 
     /* total goes into the dump right after cn_res (the checker compares both) */
-    int32_t *dump_tot = (int32_t *)(CNRES_BASE + BG2_ROWS * PAGES * 3 * PES * 4);
-    for (uint32_t v = 0; v < BG2_COLS; v++)
+    int32_t *dump_tot = (int32_t *)(CNRES_BASE + LROWS * PAGES * 3 * PES * 4);
+    for (uint32_t v = 0; v < LCOLS; v++)
         for (i = 0; i < ZC; i++)
             dump_tot[v * ZC + i] = total[v][i];
 
     out[0] = 0xCAFEBABEu;
-    out[1] = ZC;
-    out[2] = BG2_ROWS;
-    out[3] = PAGES;
+    out[1] = LDPC_BG;
+    out[2] = ZC;
+    out[3] = LROWS;
     out[4] = runs;
     out[5] = dmas;
     out[6] = cyc;
     out[7] = errs;
     out[8] = syn_ones;
     out[9] = info_bad;
-    out[10] = td[4];
+    out[10] = iters;
     out[11] = 0x600Du;
 
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");

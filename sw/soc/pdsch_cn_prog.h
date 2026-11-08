@@ -2,12 +2,17 @@
  * 规则映射器：每行 1 个 PE、20 个提升行一次跑完（16 + 4），共 172 拍 × 16 PE。
  * 布局：bank 0..9 = 10 条边（不足由 bank 30 的 +32767 补齐）、
  *       bank 10/11/12 = min1/min2/sign，word = 提升行号。
- * 自检：60 个 spad 值、0 差异（模型）；台架见 run-pdsch-bg2。 */
+ * 自检：60 个 spad 值、0 差异（模型）；台架见 run-pdsch-bg2 / run-pdsch-bg1-zc64。 */
 #ifndef PDSCH_CN_PROG_H
 #define PDSCH_CN_PROG_H
 
 #define CN_PROG_CYCLES 172
 #define CN_PROG_PES    16
+#define CN_EDGES       10
+#define CN_SENTINEL_BANK 30
+#define CN_MIN1_BANK   10
+#define CN_MIN2_BANK   11
+#define CN_SIGN_BANK   12
 
 static const unsigned int cn_prog[172 * 16]
     __attribute__((aligned(8))) = {

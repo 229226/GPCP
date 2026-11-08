@@ -463,7 +463,8 @@ CN_CYC_HALF = 86         # 3 初始化 + 10 边 × 8 拍 + 3 写回 = 86
 CN_CYC_TOTAL = 2 * CN_CYC_HALF
 
 
-def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK):
+def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK,
+                res_banks=(10, 11, 12)):
     """一次程序跑完 20 个提升行（PE0..15 处理 0..15，PE0..3 处理 16..19）。
 
     每个 PE / 提升行：对 10 条边（不足补 +32767）算 min1、min2、sign。
@@ -475,9 +476,11 @@ def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK):
     """
     if edges % 2:
         raise SystemExit("schedule_cn 要求偶数条边（成对处理）")
+    # 每半镜像：3 拍初始化 + 每条边 8 拍 + 3 拍写回（CN_CYC_HALF 是 edges=10 的值）
+    cyc_half = 3 + edges * 8 + 3
     mc = Microcode()
     for half, (npe, word_base) in enumerate(((16, 0), (4, 16))):
-        base = half * CN_CYC_HALF
+        base = half * cyc_half
         for pe in range(npe):
             w = word_base + pe
             cyc = base
@@ -505,31 +508,34 @@ def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK):
                 mc.put(cyc, pe, "max", a=3, b=1, dst=2); cyc += 1     # max(min1,lo)
                 mc.put(cyc, pe, "min", a=2, b=7, dst=4); cyc += 1     # min2'
                 mc.put(cyc, pe, "min", a=3, b=1, dst=3); cyc += 1     # min1'
-            mc.put(cyc, pe, "st", a=3, imm=spad_idx(10, w)); cyc += 1
-            mc.put(cyc, pe, "st", a=4, imm=spad_idx(11, w)); cyc += 1
-            mc.put(cyc, pe, "st", a=5, imm=spad_idx(12, w)); cyc += 1
+            mc.put(cyc, pe, "st", a=3, imm=spad_idx(res_banks[0], w)); cyc += 1
+            mc.put(cyc, pe, "st", a=4, imm=spad_idx(res_banks[1], w)); cyc += 1
+            mc.put(cyc, pe, "st", a=5, imm=spad_idx(res_banks[2], w)); cyc += 1
     return mc
 
 
-def cn_case(rows=20, edges=CN_EDGES, sentinel=32767, seed=99):
+def cn_case(rows=20, edges=CN_EDGES, sentinel=32767, seed=99,
+            sentinel_bank=CN_SENTINEL_BANK, res_banks=(10, 11, 12)):
     """CN 激励（spad 索引口径）+ 黄金 min1/min2/sign。"""
     rnd = random.Random(seed)
     spad, exp = {}, {}
     for w in range(rows):
         for k in range(edges):
             spad[spad_idx(k, w)] = rnd.randint(-512, 512) & 0xFFFFFFFF
-        spad[spad_idx(CN_SENTINEL_BANK, w)] = sentinel
+        spad[spad_idx(sentinel_bank, w)] = sentinel
         col = [_s32(spad[spad_idx(k, w)]) for k in range(edges)]
         ab = sorted(abs(x) for x in col)
-        exp[spad_idx(10, w)] = ab[0] & 0xFFFFFFFF
-        exp[spad_idx(11, w)] = ab[1] & 0xFFFFFFFF
+        exp[spad_idx(res_banks[0], w)] = ab[0] & 0xFFFFFFFF
+        exp[spad_idx(res_banks[1], w)] = ab[1] & 0xFFFFFFFF
         neg = sum(1 for x in col if x < 0)
-        exp[spad_idx(12, w)] = (-1 if neg % 2 else 0) & 0xFFFFFFFF
+        exp[spad_idx(res_banks[2], w)] = (-1 if neg % 2 else 0) & 0xFFFFFFFF
     return spad, exp
 
 
-def check_cn(mc, rows=20, seed=99):
-    spad, exp = cn_case(rows=rows, seed=seed)
+def check_cn(mc, rows=20, seed=99, edges=CN_EDGES,
+             sentinel_bank=CN_SENTINEL_BANK, res_banks=(10, 11, 12)):
+    spad, exp = cn_case(rows=rows, seed=seed, edges=edges,
+                        sentinel_bank=sentinel_bank, res_banks=res_banks)
     simulate(mc, spad)
     errs = [(i, spad.get(i), w) for i, w in exp.items() if spad.get(i) != w]
     return errs, len(exp)

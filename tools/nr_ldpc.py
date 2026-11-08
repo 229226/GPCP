@@ -21,28 +21,35 @@ import struct
 import sys
 
 import ldpc5g as L
+import ldpc_nr as NR
 
 PES = 16                      # CGRA array width
-ZC_LIST = (20, 40, 64, 80)
+# ldpc5g carries the i_LS = 2 table, so only set-2 lifting sizes can be
+# cross-checked against it.  Zc=64 is i_LS=0: it has its own gates
+# (run-pdsch-zc64 / run-pdsch-bg1-zc64) and is exercised below via ldpc_nr.
+ZC_LIST = (20, 40, 80, 160)
 KB = 6                        # BG2 information columns in use
 PUNCT_ZC = 2
 
 
-def make_codeword(zc, seed=5):
+KB_BY_BG = {1: 22, 2: 6}
+
+
+def make_codeword(zc, seed=5, bg=2):
+    kb = KB_BY_BG[bg]
     rnd = random.Random(seed)
-    kbz = KB * zc
-    info = [rnd.randint(0, 1) for _ in range(kbz)]
-    cw = L.encode(info, KB, zc)
-    assert L.syndrome(cw, zc) == 0
+    info = [rnd.randint(0, 1) for _ in range(kb * zc)]
+    cw = NR.encode(bg, info, kb, zc)
+    assert NR.syndrome(bg, cw, zc) == 0
     return info, cw
 
 
-def channel_llr(cw, snr_db, seed=9, sigma=0.5):
+def channel_llr(cw, snr_db, seed=9, sigma=0.5, bg=2):
     """Channel LLRs.  sigma is the additive noise on the un-punctured bits: the
     0.5 default is a nearly noiseless channel (any SNR converges in one
     iteration), larger values are what actually exercise the iteration count."""
     rnd = random.Random(seed)
-    zc = len(cw) // L.COLS
+    zc = len(cw) // NR.dims(bg)[1]
     var = 10 ** (-snr_db / 10)
     llr = [int((1 - 2 * b) * 4.0 / var) for b in cw]
     llr[:PUNCT_ZC * zc] = [0] * (PUNCT_ZC * zc)   # punctured systematic bits
@@ -61,10 +68,9 @@ def paging_join(pages):
     return [v for page in pages for v in page]
 
 
-def layered_decode(llr, zc, iters=8, scale=0.75):
+def layered_decode(llr, zc, iters=8, scale=0.75, bg=2):
     """Layered (row-by-row) normalised min-sum, in-place variable totals."""
-    n = L.COLS * zc
-    chk, _ = L._graph(zc)
+    chk, _ = NR.graph(bg, zc)
     chan = list(llr)
     chan[:PUNCT_ZC * zc] = [0] * (PUNCT_ZC * zc)
     total = list(chan)
@@ -98,16 +104,16 @@ def layered_decode(llr, zc, iters=8, scale=0.75):
                     total[blk * zc + (i + sh) % zc] += msg[i] - old[i]
                 mcv[(r, blk)] = msg
         bits = [1 if v < 0 else 0 for v in total]
-        if L.syndrome(bits, zc) == 0:
+        if NR.syndrome(bg, bits, zc) == 0:
             return bits, 0
     bits = [1 if v < 0 else 0 for v in total]
-    return bits, L.syndrome(bits, zc)
+    return bits, NR.syndrome(bg, bits, zc)
 
 
 TD_MAGIC = 0x5A433634          # "ZC64"
 
 
-def dump_td(path, zc=64, snr_db=3.0, iters=1, seed=5, nseed=9, sigma=0.5):
+def dump_td(path, zc=64, snr_db=3.0, iters=1, seed=5, nseed=9, sigma=0.5, bg=2):
     """Write the hardware test data for sw/soc/pdsch_zc64_bm.c.
 
     Layout (little-endian 32-bit words):
@@ -115,17 +121,17 @@ def dump_td(path, zc=64, snr_db=3.0, iters=1, seed=5, nseed=9, sigma=0.5):
       [8 ..] channel LLR (cols*zc, punctured columns already zeroed)
       [...]  information bits (KB*zc, one 0/1 per word)
     """
-    info, cw = make_codeword(zc, seed)
-    llr = channel_llr(cw, snr_db, nseed, sigma)
-    chk, _ = L._graph(zc)
-    words = [TD_MAGIC, zc, len(chk), L.COLS, iters, L.COLS * zc, KB * zc, 0]
+    info, cw = make_codeword(zc, seed, bg)
+    llr = channel_llr(cw, snr_db, nseed, sigma, bg)
+    rows, cols, _kb = NR.dims(bg)
+    words = [TD_MAGIC, bg, zc, rows, cols, iters, cols * zc, len(info)]
     words += [v & 0xFFFFFFFF for v in llr]
     words += [int(b) for b in info]
     with open(path, "wb") as f:
         f.write(struct.pack("<%dI" % len(words), *words))
-    print("wrote %s: Zc=%d rows=%d cols=%d iters=%d snr=%.1f dB sigma=%.2f, "
+    print("wrote %s: BG%d Zc=%d rows=%d cols=%d iters=%d snr=%.1f dB sigma=%.2f, "
           "%d LLR + %d info words"
-          % (path, zc, len(chk), L.COLS, iters, snr_db, sigma, len(llr), len(info)))
+          % (path, bg, zc, rows, cols, iters, snr_db, sigma, len(llr), len(info)))
     return 0
 
 
@@ -149,13 +155,14 @@ def main():
             zc, tag, sw_f, sw_l, "OK" if info_ok else "BAD"))
         ok &= paging_ok and info_ok
 
-    _, cw = make_codeword(64)
+    # Zc = 64 is i_LS = 0: both sides go through ldpc_nr so the same table is used
+    probe = list(range(64))
+    assert paging_join(paging_split(probe, 64)) == probe
+    _, cw = make_codeword(64, 5, 2)
     llr = channel_llr(cw, 3.0)
     for it in (1, 2, 4, 8):
-        bits_f, sw_f = L.decode(llr, 64, iters=it)
         bits_l, sw_l = layered_decode(llr, 64, iters=it)
-        print("  iters=%d : flooding syndrome=%d, layered syndrome=%d" % (
-            it, sw_f, sw_l))
+        print("  iters=%d : Zc=64 (i_LS=0) layered syndrome=%d" % (it, sw_l))
     print("[ %s ] Zc=64 paging + layered scheduling" % ("OK" if ok else "FAIL"))
     return 0 if ok else 1
 
@@ -171,6 +178,7 @@ if __name__ == "__main__":
         ap.add_argument("--seed", type=int, default=5)
         ap.add_argument("--nseed", type=int, default=9)
         ap.add_argument("--sigma", type=float, default=5.0)
+        ap.add_argument("--bg", type=int, default=2)
         a = ap.parse_args()
-        raise SystemExit(dump_td(a.out, a.zc, a.snr, a.iters, a.seed, a.nseed, a.sigma))
+        raise SystemExit(dump_td(a.out, a.zc, a.snr, a.iters, a.seed, a.nseed, a.sigma, a.bg))
     raise SystemExit(main())
