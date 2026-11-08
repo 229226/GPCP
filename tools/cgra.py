@@ -28,16 +28,33 @@ SIM_DIR = ROOT / "sim" / "cgra"
 SIM_BIN = SIM_DIR / "build" / "Vcgra_axi_lite"
 BUILD_DIR = ROOT / "build" / "kernels"
 
-CGRA_N = 4
-NPES = CGRA_N * CGRA_N
+# ---------------------------------------------------------------- hardware target
+# AGENTS.md 4.19：阵列几何 / spad 编址 / ISA 编码的唯一真相是 cgra/target.yaml。
+# 这里只加载，不再自定义一套数字；扁平 checkout（没有 target 描述）走兜底值。
+try:
+    sys.path.insert(0, str(ROOT / "cgra" / "tools"))
+    import target as _hw_mod
+    _T = _hw_mod.load()
+except Exception:                                    # pragma: no cover
+    _T = None
+
+CGRA_N = _T.rows if _T else 4
+NPES = _T.npes if _T else CGRA_N * CGRA_N
+NREGS = _T.regs if _T else 8
+SPAD_BANKS = _T.banks if _T else 32
+SPAD_WORDS = _T.words if _T else 32
+SPAD_WORD_BITS = _T.word_bits if _T else 5
+SPAD_FLAT_MAX = _T.flat_max if _T else 1023
+SPAD_HOST_WINDOW = _T.host_window if _T else 0xA000
+MAX_CYCLES = _T.max_cycles if _T else 512
 
 # ---------------------------------------------------------------- instruction set
-OPS = {
+OPS = dict(_T.ops) if _T else {
     "nop": 0, "mov": 1, "add": 2, "sub": 3, "mul": 4, "mac": 5, "lacc": 6,
     "shr": 7, "shl": 8, "and": 9, "xor": 10, "max": 11, "min": 12, "macl": 13,
     "ld": 14, "st": 15,
 }
-SRC = {
+SRC = dict(_T.src) if _T else {
     "r0": 0, "r1": 1, "r2": 2, "r3": 3, "r4": 4, "r5": 5, "r6": 6, "r7": 7,
     "n": 8, "e": 9, "s": 10, "w": 11, "zero": 12, "imm": 13, "acc": 14, "link": 15,
 }
@@ -212,8 +229,9 @@ def spad_addr(bank: int, word: int) -> int:
 
 
 def spad_idx(bank: int, word: int) -> int:
-    """Instruction-side address: imm[9:0] = {bank[4:0], word[4:0]}."""
-    return ((bank & 0x1F) << 5) | (word & 0x1F)
+    """Instruction-side address: imm = {bank, word}，位宽由 target 决定。"""
+    mask = (1 << SPAD_WORD_BITS) - 1
+    return ((bank & mask) << SPAD_WORD_BITS) | (word & mask)
 
 
 def sx32(v: int) -> int:

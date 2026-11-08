@@ -1,13 +1,13 @@
 name: polar_word_d2
 kind: dfg
-desc: "Polar 编码字间级 d=2：w[i] ^= w[i+2] & m[i]（m 逐 PE 预装到 flat 64..79：该更新的字全 1，其余 0）"
+desc: "Polar 编码字间级 d=2：w[i] ^= w[i+2] & m[i]（m 逐实例预装到输入区）"
 leaves:
-  wa: {addr: {base: 0, stride: 1}}
-  wb: {addr: {base: 2, stride: 1}}
-  m:  {addr: {base: 64, stride: 1}}
+  wa: {at: {region: "IN", slot: 0, pe_per_bank: 32}}
+  wb: {at: {region: "IN", slot: 2, pe_per_bank: 32}}
+  m: {at: {region: "IN + 2", slot: 0, pe_per_bank: 32}}
 ops:
   - {name: t, op: and, a: wb, b: m}
   - {name: x, op: xor, a: wa, b: t}
 sinks:
-  x: {addr: {base: 0, stride: 1}}
-instances: 16
+  x: {at: {region: "IN", slot: 0, pe_per_bank: 32}}
+parallelism: full

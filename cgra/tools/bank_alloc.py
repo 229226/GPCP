@@ -15,7 +15,8 @@
 """
 import sys
 
-N_BANKS = 32
+import target as _hw                            # 同目录：硬件真相只在 cgra/target.yaml
+N_BANKS = _hw.load().banks
 
 
 def _overlap(a, b):

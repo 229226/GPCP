@@ -1,11 +1,11 @@
 name: cplx_mul
 kind: dfg
-desc: "单抽头复数乘/LS 估计：hr=(yr*xr+yi*xi)>>15, hi=(yi*xr-yr*xi)>>15；叶子 bank=p word 0..3（flat stride=32），汇 bank 16+p word 0/1"
+desc: "单抽头复数乘/LS 估计：hr=(yr*xr+yi*xi)>>15, hi=(yi*xr-yr*xi)>>15；输入 IN 区、结果 OUT 区"
 leaves:
-  yr: {addr: {base: 0, stride: 32}}
-  yi: {addr: {base: 1, stride: 32}}
-  xr: {addr: {base: 2, stride: 32}}
-  xi: {addr: {base: 3, stride: 32}}
+  yr: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+  yi: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+  xr: {at: {region: "IN", slot: 2, pe_per_bank: 1}}
+  xi: {at: {region: "IN", slot: 3, pe_per_bank: 1}}
 ops:
   - {name: rr, op: mul, a: yr, b: xr}
   - {name: ii, op: mul, a: yi, b: xi}
@@ -16,6 +16,6 @@ ops:
   - {name: is, op: sub, a: ir, b: ri}
   - {name: hi, op: shr, a: is, imm: 15}
 sinks:
-  hr: {addr: {base: 512, stride: 32}}
-  hi: {addr: {base: 513, stride: 32}}
-instances: 16
+  hr: {at: {region: "OUT", slot: 0, pe_per_bank: 1}}
+  hi: {at: {region: "OUT", slot: 1, pe_per_bank: 1}}
+parallelism: full

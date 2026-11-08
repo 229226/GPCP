@@ -158,7 +158,8 @@ compute_changed() {
             tools/dump_*.py|tools/check_*.py)
                 x=${f##*/}; x=${x%.py}; x=${x#dump_}; x=${x#check_}; x=${x//_/-}
                 add_soc "run-$x" ;;
-            tools/gen_kernel_prog.py|cgra/tools/*|cgra/kernels/*|sw/soc/*_prog.h) add_soc $SOCCORE_FULL ;;
+            cgra/target.yaml|tools/check_yaml_coupling.py) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
+            tools/gen_kernel_prog.py|cgra/tools/*|cgra/kernels/*|sw/soc/*_prog.h) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
             tools/fft_plan.py)       add_soc run-fft run-ssbfft run-ssb-fid run-ssb-slot ;;
             sw/soc/prach_corr_prog.h) add_soc run-prach run-rach run-pucch ;;
             sw/soc/pdcch_luts.h)    add_soc run-pdcch run-link-e2e run-sib1 run-rach ;;
@@ -204,6 +205,17 @@ if ! HANDPROG_OUT=$(cd "$ROOT" && python3 tools/check_handprog.py 2>&1); then
     exit 1
 fi
 printf '%s\n' "$HANDPROG_OUT" | sed -n '1,2p;$p'
+echo
+
+# ---- iron rule: kernel YAML must not describe the hardware ------------------
+# Also uncached: a physical spad coordinate in a new spec must fail the build
+# even when every gate is skipped by the input fingerprint.
+if ! COUPLING_OUT=$(cd "$ROOT" && python3 tools/check_yaml_coupling.py 2>&1); then
+    printf '%s\n' "$COUPLING_OUT"
+    echo "verify aborted: kernel YAML is coupled to hardware (AGENTS.md 4.19)" >&2
+    exit 1
+fi
+printf '%s\n' "$COUPLING_OUT" | sed -n '1p;$p'
 echo
 
 if [ "$MODE" = changed ] && [ ${#MODEL_SET[@]} -eq 0 ] &&

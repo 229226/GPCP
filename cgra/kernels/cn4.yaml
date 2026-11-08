@@ -1,11 +1,11 @@
 name: cn4
 kind: dfg
-desc: "4 消息 min-sum 校验节点（增量折叠符号位降寄存器压力）：min1/min2/sign；消息 bank c word 0..3（flat stride=32），汇 word 8/9/10"
+desc: "4 消息 min-sum 校验节点（增量折叠符号位降寄存器压力）：min1/min2/sign；消息在 IN 区，结果写相邻槽位"
 leaves:
-  m0: {addr: {base: 0, stride: 32}}
-  m1: {addr: {base: 1, stride: 32}}
-  m2: {addr: {base: 2, stride: 32}}
-  m3: {addr: {base: 3, stride: 32}}
+  m0: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+  m1: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+  m2: {at: {region: "IN", slot: 2, pe_per_bank: 1}}
+  m3: {at: {region: "IN", slot: 3, pe_per_bank: 1}}
 ops:
   - {name: s0, op: shr, a: m0, imm: 31}
   - {name: a0x, op: xor, a: m0, b: s0}
@@ -31,7 +31,7 @@ ops:
   - {name: mn, op: min, a: hi01, b: hi23}
   - {name: min2, op: min, a: mx, b: mn}
 sinks:
-  min1: {addr: {base: 8, stride: 32}}
-  min2: {addr: {base: 9, stride: 32}}
-  sign: {addr: {base: 10, stride: 32}}
-instances: 4
+  min1: {at: {region: "IN", slot: 8, pe_per_bank: 1}}
+  min2: {at: {region: "IN", slot: 9, pe_per_bank: 1}}
+  sign: {at: {region: "IN", slot: 10, pe_per_bank: 1}}
+parallelism: 4

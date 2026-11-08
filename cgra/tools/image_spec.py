@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 from cgra import NPES, enc as rm_enc, spad_idx           # noqa: E402
 import rule_map as rm                           # noqa: E402
 import kernel_spec as ks                        # noqa: E402
+import target as hw                              # noqa: E402
 
 
 def _s32(v):
@@ -130,18 +131,19 @@ def compile_part(ps, default_instances):
     errs = ks.validate(ps)
     if errs:
         raise ValueError(f"part {ps.get('name')}: " + "; ".join(errs))
-    n = int(ps.get("instances", default_instances))
+    par = ps.get("parallelism", ps.get("instances", "full"))
+    n = default_instances if par in (None, "full", "all") else int(par)
     dfg = ks.build_dfg(ps)
-    off = int(ps.get("base_offset", 0))
-    addrs = ks.expand_addr_mapping(ps.get("leaves", {}), off)
-    sinks = ks.expand_addr_mapping(ps.get("sinks", {}), off)
+    shift = int(ps.get("shift", ps.get("base_offset", 0)))
+    addrs = ks.expand_addr_mapping(ps.get("leaves", {}), shift=shift)
+    sinks = ks.expand_addr_mapping(ps.get("sinks", {}), shift=shift)
     missing = [x for x in dfg.leaves() if x not in addrs] + \
               [x for x in dfg.sinks() if x not in sinks]
     if missing:
         raise ValueError(f"part {ps.get('name')} 的叶子/汇缺显式 addr: {missing}")
     for base, stride in list(addrs.values()) + list(sinks.values()):
-        if base + stride * (n - 1) > 1023:
-            raise ValueError(f"part {ps.get('name')} flat 地址越界（imm 只有 10 位）")
+        if base + stride * (n - 1) > hw.load().flat_max:
+            raise ValueError(f"part {ps.get('name')} flat 地址越界（见 target.flat_max）")
     mc, lv, sink_addrs, banks, liv, max_regs = rm.schedule(
         dfg, n, banks={}, sink_addrs=sinks, addrs=addrs, return_liveness=True,
         cache_leaves=ps.get("cache_leaves") or ())
@@ -154,8 +156,8 @@ def compile_part(ps, default_instances):
     mc.words = {k: (op, 0 if a == "zero" else a,
                     0 if b == "zero" else b, dst, imm)
                 for k, (op, a, b, dst, imm) in mc.words.items()}
-    if max_regs > 8:
-        raise ValueError(f"part {ps.get('name')} 活跃寄存器 {max_regs} > 8")
+    if max_regs > hw.load().regs:
+        raise ValueError(f"part {ps.get('name')} 活跃寄存器 {max_regs} > {hw.load().regs}")
     pe_map = ps.get("pe_map") or list(range(n))
     if len(pe_map) != n or any(not (0 <= x < NPES) for x in pe_map):
         raise ValueError(f"part {ps.get('name')} pe_map 必须是 {n} 个 0..{NPES-1} 的 PE 号")
@@ -229,12 +231,15 @@ def write_image(f, spec, mc, parts, nvals):
 def run_image(spec, out):
     import io
     parts, total_self = [], 0
+    par = spec.get("parallelism", spec.get("instances", "full"))
+    default_instances = (hw.load().npes if par in (None, "full", "all")
+                         else int(par))
     try:
         for i, ps in enumerate(spec.get("parts", [])):
             ps = dict(ps)
             ps.setdefault("name", f"p{i}")
             ps.setdefault("kind", "dfg")
-            p, nvals = compile_part(ps, int(spec.get("instances", 16)))
+            p, nvals = compile_part(ps, default_instances)
             parts.append(p)
             total_self += nvals
         full = rm.Microcode()

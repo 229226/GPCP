@@ -28,6 +28,7 @@ from cgra import NPES, enc, spad_idx         # noqa: E402
 import rule_map as rm                         # noqa: E402
 import kernel_spec as ks                      # noqa: E402
 import bank_alloc as ba                       # noqa: E402  L2-A：区间图着色 bank 分配器
+import target as hw                           # noqa: E402  逻辑地址 lowering
 
 
 # ---------------------------------------------------------------- 字格式化
@@ -270,11 +271,12 @@ def run_spec(spec_path, out=None, rows=None, _variant=None):
 
     # dfg
     dfg = ks.build_dfg(spec)
-    instances = spec.get("instances", 16)
-    # flat 地址（base + stride*instance）：长数组/广播系数；不参与 bank 分配
-    offset = int(spec.get("base_offset", 0))
-    leaf_addrs = ks.expand_addr_mapping(spec.get("leaves", {}), offset)
-    sink_flat = ks.expand_addr_mapping(spec.get("sinks", {}), offset)
+    par = spec.get("parallelism", spec.get("instances", "full"))
+    instances = hw.load().npes if par in (None, "full", "all") else int(par)
+    # 逻辑地址由 target lower 成 flat（base + stride*instance）；不参与 bank 分配
+    shift = int(spec.get("shift", spec.get("base_offset", 0)))
+    leaf_addrs = ks.expand_addr_mapping(spec.get("leaves", {}), shift=shift)
+    sink_flat = ks.expand_addr_mapping(spec.get("sinks", {}), shift=shift)
     flat = set(leaf_addrs) | set(sink_flat)
     # ---- L2-A：两阶段 bank 分配（淘汰 leaf_banks/sink_bank 硬编码的 6 上限）----
     plan_leaves, plan_sinks = _plan_assign(dfg, skip=flat)
@@ -339,20 +341,22 @@ def _plan_assign(dfg, skip=()):
 def _assert_resources(mc, leaf_banks, sink_banks, max_regs,
                       leaf_addrs=None, sink_flat=None, instances=16):
     """L2-D：生成前硬断言，不过就 SystemExit。"""
-    if mc.cycles > 512:
-        raise SystemExit(f"微码 {mc.cycles} 拍超过 IMEM 上限 512（≈8192 字 / 16 PE）")
+    T = hw.load()
+    if mc.cycles > T.max_cycles:
+        raise SystemExit(f"微码 {mc.cycles} 拍超过 IMEM 上限 {T.max_cycles}"
+                         f"（≈{T.max_cycles * T.npes} 字 / {T.npes} PE）")
     maxbank = 0
     for b in list(leaf_banks.values()) + list(sink_banks.values()):
         maxbank = max(maxbank, b)
-    if maxbank > 31:
-        raise SystemExit(f"bank {maxbank} 越界（spad_idx 只保留 5 位，必须 <=31）")
+    if maxbank >= T.banks:
+        raise SystemExit(f"bank {maxbank} 越界（target 只有 {T.banks} 个 bank）")
     maxflat = 0
     for base, stride in list((leaf_addrs or {}).values()) + list((sink_flat or {}).values()):
         maxflat = max(maxflat, base + stride * (instances - 1))
-    if maxflat > 1023:
-        raise SystemExit(f"flat 地址 {maxflat} 越界（imm 只有 10 位，必须 <=1023）")
-    if max_regs > 8:
-        raise SystemExit(f"单 PE 活跃寄存器 {max_regs} 超过 8 个（r0..r7）")
+    if maxflat > T.flat_max:
+        raise SystemExit(f"flat 地址 {maxflat} 越界（target.flat_max={T.flat_max}）")
+    if max_regs > T.regs:
+        raise SystemExit(f"单 PE 活跃寄存器 {max_regs} 超过 {T.regs} 个（见 target.pe.regs）")
     return
 
 

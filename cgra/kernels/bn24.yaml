@@ -2,8 +2,8 @@ name: bn24
 kind: dfg
 desc: "24 槽变量节点：sum = Σmsg + llr，out_k = sum - msg_k，hard = sum>>31；原位写回"
 leaves:
-  m0..m23: {addr: {base: "0..736:32", stride: 1}}
-  llr:     {addr: {base: 768, stride: 1}}
+  m0..m23: {at: {region: "IN + k", slot: "SHIFT", pe_per_bank: 32}}
+  llr: {at: {region: "LLR", slot: "SHIFT", pe_per_bank: 32}}
 ops:
   - {name: s1, op: add, a: m0, b: m1}
   - {name: s2, op: add, a: s1, b: m2}
@@ -55,9 +55,9 @@ ops:
   - {name: o23, op: sub, a: all, b: m23}
   - {name: hard, op: shr, a: all, imm: 31}
 sinks:
-  o0..o23: {addr: {base: "0..736:32", stride: 1}}
-  hard:    {addr: {base: 800, stride: 1}}
-instances: 16
+  o0..o23: {at: {region: "IN + k", slot: "SHIFT", pe_per_bank: 32}}
+  hard: {at: {region: "HARD", slot: "SHIFT", pe_per_bank: 32}}
+parallelism: full
 variants:
-  - {name: bn24_w0,  base_offset: 0}
-  - {name: bn24_w16, base_offset: 16}
+  - {name: bn24_w0,  shift: 0}
+  - {name: bn24_w16, shift: 16}

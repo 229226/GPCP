@@ -1,14 +1,14 @@
 name: rxchain
 kind: image
 desc: "LS -> MMSE -> 16QAM(I/Q) -> LDPC CN(abs/sign) -> min-sum；段间靠 spad word 传值"
-instances: 16
+parallelism: full
 parts:
   - name: ls
     leaves:
-      yr: {addr: {base: 0, stride: 32}}
-      yi: {addr: {base: 1, stride: 32}}
-      xr: {addr: {base: 2, stride: 32}}
-      xi: {addr: {base: 3, stride: 32}}
+      yr: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+      yi: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+      xr: {at: {region: "IN", slot: 2, pe_per_bank: 1}}
+      xi: {at: {region: "IN", slot: 3, pe_per_bank: 1}}
     ops:
       - {name: pr, op: mul, a: yr, b: xr}
       - {name: pi, op: mul, a: yi, b: xi}
@@ -19,14 +19,14 @@ parts:
       - {name: hi0, op: sub, a: qr, b: qi}
       - {name: hi, op: shr, a: hi0, imm: 15}
     sinks:
-      hr: {addr: {base: 4, stride: 32}}
-      hi: {addr: {base: 5, stride: 32}}
+      hr: {at: {region: "IN", slot: 4, pe_per_bank: 1}}
+      hi: {at: {region: "IN", slot: 5, pe_per_bank: 1}}
   - name: mmse
     leaves:
-      hr: {addr: {base: 4, stride: 32}}
-      hi: {addr: {base: 5, stride: 32}}
-      yr: {addr: {base: 0, stride: 32}}
-      yi: {addr: {base: 1, stride: 32}}
+      hr: {at: {region: "IN", slot: 4, pe_per_bank: 1}}
+      hi: {at: {region: "IN", slot: 5, pe_per_bank: 1}}
+      yr: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+      yi: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
     ops:
       - {name: npr, op: mul, a: hr, b: yr}
       - {name: npi, op: mul, a: hi, b: yi}
@@ -41,14 +41,14 @@ parts:
       - {name: mag0, op: add, a: m2r, b: m2i}
       - {name: mag, op: shr, a: mag0, imm: 15}
     sinks:
-      nr: {addr: {base: 20, stride: 32}}
-      ni: {addr: {base: 21, stride: 32}}
-      mag: {addr: {base: 22, stride: 32}}
+      nr: {at: {region: "IN", slot: 20, pe_per_bank: 1}}
+      ni: {at: {region: "IN", slot: 21, pe_per_bank: 1}}
+      mag: {at: {region: "IN", slot: 22, pe_per_bank: 1}}
   - name: llr_i
     leaves:
-      r: {addr: {base: 20, stride: 32}}
-      m: {addr: {base: 22, stride: 32}}
-      three: {addr: {base: 28, stride: 0}}
+      r: {at: {region: "IN", slot: 20, pe_per_bank: 1}}
+      m: {at: {region: "IN", slot: 22, pe_per_bank: 1}}
+      three: {at: {region: "IN", slot: 28, broadcast: True}}
     ops:
       - {name: two, op: shl, a: r, imm: 1}
       - {name: six, op: mul, a: two, b: three}
@@ -67,13 +67,13 @@ parts:
       - {name: dlsb, op: sub, a: lsb1, b: lsb0}
       - {name: lsb, op: shr, a: dlsb, imm: 10}
     sinks:
-      msb: {addr: {base: 24, stride: 32}}
-      lsb: {addr: {base: 25, stride: 32}}
+      msb: {at: {region: "IN", slot: 24, pe_per_bank: 1}}
+      lsb: {at: {region: "IN", slot: 25, pe_per_bank: 1}}
   - name: llr_q
     leaves:
-      r: {addr: {base: 21, stride: 32}}
-      m: {addr: {base: 22, stride: 32}}
-      three: {addr: {base: 28, stride: 0}}
+      r: {at: {region: "IN", slot: 21, pe_per_bank: 1}}
+      m: {at: {region: "IN", slot: 22, pe_per_bank: 1}}
+      three: {at: {region: "IN", slot: 28, broadcast: True}}
     ops:
       - {name: two, op: shl, a: r, imm: 1}
       - {name: six, op: mul, a: two, b: three}
@@ -92,14 +92,14 @@ parts:
       - {name: dlsb, op: sub, a: lsb1, b: lsb0}
       - {name: lsb, op: shr, a: dlsb, imm: 10}
     sinks:
-      msb: {addr: {base: 26, stride: 32}}
-      lsb: {addr: {base: 27, stride: 32}}
+      msb: {at: {region: "IN", slot: 26, pe_per_bank: 1}}
+      lsb: {at: {region: "IN", slot: 27, pe_per_bank: 1}}
   - name: cn_abs
     leaves:
-      i1: {addr: {base: 24, stride: 32}}
-      i0: {addr: {base: 25, stride: 32}}
-      q1: {addr: {base: 26, stride: 32}}
-      q0: {addr: {base: 27, stride: 32}}
+      i1: {at: {region: "IN", slot: 24, pe_per_bank: 1}}
+      i0: {at: {region: "IN", slot: 25, pe_per_bank: 1}}
+      q1: {at: {region: "IN", slot: 26, pe_per_bank: 1}}
+      q0: {at: {region: "IN", slot: 27, pe_per_bank: 1}}
     ops:
       - {name: s0, op: shr, a: i1, imm: 31}
       - {name: x0, op: xor, a: i1, b: s0}
@@ -117,17 +117,17 @@ parts:
       - {name: sg012, op: xor, a: sg01, b: s2}
       - {name: sg, op: xor, a: sg012, b: s3}
     sinks:
-      a0: {addr: {base: 8, stride: 32}}
-      a1: {addr: {base: 9, stride: 32}}
-      a2: {addr: {base: 10, stride: 32}}
-      a3: {addr: {base: 11, stride: 32}}
-      sg: {addr: {base: 6, stride: 32}}
+      a0: {at: {region: "IN", slot: 8, pe_per_bank: 1}}
+      a1: {at: {region: "IN", slot: 9, pe_per_bank: 1}}
+      a2: {at: {region: "IN", slot: 10, pe_per_bank: 1}}
+      a3: {at: {region: "IN", slot: 11, pe_per_bank: 1}}
+      sg: {at: {region: "IN", slot: 6, pe_per_bank: 1}}
   - name: cn_min
     leaves:
-      a0: {addr: {base: 8, stride: 32}}
-      a1: {addr: {base: 9, stride: 32}}
-      a2: {addr: {base: 10, stride: 32}}
-      a3: {addr: {base: 11, stride: 32}}
+      a0: {at: {region: "IN", slot: 8, pe_per_bank: 1}}
+      a1: {at: {region: "IN", slot: 9, pe_per_bank: 1}}
+      a2: {at: {region: "IN", slot: 10, pe_per_bank: 1}}
+      a3: {at: {region: "IN", slot: 11, pe_per_bank: 1}}
     ops:
       - {name: s1, op: min, a: a0, b: a1}
       - {name: h1, op: max, a: a0, b: a1}
@@ -138,5 +138,5 @@ parts:
       - {name: hi2, op: min, a: h1, b: h2}
       - {name: min2, op: min, a: lo, b: hi2}
     sinks:
-      min1: {addr: {base: 4, stride: 32}}
-      min2: {addr: {base: 5, stride: 32}}
+      min1: {at: {region: "IN", slot: 4, pe_per_bank: 1}}
+      min2: {at: {region: "IN", slot: 5, pe_per_bank: 1}}

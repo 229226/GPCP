@@ -23,9 +23,10 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
-from cgra import NPES, enc, spad_idx          # noqa: E402  （复用 ISA 编码，避免两套定义）
+from cgra import (NPES, NREGS, SPAD_HOST_WINDOW, MAX_CYCLES,
+                   enc, spad_idx)             # noqa: E402  （复用 ISA 编码，避免两套定义）
 
-SPAD_WIN = 0xA000                              # scratchpad 的主机窗口基址（AXI 字节地址）
+SPAD_WIN = SPAD_HOST_WINDOW                    # scratchpad 主机窗口基址（来自 target）
 
 
 # ---------------------------------------------------------------- DFG
@@ -336,7 +337,7 @@ def _neighbour(pe, d, n=4):
 
 def simulate(mc, spad, n=4):
     """按 ISA 语义逐拍执行：寄存器堆 + spad + link（link = 上一拍写出的值，NOP/ST 保持）。"""
-    regs = [[0] * 8 for _ in range(NPES)]
+    regs = [[0] * NREGS for _ in range(NPES)]
     link = [0] * NPES                        # 本拍邻居可见的 link（上一拍写入值）
     for cyc in range(mc.cycles):
         nxt = list(link)                     # 默认保持
@@ -594,7 +595,8 @@ def main():
     ap.add_argument("--cn", action="store_true",
                     help="CN 的 min1/min2/sign（成对归约，20 个提升行一次跑完）")
     ap.add_argument("--dfg", help="任意 dot（叶子 m<k>/llr 沿用 BN 布局，其余从 bank 26 起）")
-    ap.add_argument("--instances", type=int, default=16)
+    ap.add_argument("--instances", type=int, default=None,
+                        help="缺省 = target.npes")
     ap.add_argument("--rows", type=int, default=20, help="--bn-split 处理多少行（Zc=20）")
     ap.add_argument("--emit", help="把微码写成二进制（cycle-major，每字 32 bit）")
     ap.add_argument("--emit-hex", metavar="PREFIX",
@@ -658,7 +660,7 @@ def main():
         # 通用模式：随机叶子值，把所有汇的写回值与黄金模型逐一对账
         rnd = random.Random(7)
         spad, exp = {}, {}
-        for inst in range(min(a.instances, 16)):
+        for inst in range(min(a.instances or NPES, NPES)):
             vals_cache = {}
             for l in dfg.leaves():
                 v = rnd.randint(-5000, 5000)

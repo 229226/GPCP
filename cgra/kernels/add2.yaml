@@ -2,10 +2,10 @@ name: add2
 kind: dfg
 desc: "通用 DFG 冒烟测试：sum = a0 + a1（验证 build_dfg + rule_map.schedule 通路）"
 leaves:
-  a0: { bank: 26 }
-  a1: { bank: 27 }
+  a0: {bank: "HARD + 1"}
+  a1: {bank: "HARD + 2"}
 ops:
   - { name: sum, op: add, a: a0, b: a1 }
 sinks:
-  sum: { bank: 28 }
-instances: 16
+  sum: {bank: "HARD + 3"}
+parallelism: full

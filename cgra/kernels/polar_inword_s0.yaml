@@ -1,13 +1,13 @@
 name: polar_inword_s0
 kind: dfg
-desc: "Polar 编码字内第 0 级：w ^= (w>>1) & mask（mask 由 bench 预装到 flat 32，广播）"
+desc: "Polar 编码字内第 0 级：w ^= (w>>1) & mask（mask 由 bench 预装到常量区，广播）"
 leaves:
-  w:    {addr: {base: 0, stride: 1}}
-  mask: {addr: {base: 32, stride: 0}}
+  w: {at: {region: "IN", slot: 0, pe_per_bank: 32}}
+  mask: {at: {region: "IN + 1", slot: 0, broadcast: True}}
 ops:
   - {name: t,  op: shr, a: w, imm: 1}
   - {name: t2, op: and, a: t, b: mask}
   - {name: w2, op: xor, a: w, b: t2}
 sinks:
-  w2: {addr: {base: 0, stride: 1}}
-instances: 16
+  w2: {at: {region: "IN", slot: 0, pe_per_bank: 32}}
+parallelism: full

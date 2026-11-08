@@ -1,15 +1,15 @@
 name: matmul
 kind: dfg
-desc: "4x4 整数矩阵乘：每 PE 一个输出 C[row][col] = sum_k A[row][k]*B[k][col]；A 在 flat k+8*pe、B 在 4+k+8*pe，汇 flat 256+pe"
+desc: "4x4 整数矩阵乘：每实例一个输出 C[row][col] = sum_k A[row][k]*B[k][col]；A/B 在 IN 区，结果写输出区"
 leaves:
-  a0: {addr: {base: 0, stride: 8}}
-  a1: {addr: {base: 1, stride: 8}}
-  a2: {addr: {base: 2, stride: 8}}
-  a3: {addr: {base: 3, stride: 8}}
-  b0: {addr: {base: 4, stride: 8}}
-  b1: {addr: {base: 5, stride: 8}}
-  b2: {addr: {base: 6, stride: 8}}
-  b3: {addr: {base: 7, stride: 8}}
+  a0: {at: {region: "IN", slot: 0, pe_per_bank: 4}}
+  a1: {at: {region: "IN", slot: 1, pe_per_bank: 4}}
+  a2: {at: {region: "IN", slot: 2, pe_per_bank: 4}}
+  a3: {at: {region: "IN", slot: 3, pe_per_bank: 4}}
+  b0: {at: {region: "IN", slot: 4, pe_per_bank: 4}}
+  b1: {at: {region: "IN", slot: 5, pe_per_bank: 4}}
+  b2: {at: {region: "IN", slot: 6, pe_per_bank: 4}}
+  b3: {at: {region: "IN", slot: 7, pe_per_bank: 4}}
 ops:
   - {name: p0, op: mul, a: a0, b: b0}
   - {name: p1, op: mul, a: a1, b: b1}
@@ -19,5 +19,5 @@ ops:
   - {name: s23, op: add, a: p2, b: p3}
   - {name: sum, op: add, a: s01, b: s23}
 sinks:
-  sum: {addr: {base: 256, stride: 1}}
-instances: 16
+  sum: {at: {region: "REF", slot: 0, pe_per_bank: 32}}
+parallelism: full

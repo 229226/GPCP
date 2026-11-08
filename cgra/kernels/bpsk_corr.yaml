@@ -1,10 +1,10 @@
 name: bpsk_corr
 kind: dfg
-desc: "BPSK/SSS 相关部分和：16 PE 各 8 tap，rx 窗口 stride=16、ref 广播 stride=0；只算实部（BPSK ref 为实数）"
+desc: "BPSK/SSS 相关部分和：每实例 8 tap，rx 窗口与 ref 广播按 IN / REF 命名区域装载；只算实部（BPSK ref 为实数）"
 leaves:
-  xr0..xr7: {addr: {base: "0..14:2", stride: 16}}
-  xi0..xi7: {addr: {base: "1..15:2", stride: 16}}
-  r0..r7:   {addr: {base: 256..263, stride: 8}}
+  xr0..xr7: {at: {region: "IN", slot: "2*k", pe_per_bank: 2}}
+  xi0..xi7: {at: {region: "IN", slot: "1 + 2*k", pe_per_bank: 2}}
+  r0..r7: {at: {region: "REF", slot: "k", pe_per_bank: 4}}
 ops:
   - {name: pr0, op: mul, a: xr0, b: r0}
   - {name: accr0, op: mov, a: pr0}
@@ -23,5 +23,5 @@ ops:
   - {name: pr7, op: mul, a: xr7, b: r7}
   - {name: part_r, op: add, a: accr6, b: pr7}
 sinks:
-  part_r: {addr: {base: 512, stride: 2}}
-instances: 16
+  part_r: {at: {region: "OUT", slot: 0, pe_per_bank: 16}}
+parallelism: full

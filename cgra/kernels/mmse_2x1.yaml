@@ -40,4 +40,4 @@ ops:
 sinks:
   numr: {}
   numi: {}
-instances: 16
+parallelism: full

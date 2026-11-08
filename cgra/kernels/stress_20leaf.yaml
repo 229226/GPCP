@@ -24,4 +24,4 @@ ops:
   - {name: s18, op: add, a: s17, b: a18}
   - {name: s19, op: add, a: s18, b: a19}
 # s19 无后继，由 rule_map.DFG.sinks() 自动识别为汇（无需显式列出）
-instances: 16
+parallelism: full

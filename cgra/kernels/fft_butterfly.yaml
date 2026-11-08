@@ -1,6 +1,6 @@
 name: fft_butterfly
 kind: dfg
-desc: "Radix-2 DIT FFT 蝶形（单蝶）tile：16 个 PE 各算一只蝶形（实例并行）。
+desc: "Radix-2 DIT FFT 蝶形（单蝶）tile：全并行实例各算一只蝶形。
       叶子 Ar/Ai/Br/Bi = 两个 Q15 复数点，Wr/Wi = 旋转因子（Q15）。
       复数乘 t = W*B：tr=(Wr*Br - Wi*Bi)>>15, ti=(Wr*Bi + Wi*Br)>>15（Q30->Q15 缩放）。
       输出 A'=(A+t)>>1, B'=(A-t)>>1（每级 1/2 缩放，保持 Q15）。
@@ -34,4 +34,4 @@ sinks:
   Aoi: {}
   Bor: {}
   Boi: {}
-instances: 16
+parallelism: full

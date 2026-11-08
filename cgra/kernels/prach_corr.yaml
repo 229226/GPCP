@@ -1,11 +1,11 @@
 name: prach_corr
 kind: dfg
-desc: "PRACH ZC 相关部分和：16 PE 各 8 tap，y/ref 同 tap 组 stride=16；汇 part_r/part_i 由 CVA6 归约（替代手写 kernel_zc_corr 的 16->1 蝶形）"
+desc: "PRACH ZC 相关部分和：每实例 8 tap，y/ref 按 IN / REF 命名区域装载；汇 part_r/part_i 由 CVA6 归约"
 leaves:
-  xr0..xr7: {addr: {base: "0..14:2", stride: 16}}
-  xi0..xi7: {addr: {base: "1..15:2", stride: 16}}
-  r0..r7:   {addr: {base: "256..270:2", stride: 16}}
-  ri0..ri7: {addr: {base: "257..271:2", stride: 16}}
+  xr0..xr7: {at: {region: "IN", slot: "2*k", pe_per_bank: 2}}
+  xi0..xi7: {at: {region: "IN", slot: "1 + 2*k", pe_per_bank: 2}}
+  r0..r7: {at: {region: "REF", slot: "2*k", pe_per_bank: 2}}
+  ri0..ri7: {at: {region: "REF", slot: "1 + 2*k", pe_per_bank: 2}}
 ops:
   - {name: pr0, op: mul, a: xr0, b: r0}
   - {name: pi0, op: mul, a: xi0, b: ri0}
@@ -71,6 +71,6 @@ ops:
   - {name: d7, op: sub, a: qr7, b: qi7}
   - {name: part_i, op: add, a: acci6, b: d7}
 sinks:
-  part_r: {addr: {base: 512, stride: 2}}
-  part_i: {addr: {base: 513, stride: 2}}
-instances: 16
+  part_r: {at: {region: "OUT", slot: 0, pe_per_bank: 16}}
+  part_i: {at: {region: "OUT", slot: 1, pe_per_bank: 16}}
+parallelism: full

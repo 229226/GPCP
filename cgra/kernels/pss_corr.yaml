@@ -1,10 +1,10 @@
 name: pss_corr
 kind: dfg
-desc: "PSS/SSS 复数相关：acc_re=Σ yr_k*r_k, acc_im=Σ yi_k*r_k；y 线性(yr 2k+16pe, yi 2k+1+16pe)，ref 每 PE 一块(256+32pe+k)；汇 768/769+2p（1 个 bank）"
+desc: "PSS/SSS 复数相关：acc_re=Σ yr_k*r_k, acc_im=Σ yi_k*r_k；y 在 IN 区、ref 在 REF 区，结果写 LLR 区"
 leaves:
-  yr0..yr7: {addr: {base: "0..14:2", stride: 16}}
-  yi0..yi7: {addr: {base: "1..15:2", stride: 16}}
-  r0..r7:   {addr: {base: "256..263", stride: 32}}
+  yr0..yr7: {at: {region: "IN", slot: "2*k", pe_per_bank: 2}}
+  yi0..yi7: {at: {region: "IN", slot: "1 + 2*k", pe_per_bank: 2}}
+  r0..r7: {at: {region: "REF", slot: "k", pe_per_bank: 1}}
 ops:
   - {name: pr0, op: mul, a: yr0, b: r0}
   - {name: qr0, op: mul, a: yi0, b: r0}
@@ -39,6 +39,6 @@ ops:
   - {name: qr7, op: mul, a: yi7, b: r7}
   - {name: acc_im, op: add, a: acci6, b: qr7}
 sinks:
-  acc_re: {addr: {base: 768, stride: 2}}
-  acc_im: {addr: {base: 769, stride: 2}}
-instances: 16
+  acc_re: {at: {region: "LLR", slot: 0, pe_per_bank: 16}}
+  acc_im: {at: {region: "LLR", slot: 1, pe_per_bank: 16}}
+parallelism: full

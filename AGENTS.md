@@ -146,8 +146,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
 | `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c`、`pbch_pack_bm.c`（**A2**：纯 CVA6 载荷装配） |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
-| `tools/` | 模型与检查 | `cgra.py`（ISA 编码唯一来源 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配 + **A2 发射装配黄金模型** `pbch_pack()` / `dump-pack`，`selftest-pack` 与 `ssb_plan`/`nr_pdcch` 交叉对账）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_pbch_pack.py`（A2 逐段对账）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
-| `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_{bn,cn}_prog.py`（生成 `sw/soc/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py` |
+| `tools/` | 模型与检查 | `cgra.py`（ISA 编码与阵列几何**由 `cgra/target.yaml` 派生**，对外提供 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配 + **A2 发射装配黄金模型** `pbch_pack()` / `dump-pack`，`selftest-pack` 与 `ssb_plan`/`nr_pdcch` 交叉对账）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_pbch_pack.py`（A2 逐段对账）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
+| `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_{bn,cn}_prog.py`（生成 `sw/soc/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py`；`target.yaml`（硬件真相：几何/ISA/命名区域）与 `tools/target.py`（逻辑地址 → flat 的唯一换算层）、`tools/image_spec.py`、`tools/fft_image.py` |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
 
@@ -215,6 +215,26 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     要新算法就写 YAML，不要写 C —— 手写微码绕过了调度器、绕过了逐值自检，是这类项目
     腐烂最快的地方（同一个 polar node 程序曾被复制 7 份，手写 22 拍 / 编译器 25 拍，
     两条路一起维护）。写 YAML 的成本低于写 C：`--all` 一次编 23 个镜像、每个都自带对拍。
+
+19. **kernel YAML 不许直接描述硬件**（2026-11-08 立规）。硬件真相只在
+    `cgra/target.yaml`：阵列规模（4×4 → 16 PE）、spad 几何（32 bank × 32 word）、
+    每 PE 寄存器数、ISA 编码表、IMEM 深度、同步 ST/组合 LD 时序，以及命名区域
+    （`IN` / `REF` / `OUT` / `LLR` / `MIN1` / `HARD` / `SENTINEL` ...）。
+    `cgra/tools/target.py` 是唯一的换算层；kernel YAML 只准写逻辑地址与逻辑并行度：
+
+        leaves: {yr: {at: {region: IN, slot: 0, pe_per_bank: 1}}}
+        parallelism: full                    # 不写 instances: 16
+        variants: [{name: ..., shift: 16}]  # 字位平移用 slot 里的 SHIFT
+
+    `at.region` / `at.slot` 是逻辑表达式（可用 `k` / `SHIFT` / `W` / `NPES` 与区域名），
+    `pe_per_bank` = 一个 bank 承载几个 PE 的数据块。编译器按 target 对每个 PE 求值、
+    仿射化成 `(base, stride)` 再调度 + 逐值自检。**YAML 里出现 `addr: {base,stride}`、
+    `instances: 16`、`bank: 16` 或 `base_offset` 一律违规**：`tools/check_yaml_coupling.py`
+    在每档 verify 的预检里执行（指纹缓存跳过不了），`make yaml-check` 可单独跑。
+    换阵列规模只改 target；`tools/cgra.py` / `rule_map.py` / `bank_alloc.py` /
+    `gen_kernel_prog.py` / `image_spec.py` 的几何常量全部由它派生，不许再写第二套数字。
+    **边界**：C 侧 DMA 描述符仍按当前几何写死，跨 target 复用还需编译器下发
+    `*_layout.h` 布局契约（下一步）；FFT 专用调度器里的蝶形基址/拍号同理。
 
 ---
 
@@ -344,7 +364,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
       PSS/SSS 相关 ×5、LDPC CN/VN、PRACH 三门禁、`pdsch_gather` 的 10 边 CN /
       24 槽 BN、`rxchain` 四阶段融合、`fft_bm.c` / `ssb_fft.inc` 的 FFT 引擎。
     * **编译器新增能力**：`variants`（一个 YAML 多个地址变体，
-      `base_offset` 平移 flat 地址，用于 Zc=20 的 word_base 0/16 两半）；
+      `shift` + slot 表达式里的 `SHIFT` 平移字位，用于 Zc=20 的 word_base 0/16 两半）；
       `kind: image`（`cgra/tools/image_spec.py`）——多个已编译 DFG 子图按
       `at` / `pe_map` 拼成一张镜像，按 at 分组做跨阶段 spad 串接自检；
       `kind: fft_image`（`cgra/tools/fft_image.py`）——radix-4 蝶形专用调度器，
@@ -354,6 +374,13 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
       结果，因此该 kernel 必须有专用调度器。
     * **全量证据**：`make verify-smart` 58 门 0 failed；`run-fft` 三种尺寸
       逐位匹配黄金模型；`make devcheck` 0 error 0 warn。
+
+20. **YAML 与硬件解耦（2026-11-08）**：31 份 kernel YAML 的 127 处物理 flat 地址、
+    26 处物理 bank 号、27 处 `instances: 16`、4 处 `base_offset` 全部迁到
+    `at` 逻辑地址 / 命名区域 / `parallelism` / `SHIFT`；新增 `cgra/target.yaml`
+    与 `cgra/tools/target.py`，五个编译器模块的硬件常量改由 target 派生。
+    验收口径是**34 个 `*_prog.h` 逐字不变** + 每份 YAML 逐项反算地址等价，
+    `make yaml-check` 绿（规则见 §4.19）。
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。
 

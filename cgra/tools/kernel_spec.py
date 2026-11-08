@@ -19,6 +19,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 from cgra import OPS, NPES, enc, spad_idx   # noqa: E402
 import rule_map as rm                         # noqa: E402
+import target as hw                           # noqa: E402  逻辑地址 -> flat 的换算层
 
 try:
     import yaml
@@ -83,6 +84,8 @@ def expand_mapping(mapping):
     """{key: {bank: X}} → {name: bank(int|None)}，key 与 bank 并行展开且长度一致。
 
     bank 缺省（写法 `{}` 或不写）时值为 None，表示「交给 bank_alloc 自动分配」（L2-A）。
+    bank 可以写 target 的命名区域（OUT / MIN1 / ...）或含 k 的表达式
+    （"IN + k"）—— 物理 bank 号只存在于 cgra/target.yaml。
     """
     out = {}
     for k, v in mapping.items():
@@ -93,6 +96,13 @@ def expand_mapping(mapping):
                 if name in out:
                     raise ValueError(f"名字重复：{name!r}")
                 out[name] = None
+            continue
+        if isinstance(bank_expr, str) and any(c.isalpha() for c in bank_expr):
+            # 符号表达式：按名字序号 k 逐项求值（YAML 里不再出现物理 bank 号）
+            for i, name in enumerate(names):
+                if name in out:
+                    raise ValueError(f"名字重复：{name!r}")
+                out[name] = int(hw.load().region(bank_expr, k=i))
             continue
         banks = _expand_range(bank_expr)
         if len(names) != len(banks):
@@ -105,8 +115,13 @@ def expand_mapping(mapping):
     return out
 
 
-def expand_addr_mapping(mapping, offset=0):
-    """{key: {addr: {base: X, stride: S}}} → {name: (base, stride)}。
+def expand_addr_mapping(mapping, offset=0, shift=0):
+    """{key: {at: {...}}} → {name: (base, stride)}；兼容旧的显式 addr。
+
+    新写法 `at` 是逻辑地址：{region: 命名区域, slot: 逻辑字位,
+    pe_per_bank: 一个 bank 容纳几个 PE 的数据块}。换算由 cgra/tools/target.py
+    按 cgra/target.yaml 的几何完成，YAML 侧不含物理坐标。
+    `shift` 供 variants 平移字位（Zc=20 的 word_base=16），按 SHIFT 注入表达式。
 
     寻址公式：spad 平坦地址 = base + stride*instance（instance = PE 号）。
     - `stride: 0` 表示所有 PE 共享同一个字（广播系数，如 FIR 抽头 / 导频）；
@@ -115,8 +130,18 @@ def expand_addr_mapping(mapping, offset=0):
     带 addr 的叶子/汇不参与 bank 分配（地址是显式平坦地址）。
     """
     out = {}
+    extra = {"SHIFT": int(shift)}
     for k, v in mapping.items():
-        if not isinstance(v, dict) or "addr" not in v:
+        if not isinstance(v, dict):
+            continue
+        if "at" in v:
+            names = _expand_keys(k)
+            for i, name in enumerate(names):
+                if name in out:
+                    raise ValueError(f"名字重复：{name!r}")
+                out[name] = hw.load().lower(v["at"], k=i, extra=extra)
+            continue
+        if "addr" not in v:
             continue
         a = v["addr"]
         bases = _expand_range(a.get("base", 0))
@@ -128,7 +153,7 @@ def expand_addr_mapping(mapping, offset=0):
         for name, base in zip(names, bases):
             if name in out:
                 raise ValueError(f"名字重复：{name!r}")
-            out[name] = (int(base) + offset, stride)
+            out[name] = (int(base) + offset + int(shift), stride)
     return out
 
 
@@ -141,7 +166,7 @@ def validate(spec):
     errs = []
     if not isinstance(spec, dict):
         return ["spec 顶层必须是映射"]
-    offset = int(spec.get("base_offset", 0))
+    shift = int(spec.get("shift", spec.get("base_offset", 0)))
     kind = spec.get("kind", "dfg")
     if kind not in ("bn", "cn", "dfg"):
         errs.append(f"未知 kind: {kind!r}（应为 bn/cn/dfg）")
@@ -171,22 +196,24 @@ def validate(spec):
             errs.append(f"{field}: {e}")
             continue
         for name, bank in expanded.items():
-            if bank is not None and not (0 <= bank <= 31):
-                errs.append(f"{field} {name} 的 bank {bank} 越界（必须 0..31）")
+            if bank is not None and not (0 <= bank < hw.load().banks):
+                errs.append(f"{field} {name} 的 bank {bank} 越界（见 target.spad.banks）")
         try:
-            addrs = expand_addr_mapping(m, offset)
+            addrs = expand_addr_mapping(m, shift=shift)
         except ValueError as e:
             errs.append(f"{field}: {e}")
             continue
-        inst = int(spec.get("instances", 16))
+        T = hw.load()
+        par = spec.get("parallelism", spec.get("instances", "full"))
+        inst = T.npes if par in (None, "full", "all") else int(par)
         for name, (base, stride) in addrs.items():
             if expanded.get(name) is not None:
-                errs.append(f"{field} {name} 同时写了 bank 与 addr（只能二选一）")
+                errs.append(f"{field} {name} 同时写了 bank 与地址（只能二选一）")
             if base < 0 or stride < 0:
-                errs.append(f"{field} {name} 的 addr base/stride 不能为负")
-            elif base + stride * (inst - 1) > 1023:
-                errs.append(f"{field} {name} 的 addr 越界："
-                            f"{base}+{stride}*{inst - 1} > 1023（imm 只有 10 位）")
+                errs.append(f"{field} {name} 的地址 base/stride 不能为负")
+            elif base + stride * (inst - 1) > T.flat_max:
+                errs.append(f"{field} {name} 的地址越界："
+                            f"{base}+{stride}*{inst - 1} > {T.flat_max}（imm 位宽见 target）")
 
     if kind == "dfg":
         leaves = set(expand_mapping(spec.get("leaves", {})).keys())
@@ -218,8 +245,8 @@ def build_dfg(spec):
         # 叶子无前驱；给占位 opcode，schedule 会跳过无前驱节点、只当 LD 源
         d.node(name, "add")
     # flat 地址（base + stride*instance）：长数组/广播系数走这里，不用 bank
-    d.addr.update(expand_addr_mapping(spec.get("leaves", {}),
-                                     int(spec.get("base_offset", 0))))
+    d.addr.update(expand_addr_mapping(
+        spec.get("leaves", {}), shift=int(spec.get("shift", spec.get("base_offset", 0)))))
     for op in spec.get("ops", []):
         n = op["name"]
         # imm 仅 shr/shl 使用（Q15 缩放）；op.get("imm", 0) 缺省即 0
