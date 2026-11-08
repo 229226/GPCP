@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam kernels
+.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam kernels
 
 all: test
 
@@ -23,6 +23,10 @@ verify-slow:
 # Only the gates touched by the current git diff (~0.5-3 min)
 verify-changed:
 	bash tools/verify.sh changed
+
+# 铁律：微码只许编译器生成（AGENTS.md 4.18）。每次 verify 也会自动跑。
+handprog-check:
+	python3 tools/check_handprog.py
 
 # 开发工时台账：校验（每个功能/修复提交都要有记录）与汇总
 devcheck:

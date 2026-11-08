@@ -146,7 +146,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sw/include/` | 裸机 ABI `gpcp_cgra.h`（寄存器内联函数）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
 | `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c` |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
-| `tools/` | 模型与检查 | `cgra.py`（微码生成器 + 15 kernel + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`gen_prach_prog.py`（生成 `prach_prog.h` 微码）、`check_*.py`（每个基准的验收器）、`verify.sh` |
+| `tools/` | 模型与检查 | `cgra.py`（ISA 编码唯一来源 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`gen_prach_prog.py`（**旧路径**：手写 kernel → `prach_prog.h`，按 §6.19 待清退）、`check_*.py`（每个基准的验收器）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`verify.sh` |
 | `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_{bn,cn}_prog.py`（生成 `sw/soc/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py` |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
@@ -204,6 +204,17 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     ③ PBCH 扰码要 **E = 720 bit**（速率匹配后），Gold 序列必须按 `RM_LEN` 生成；
     按 `NPOL=512` 只填 512 个会让后 208 个 bit 恒为 0，两个重复副本被反向解扰 → LLR 相消，
     症状是"32 位里只错 2 位、但一半 LLR 掉到 ±64"。
+
+18. **微码只许编译器生成，不许手写**（2026-11-08 立规）。唯一合法路径：
+
+    cgra/kernels/*.yaml  ->  cgra/tools/gen_kernel_prog.py  ->  sw/soc/*_prog.h（带生成横幅）
+
+    `gen_bn_prog.py` / `gen_cn_prog.py` 是它的兼容薄壳，同属合法路径。
+    **`sw/` 里出现 `gpcp_cgra_inst()` 就是违规**：`tools/check_handprog.py` 每次 `verify`
+    都会跑，且不可被输入指纹缓存跳过；存量 18 项白名单按 P1–P4 分期清退，**只减不增**。
+    要新算法就写 YAML，不要写 C —— 手写微码绕过了调度器、绕过了逐值自检，是这类项目
+    腐烂最快的地方（同一个 polar node 程序曾被复制 7 份，手写 22 拍 / 编译器 25 拍，
+    两条路一起维护）。写 YAML 的成本低于写 C：`--all` 一次编 23 个镜像、每个都自带对拍。
 
 ---
 
@@ -319,6 +330,23 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
     * **踩到的三个坑**：① 星座构造若按"排序后位置"取幅度，跨原点处不是 Gray（16QAM 960/960 只解出 729 位）；必须**从 bit 本身解幅度**（b0=符号、其余为 Gray 幅度）。② min 距离 LLR 若只除 `ref` 而不除 `2·ref`，量级放大到 1e10 会冲垮 `SENTINEL`。③ 单传输版 `rv_k0[0]` 硬编码 0 且无 PDCCH 解码，`RV=2` 必然失败；改为**TD 镜像尾部附 1 个 word 存 rv、SoC 运行时算 k0**，不重编译、也避免旧二进制服务新激励。另有协议层面的坑：**CRC24A 位本身是 LDPC 信息位**，LDPC 收敛到任意合法码字都会让 CRC 通过（把 16QAM 波形当 QPSK 解调时 CRC 仍 ok、TB 仍对，但 534/720 个 LLR 不同）——所以硬件验收必须逐值对硬判/LLR，不能只信 CRC。
     * **刻意保留的简化**：64QAM 仅模型（硬件待 P4 后续）；无 BG1 之外的基图、无 REG/CCE/PC/PDCCH-DMRS、无 CSI-RS 测量（用理想 SINR 上报）、无子带 CQI/PMI/RI、无 256QAM（MCS table 3）；OLLA 的 BLER 用解析近似而非实测 LDPC 瀑布；16QAM 的 RE 利用率只有一半（真实 gNB 会提高 E 或缩减分配）。
     * **仍未做**：P5–P8。`run-mimo` / `run-csi` / Zc=64 / BG1 均已落。
+
+19. **手写微码清退（2026-11-08 立规）**：存量 **18 个文件 / 90 处 `gpcp_cgra_inst()`**，
+    按四档清退，`tools/check_handprog.py` 把总数钉在 18 上（迁移一项减一，diff 里看得见）：
+    * **P1（10 项，纯重复，编译器产物已有）**：`build_node_uc()` 被复制在
+      `ssb_bm` / `ssb_fid_bm` / `ssb_fft_bm` / `ssb_slot_bm` / `pdcch_bm` / `rach_bm` /
+      `link_e2e_bm` 七个基准里（编译器版 `polar_node_prog.h` 25 拍，手写 22 拍）；
+      `build_corr_uc()` 四份；`slot_rtos.c` 内联 chnest16 而 `chnest16_prog.h` 无人引用；
+      `pdsch_gather_bm` 的 BN 可换 `pdsch_bn_prog.h`；`pdsch_bm` 的 4 边 CN 需新建 `cn4.yaml`；
+      `prach_prog.h` 是 `tools/gen_prach_prog.py` 从 `cgra.kernel_zc_corr` 导出的旧路径。
+    * **P2（5 项，自测/示例）**：`dma_bm` / `irq_bm` / `ring_bm` / `sync_bm` 的 14 条自测程序、
+      `sw/examples/cgra_matmul.c`，各写一份 YAML 即可。
+    * **P3（2 项，编译器能力缺口）**：`fft_bm.c` / `ssb_fft.inc` 的 FFT 引擎（448 拍 stage +
+      336 拍 block）。编译器要先支持 **MAC/acc、每 PE 多实例（时间复用）、二维 spad 地址**，
+      才能把这 28 个蝶形 emit 变成 `fft_stage.yaml`。这是最大的一块。
+    * **P4（1 项，编译器能力缺口）**：`rxchain_bm.c` 的 127 拍 4 阶段融合镜像，需要编译器支持
+      **多 kernel 串接（spad 传值）**，即编排层的 `pipeline:` 声明。
+    清退顺序按 P1 → P2 → P3 → P4；每清退一项同时删白名单行、减 PIN、跑对应门禁留证。
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。
 

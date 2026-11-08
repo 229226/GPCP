@@ -193,6 +193,17 @@ esac
 [ "$WITH_LINUX" = 1 ] && SOC_SET+=(linux)
 [ "$CACHE_ON" = 1 ] && [ -z "$GATE_OVERRIDE" ] && WANT_KERNELS=1
 
+# ---- iron rule: microcode is generated, never hand-assembled ---------------
+# Always runs and never cached: a fresh gpcp_cgra_inst() in sw/ must fail the
+# build even when the input fingerprint says every gate may be skipped.
+if ! HANDPROG_OUT=$(cd "$ROOT" && python3 tools/check_handprog.py 2>&1); then
+    printf '%s\n' "$HANDPROG_OUT"
+    echo "verify aborted: hand-written microcode (AGENTS.md 4.18)" >&2
+    exit 1
+fi
+printf '%s\n' "$HANDPROG_OUT" | sed -n '1,2p;$p'
+echo
+
 if [ "$MODE" = changed ] && [ ${#MODEL_SET[@]} -eq 0 ] &&
    [ ${#SOC_SET[@]} -eq 0 ] && [ "$WANT_KERNELS" = 0 ]; then
     echo "changed: no test-affecting changes, nothing to run."
