@@ -141,6 +141,32 @@ run-pbch-tx: all
 		--max-cycles 10000000
 	python3 $(ROOT)/tools/check_pbch_tx.py $(ROOT)/$(OBJ)/pbch_tx_dump.txt $(PBCH_TD)
 
+PBCH_PACK_TD0 = $(ROOT)/build/pbch/pbch_pack_m0.td
+PBCH_PACK_TD1 = $(ROOT)/build/pbch/pbch_pack_m1.td
+
+# gNB 发射链 G1/A2：PBCH 载荷装配（纯 CVA6）。
+# 两个模式：K=32 无 CRC（与现有接收链同口径）/ K=56 带 CRC24C（38.212 7.1.1）。
+run-pbch-pack: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PBCH_PACK_TD0))
+	python3 $(ROOT)/tools/nr_pbch.py selftest-pack
+	python3 $(ROOT)/tools/nr_pbch.py dump-pack --out $(PBCH_PACK_TD0) --mode 0
+	python3 $(ROOT)/tools/nr_pbch.py dump-pack --out $(PBCH_PACK_TD1) --mode 1
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pbch_pack_bm.bin@0x80000000 \
+		--load $(PBCH_PACK_TD0)@0x80400000 \
+		--results 0x80010000 --nwords 420 \
+		--dump $(ROOT)/$(OBJ)/pbch_pack_m0_dump.txt \
+		--max-cycles 10000000
+	python3 $(ROOT)/tools/check_pbch_pack.py $(ROOT)/$(OBJ)/pbch_pack_m0_dump.txt $(PBCH_PACK_TD0)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pbch_pack_bm.bin@0x80000000 \
+		--load $(PBCH_PACK_TD1)@0x80400000 \
+		--results 0x80010000 --nwords 420 \
+		--dump $(ROOT)/$(OBJ)/pbch_pack_m1_dump.txt \
+		--max-cycles 10000000
+	python3 $(ROOT)/tools/check_pbch_pack.py $(ROOT)/$(OBJ)/pbch_pack_m1_dump.txt $(PBCH_PACK_TD1)
+
 run-pdsch-zc64: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(ZC64_TD))

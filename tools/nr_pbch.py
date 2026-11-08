@@ -218,6 +218,145 @@ def rate_recover_pbch(e, n):
     return subblock_deinterleave(y)     # = d (N LLRs for the polar decoder)
 
 
+
+# --------------------------------------------- PBCH transmit assembly (G1 / A2)
+# Independent 38.212 7.1.1 chain behind run-pbch-pack.  Written from the spec,
+# NOT from the C benchmark's expected values.  The self-test cross-checks the
+# polar transform / frozen set / CRC against the repo's existing golden models
+# (ssb_plan.py, already validated by the Polar SC decoder, and nr_pdcch.py).
+#
+# Two modes, both checked by the same gate:
+#   mode 0 : 32-bit MIB payload, K=32  -- the existing receive chain's口径,
+#            so A4's self-loop can decode it with run-ssb-fid's rate recovery.
+#   mode 1 : 32-bit payload + CRC24C, K=56 -- full 38.212 7.1.1.
+# E = 720 rate-matched bits -> 360 QPSK symbols (ssb_plan_p1.py PBCH_SYMS),
+# NOT 864/432: the hardware receive side uses 2*(240-28)*2 = 720.
+
+PBCH_QPSK = 2000          # QPSK amplitude, matches ssb_plan_p1.QPSK
+E_PBCH    = 720
+K_NCRC    = 32
+K_CRC     = 56
+CRC_LEN   = 24
+CRC_POLY  = 0xB2B117      # gCRC24C, 38.212 7.2
+NPOL      = 512
+DEPTH     = 9
+PACK_MAGIC = 0x50424348   # "PBCH"
+
+
+def bitrev9(i):
+    """9-bit reversal, the repo's polar reliability ordering (ssb_plan.py)."""
+    r = 0
+    for b in range(DEPTH):
+        r |= ((i >> b) & 1) << (DEPTH - 1 - b)
+    return r
+
+
+def crc24c_pbch(bits):
+    """38.212 5.1 CRC24C, MSB-first.  Same polynomial as nr_pdcch.crc24c
+    (that is a protocol requirement) but written independently here."""
+    mask = (1 << CRC_LEN) - 1
+    reg = 0
+    for b in bits:
+        reg ^= (b & 1) << (CRC_LEN - 1)
+        for _ in range(CRC_LEN):
+            reg = ((reg << 1) ^ CRC_POLY) & mask if reg & (1 << (CRC_LEN - 1)) \
+                  else (reg << 1) & mask
+    return [(reg >> (CRC_LEN - 1 - i)) & 1 for i in range(CRC_LEN)]
+
+
+def info_indices(k):
+    """Frozen set {i : bitrev9(i) < N-K}.  For k=32 this is exactly
+    ssb_plan.info_indices(); for k=56 it is the 38.212-sized K."""
+    return [i for i in range(NPOL) if bitrev9(i) >= NPOL - k][:k]
+
+
+def polar_transform(u):
+    """N=512 Arikan butterfly: x[i] ^= x[i+s] where (i & s)==0, s=1..256."""
+    x = list(u[:NPOL])
+    s = 1
+    while s < NPOL:
+        for i in range(0, NPOL, 2 * s):
+            for j in range(s):
+                x[i + j] ^= x[i + j + s]
+        s *= 2
+    return x
+
+
+def pbch_pack(payload, nid_cell, mode=0):
+    """MIB 32 bits -> (optional CRC24C) -> frozen insertion -> polar ->
+    38.212 5.4.1 rate matching (E=720) -> Gold scrambling -> 360 QPSK symbols.
+
+    Returns every intermediate as bit lists / complex amplitudes so the
+    hardware result area can be checked value by value.
+    """
+    a = [(payload >> (31 - i)) & 1 for i in range(32)]
+    crc = crc24c_pbch(a) if mode else [0] * CRC_LEN
+    info = list(a) + (list(crc) if mode else [])
+    k = len(info)
+    u = [0] * NPOL
+    for j, i in enumerate(info_indices(k)):
+        u[i] = info[j]
+    d = polar_transform(u)
+    e = rate_match_pbch(d, E_PBCH)
+    scr = gold(nid_cell, E_PBCH)
+    e_sc = [b ^ c for b, c in zip(e, scr)]
+    qpsk = [complex((1 - 2 * e_sc[2 * i]) * PBCH_QPSK,
+                    (1 - 2 * e_sc[2 * i + 1]) * PBCH_QPSK)
+            for i in range(E_PBCH // 2)]
+    return dict(payload=a, crc=crc, info=info, k=k, u=u, d=d, e=e,
+                e_sc=e_sc, qpsk=qpsk, nid=nid_cell, mode=mode)
+
+
+def pack_bits(bits):
+    """MSB-first bit list -> 32-bit words (bit 0 of word 0 is bits[0])."""
+    out = []
+    for i in range(0, len(bits), 32):
+        w = 0
+        for j, b in enumerate(bits[i:i + 32]):
+            w |= (b & 1) << j
+        out.append(w)
+    return out
+
+
+def dump_pack(path, payload, nid_cell, mode):
+    """TD loaded at 0x8040_0000: [magic, mode, payload32, nid, E, amp, 0, 0].
+    The C benchmark receives only inputs and must build the whole chain itself."""
+    import struct
+    words = [PACK_MAGIC, mode, payload & 0xFFFFFFFF, nid_cell & 0xFFFF,
+             E_PBCH, PBCH_QPSK, 0, 0]
+    with open(path, "wb") as f:
+        f.write(struct.pack("<%dI" % len(words), *words))
+    print("wrote %s: mode=%d payload=0x%08x nid=%d E=%d"
+          % (path, mode, payload, nid_cell, E_PBCH))
+    return 0
+
+
+def selftest_pack():
+    """Cross-check the independent assembly against the repo's golden models."""
+    import ssb_plan
+    import nr_pdcch
+    payload = 0
+    for b in ssb_plan.payload_bits():
+        payload = (payload << 1) | b
+    assert info_indices(K_NCRC) == ssb_plan.info_indices(), "frozen set differs"
+    r = pbch_pack(payload, nid_cell(200, 1), 0)
+    assert r["d"] == ssb_plan.polar_encode(r["u"]), "polar transform differs"
+    assert crc24c_pbch(r["payload"]) == nr_pdcch.crc24c(r["payload"]), \
+        "CRC24C differs"
+    assert r["crc"] == [0] * CRC_LEN, "mode 0 must not attach a CRC"
+    assert len(r["e"]) == E_PBCH and len(r["qpsk"]) == E_PBCH // 2
+    assert len(set((x.real, x.imag) for x in r["qpsk"])) == 4
+    z = triangular_deinterleave(r["e"])
+    assert z == bit_selection(subblock_interleave(r["d"]), E_PBCH), \
+        "rate matching is not invertible"
+    r2 = pbch_pack(payload ^ 0x5A5A5A5A, nid_cell(200, 1), 1)
+    assert r2["k"] == K_CRC and len(r2["info"]) == K_CRC
+    assert r2["crc"] == nr_pdcch.crc24c(r2["payload"])
+    assert r2["d"] == ssb_plan.polar_encode(r2["u"])
+    print("[ OK ] PBCH assembly model: frozen set, CRC24C, polar transform, "
+          "rate matching and QPSK agree with ssb_plan.py / nr_pdcch.py")
+    return 0
+
 # ------------------------------------------------------- hardware test vector
 TD_MAGIC = 0x50424348          # "PBCH"
 
@@ -244,6 +383,26 @@ def dump_td(path, nbits=512, seed=7):
 # --------------------------------------------------------------------- self test
 if __name__ == "__main__":
     import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest-pack":
+        raise SystemExit(selftest_pack())
+    if len(sys.argv) > 1 and sys.argv[1] == "dump-pack":
+        ap = __import__("argparse").ArgumentParser()
+        ap.add_argument("dump-pack")
+        ap.add_argument("--out", required=True)
+        ap.add_argument("--payload", default=None,
+                        help="32-bit MIB hex (default: ssb_plan.payload_bits())")
+        ap.add_argument("--nid", type=int, default=601,
+                        help="N_ID_cell, default 3*200+1")
+        ap.add_argument("--mode", type=int, default=0, choices=(0, 1))
+        a = ap.parse_args()
+        if a.payload is None:
+            import ssb_plan
+            pl = 0
+            for b in ssb_plan.payload_bits():
+                pl = (pl << 1) | b
+        else:
+            pl = int(a.payload, 0)
+        raise SystemExit(dump_pack(a.out, pl, a.nid, a.mode))
     if len(sys.argv) > 1 and sys.argv[1] == "dump":
         ap = __import__("argparse").ArgumentParser()
         ap.add_argument("dump")
