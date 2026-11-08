@@ -42,3 +42,5 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-08,,,50,microcode,infra,polar node ×7 统一到编译器产物 polar_node_prog.h（22→25 拍）,9fdf5a6,measured,run-ssb/ssbfft/ssb-fid/ssb-slot/pdcch/rach/link-e2e 全 OK；白名单 18→15
 2026-11-08,,,60,microcode,infra,cplx_mul.yaml 取代 dma/irq/ring/slot_rtos 手写单抽头复乘（14→18 拍）,076f41d,measured,run-dma/irq/ring/slot 全 OK；白名单 15→11；corr 系重归类 P3
 2026-11-08,,,25,sw,infra,CGRA 示例 cgra_matmul 改用编译器微码 matmul.yaml,b8eec0f,measured,sw-check RV32/RV64 通过；白名单 11→10；P2 清空
+2026-11-08,,,70,microcode,infra,pss_corr.yaml 取代 ssb×4 + sync 的 52 拍 PSS/SSS 相关（LACC/MAC -> mul+add）,69908d8,measured,ref 改 row=8 打包 256+32pe+k、汇压 bank24；5 门禁全 OK；白名单 10→5
+2026-11-08,,,50,microcode,infra,cn4.yaml + vn3.yaml 取代 pdsch_bm 手写 CN/VN（寄存器墙用增量折叠符号位解决）,e1e6929,measured,CN 34 拍/VN 15 拍自检 0 差；run-pdsch 硬判全对 41026 周期；白名单 5→4
