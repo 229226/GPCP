@@ -31,6 +31,7 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "polar_node_prog.h"      /* 编译器生成的 polar SC 节点微码 */
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
@@ -69,7 +70,7 @@
 #define KINFO            32
 #define NPOL             512
 #define SDEPTH           9
-#define NODE_CYCLES      22
+#define NODE_CYCLES   POLAR_NODE_PROG_CYCLES
 #define LLR_SHIFT        2
 #define H_SCALE          16          /* keep a fractional part in H_hat */
 
@@ -304,33 +305,7 @@ static int is_frozen(uint32_t i)
 static void build_node_uc(void)
 {
     for (uint32_t i = 0; i < NODE_CYCLES * NPES; i++)
-        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-    for (uint32_t pe = 0; pe < NPES; pe++) {
-#define E(cyc, op, a, b, d, imm) prog[(cyc) * NPES + pe] = gpcp_cgra_inst(op, a, b, d, imm)
-        E(0,  GPCP_OP_LD, 0, 0, 0, sidx(0, pe));
-        E(1,  GPCP_OP_LD, 0, 0, 1, sidx(1, pe));
-        E(2,  GPCP_OP_LD, 0, 0, 2, sidx(2, pe));
-        E(3,  GPCP_OP_SHR, 0, 0, 3, 31);
-        E(4,  GPCP_OP_XOR, 0, 3, 4, 0);
-        E(5,  GPCP_OP_SUB, 4, 3, 4, 0);
-        E(6,  GPCP_OP_SHR, 1, 0, 5, 31);
-        E(7,  GPCP_OP_XOR, 1, 5, 6, 0);
-        E(8,  GPCP_OP_SUB, 6, 5, 6, 0);
-        E(9,  GPCP_OP_MIN, 4, 6, 7, 0);
-        E(10, GPCP_OP_XOR, 3, 5, 3, 0);
-        E(11, GPCP_OP_XOR, 7, 3, 4, 0);
-        E(12, GPCP_OP_SUB, 4, 3, 4, 0);
-        E(13, GPCP_OP_SUB, GPCP_SRC_ZERO, 2, 6, 0);
-        E(14, GPCP_OP_AND, 0, 6, 7, 0);
-        E(15, GPCP_OP_SHL, 7, 0, 7, 1);
-        E(16, GPCP_OP_ADD, 1, 0, 6, 0);
-        E(17, GPCP_OP_SUB, 6, 7, 6, 0);
-        E(18, GPCP_OP_ST, 4, 0, 0, sidx(16, pe));
-        E(19, GPCP_OP_ST, 6, 0, 0, sidx(17, pe));
-#undef E
-    }
-    for (uint32_t i = 0; i < NODE_CYCLES * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, polar_node_prog[i]);
 }
 
 static void array_run(uint32_t cycles)

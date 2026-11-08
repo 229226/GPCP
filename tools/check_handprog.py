@@ -47,13 +47,10 @@ STAGES = {
 # 文件 -> (阶段, 说明)。迁移完成一项就删一行，并把 PIN 减一。
 ALLOW = {
     # ---- P1：编译器已有对应产物，只是没接线 ----
-    "sw/soc/ssb_bm.c":         ("P1", "build_corr_uc + build_node_uc（polar node 有 polar_node_prog.h；corr 有 prach_corr/bpsk_corr）"),
-    "sw/soc/ssb_fid_bm.c":     ("P1", "build_corr_uc + build_node_uc（同上）"),
-    "sw/soc/ssb_fft_bm.c":     ("P1", "build_corr_uc + build_node_uc（同上）"),
-    "sw/soc/ssb_slot_bm.c":    ("P1", "build_corr_uc + build_node_uc（同上）"),
-    "sw/soc/pdcch_bm.c":       ("P1", "build_node_uc（polar_node_prog.h 25 拍）"),
-    "sw/soc/rach_bm.c":        ("P1", "build_node_uc（polar_node_prog.h 25 拍）"),
-    "sw/soc/link_e2e_bm.c":    ("P1", "build_node_uc（polar_node_prog.h 25 拍）"),
+    "sw/soc/ssb_bm.c":         ("P1", "build_corr_uc（52 拍复数相关，待换 prach_corr/bpsk_corr 口径）"),
+    "sw/soc/ssb_fid_bm.c":     ("P1", "build_corr_uc（同上）"),
+    "sw/soc/ssb_fft_bm.c":     ("P1", "build_corr_uc（同上）"),
+    "sw/soc/ssb_slot_bm.c":    ("P1", "build_corr_uc（同上）"),
     "sw/soc/slot_rtos.c":      ("P1", "内联 chnest16 14 条（chnest16_prog.h 早已生成但无人引用）"),
     "sw/soc/pdsch_gather_bm.c":("P1", "BN 24 槽 + llr（pdsch_bn_prog.h；需核 bank 布局）"),
     "sw/soc/pdsch_bm.c":       ("P1", "CN 4 边 + BN（CN 粒度与 pdsch_cn_prog.h 不同，需新建 cn4.yaml）"),
@@ -70,7 +67,7 @@ ALLOW = {
 }
 
 # 白名单总数（只减不增）。迁移一项就减一，diff 里看得见。
-PIN = 18
+PIN = 15
 
 # 旧路径产物：由 tools/gen_prach_prog.py 从 tools/cgra.py 的手写 kernel 导出。
 LEGACY_HEADERS = {
