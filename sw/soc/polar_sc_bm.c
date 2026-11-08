@@ -19,13 +19,14 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "polar_node_prog.h"      /* 编译器生成的 SC 节点微码 */
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
 #define RESULT_BASE      ((uint32_t *)0x80010000ul)
 
 #define NPES             16
-#define NODE_CYCLES      22
+#define NODE_CYCLES      POLAR_NODE_PROG_CYCLES
 #define RING_DEPTH       16
 #define NREC             64              /* N */
 #define KINFO            32
@@ -46,7 +47,6 @@ static int out_idx;
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
-static uint32_t prog[NODE_CYCLES * NPES];
 static uint32_t errs, mism, runs, n_desc, cyc_extra;
 
 static int32_t lbuf[DEPTH + 1][NREC];
@@ -81,41 +81,13 @@ static void polar_encode(const uint8_t *u, uint8_t *x)
 }
 
 /* --------------------------------------------------------------- microcode */
-static uint32_t sidx(uint32_t bank, uint32_t word) { return bank * 32u + word; }
-
+/* 微码来自 cgra/kernels/polar_node.yaml（L1/L2 编译器生成），spad 布局与手写版
+ * 完全一致（叶子 bank 0/1/2、汇 16/17，word=实例号），所以流水线其余部分不动。 */
 static void build_microcode(void)
 {
     for (uint32_t i = 0; i < NODE_CYCLES * NPES; i++)
-        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-
-    for (uint32_t pe = 0; pe < NPES; pe++) {
-#define EMIT(cyc, op, a, b, d, imm) \
-        prog[(cyc) * NPES + pe] = gpcp_cgra_inst(op, a, b, d, imm)
-        EMIT(0,  GPCP_OP_LD, 0, 0, 0, sidx(0, pe));
-        EMIT(1,  GPCP_OP_LD, 0, 0, 1, sidx(1, pe));
-        EMIT(2,  GPCP_OP_LD, 0, 0, 2, sidx(2, pe));
-        EMIT(3,  GPCP_OP_SHR, 0, 0, 3, 31);
-        EMIT(4,  GPCP_OP_XOR, 0, 3, 4, 0);
-        EMIT(5,  GPCP_OP_SUB, 4, 3, 4, 0);
-        EMIT(6,  GPCP_OP_SHR, 1, 0, 5, 31);
-        EMIT(7,  GPCP_OP_XOR, 1, 5, 6, 0);
-        EMIT(8,  GPCP_OP_SUB, 6, 5, 6, 0);
-        EMIT(9,  GPCP_OP_MIN, 4, 6, 7, 0);
-        EMIT(10, GPCP_OP_XOR, 3, 5, 3, 0);
-        EMIT(11, GPCP_OP_XOR, 7, 3, 4, 0);
-        EMIT(12, GPCP_OP_SUB, 4, 3, 4, 0);
-        EMIT(13, GPCP_OP_SUB, GPCP_SRC_ZERO, 2, 6, 0);
-        EMIT(14, GPCP_OP_AND, 0, 6, 7, 0);
-        EMIT(15, GPCP_OP_SHL, 7, 0, 7, 1);
-        EMIT(16, GPCP_OP_ADD, 1, 0, 6, 0);
-        EMIT(17, GPCP_OP_SUB, 6, 7, 6, 0);
-        EMIT(18, GPCP_OP_ST, 4, 0, 0, sidx(16, pe));
-        EMIT(19, GPCP_OP_ST, 6, 0, 0, sidx(17, pe));
-#undef EMIT
-    }
-
-    for (uint32_t i = 0; i < NODE_CYCLES * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u,
+                        polar_node_prog[i]);
 }
 
 /* ---------------------------------------------------------------- ring glue */

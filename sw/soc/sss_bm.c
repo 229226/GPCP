@@ -4,8 +4,9 @@
  * PSS gives N_ID(2); SSS then has to be found among N_ID(1) = 0..335 (m0 takes
  * the three groups 15*floor(N_ID1/112) + 5*N_ID2 and m1 = N_ID1 mod 112).
  * The rx block is loaded into scratchpad once and stays there; each candidate
- * streams only its 127 reference symbols (2D walk, 16 words per bank), runs the
- * same bpsk_corr microcode (52 cycles) and streams the 32 result words back.
+ * streams only its 127 reference symbols (8 words per bank = one block per PE)
+ * and runs the compiler-generated sss_corr microcode (66 cycles) whose flat
+ * addresses are 16p+2k (x), 256+32p+k (ref) and 768+769+2p (partials).
  * The CPU keeps the best |re| + |im| and its N_ID(1).
  *
  * SSS 38.211 7.4.2.3 (mirrored by tools/nr_seq.py / check_sss.py):
@@ -21,13 +22,14 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "sss_corr_prog.h"        /* 编译器生成的 SSS 相关微码 */
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
 #define RESULT_BASE      ((uint32_t *)0x80010000ul)
 
 #define NPES             16
-#define CORR_CYCLES      52
+#define CORR_CYCLES      SSS_CORR_PROG_CYCLES
 #define RING_DEPTH       16
 #define NREP             127
 #define TAPS_PER_PE      8
@@ -58,7 +60,6 @@ static int32_t *outall = (int32_t *)OUT_ALL;
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
-static uint32_t prog[CORR_CYCLES * NPES];
 static uint32_t errs, runs, n_desc;
 static uint8_t  x0seq[2 * NREP], x1seq[2 * NREP];
 
@@ -107,37 +108,14 @@ static void build_ref_table(int nid2)
 }
 
 /* --------------------------------------------------------------- microcode */
-static uint32_t sidx(uint32_t bank, uint32_t word) { return bank * 32u + word; }
-
+/* 微码来自 cgra/kernels/sss_corr.yaml。编译器不用 MAC/acc，实部改 mul+add 两条链，
+ * 所以拍数比手写 52 拍多（66）。spad 形状也按线性地址重排过：x 窗 16p+2k、
+ * ref 每 PE 一块 256+32p+k、汇压缩成 768/769+2p（只占 1 个 bank）。 */
 static void build_microcode(void)
 {
     for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
-        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-
-    for (uint32_t pe = 0; pe < NPES; pe++) {
-#define EMIT(cyc, op, a, b, d, imm) \
-        prog[(cyc) * NPES + pe] = gpcp_cgra_inst(op, a, b, d, imm)
-        EMIT(0, GPCP_OP_LACC, GPCP_SRC_ZERO, 0, 0, 0);
-        EMIT(1, GPCP_OP_MOV, GPCP_SRC_ZERO, 0, 2, 0);
-        for (uint32_t k = 0; k < TAPS_PER_PE; k++) {
-            uint32_t t = pe * TAPS_PER_PE + k;
-            if (t >= NREP)
-                continue;
-            uint32_t b = 2 + k * 6;
-            EMIT(b + 0, GPCP_OP_LD, 0, 0, 4, sidx(t >> 4, 2 * (t & 15)));
-            EMIT(b + 1, GPCP_OP_LD, 0, 0, 5, sidx(t >> 4, 2 * (t & 15) + 1));
-            EMIT(b + 2, GPCP_OP_LD, 0, 0, 6, sidx(8 + (t >> 4), t & 15));
-            EMIT(b + 3, GPCP_OP_MAC, 4, 6, 0, 0);
-            EMIT(b + 4, GPCP_OP_MUL, 5, 6, 7, 0);
-            EMIT(b + 5, GPCP_OP_ADD, 2, 7, 2, 0);
-        }
-        EMIT(50, GPCP_OP_ST, GPCP_SRC_ACC, 0, 0, sidx(16 + pe, 0));
-        EMIT(51, GPCP_OP_ST, 2, 0, 0, sidx(16 + pe, 1));
-#undef EMIT
-    }
-
-    for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u,
+                        sss_corr_prog[i]);
 }
 
 /* ---------------------------------------------------------------- ring glue */
@@ -225,8 +203,8 @@ int main(void)
     for (uint32_t nid1 = 0; nid1 < NHYP; nid1++) {
         n_desc = 0;
         dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);                      /* rx every candidate */
-        dsc(REF_ALL + 4u * nid1 * REF_STRIDE, 8 * 32, NREP, 0, 0, 32, 16);
-        dsc(OUT_ALL + 4u * nid1 * OUT_STRIDE, 16 * 32, 32, 0, 1, 32, 2);
+        dsc(REF_ALL + 4u * nid1 * REF_STRIDE, 8 * 32, NREP, 0, 0, 32, 8);
+        dsc(OUT_ALL + 4u * nid1 * OUT_STRIDE, 24 * 32, 32, 0, 1, 0, 0);
         uint32_t nin = 2u;
 
         ring_on(0, nin);
@@ -253,8 +231,8 @@ int main(void)
      * read from RAM (block `best` may already be cached) */
     n_desc = 0;
     dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);
-    dsc(REF_ALL + 4u * best * REF_STRIDE, 8 * 32, NREP, 0, 0, 32, 16);
-    dsc(OUT_ALL + 4u * NHYP * OUT_STRIDE, 16 * 32, 32, 0, 1, 32, 2);
+    dsc(REF_ALL + 4u * best * REF_STRIDE, 8 * 32, NREP, 0, 0, 32, 8);
+    dsc(OUT_ALL + 4u * NHYP * OUT_STRIDE, 24 * 32, 32, 0, 1, 0, 0);
     ring_on(0, 2);
     done += 2;
     wait_desc(done);

@@ -46,6 +46,15 @@ $(BUILD)/prach_bm.elf: prach_prog.h
 prach_corr_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/kernel_spec.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/prach_corr.yaml
 	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/prach_corr.yaml
 
+sss_corr_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/kernel_spec.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/sss_corr.yaml
+	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/sss_corr.yaml
+
+polar_node_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/kernel_spec.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/polar_node.yaml
+	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/polar_node.yaml
+
+$(BUILD)/sss_bm.elf: sss_corr_prog.h
+$(BUILD)/polar_sc_bm.elf: polar_node_prog.h
+
 $(BUILD)/prach_cgra_bm.elf: prach_corr_prog.h
 
 # run-rach: the whole 4-step process in one program, so it needs every kernel
