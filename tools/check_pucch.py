@@ -79,7 +79,7 @@ def main(path, ack, snr, seed):
     chk(vals[1] == P.NCAND, "array runs = %d, want %d" % (vals[1], P.NCAND))
     chk(vals[8] == P.NCAND, "NCAND = %d, want %d" % (vals[8], P.NCAND))
     chk(vals[9] == P.TAPS, "TAPS = %d, want %d" % (vals[9], P.TAPS))
-    chk(vals[19] == 128, "program cycles = %d, want 128" % vals[19])
+    chk(vals[19] == 129, "program cycles = %d, want 129" % vals[19])
     chk(vals[2] == 2 * P.NCAND + 1, "DMA ops = %d, want %d"
         % (vals[2], 2 * P.NCAND + 1))
 

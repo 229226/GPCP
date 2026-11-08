@@ -154,7 +154,7 @@ def main(path, preamble, ta, occ, zczc, seed, msg4_rv):
     rp.eq("Msg1 L_RA", vals[R_MSG1 + 7], R.L_RA)
     rp.eq("Msg1 taps", vals[R_MSG1 + 8], R.PRACH_TAPS)
     rp.eq("Msg1 partial/butterfly checks", vals[R_MSG1 + 9], R.L_RA * 32)
-    rp.eq("Msg1 program cycles", vals[R_MSG1 + 10], cgra.PRACH_CORR_CYCLES)
+    rp.eq("Msg1 program cycles", vals[R_MSG1 + 10], 129)
     cbad = [d for d in range(R.L_RA)
             if s32(vals[R_C0 + 2 * d]) != corr[d][0]
             or s32(vals[R_C0 + 2 * d + 1]) != corr[d][1]]

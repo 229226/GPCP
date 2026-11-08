@@ -12,7 +12,7 @@ This module makes the same detection *hardware-exact*:
   * the received sequence and the two reference rotations are quantised to
     int32 pairs (CHIP_SCALE), exactly like tools/nr_rach.py does for Msg1;
   * the correlation is the 127-tap integer sum of the already-verified
-    ``prach_corr`` CGRA microcode (tools/gen_prach_prog.py -> prach_prog.h),
+    ``prach_corr`` CGRA microcode (cgra/kernels/prach_corr.yaml -> prach_corr_prog.h),
     reused here for only NCAND = 2 candidate shifts;
   * the 16 PE partial sums are butterfly-reduced inside the array, and the CPU
     cross-checks the array's own reduction bit-for-bit.

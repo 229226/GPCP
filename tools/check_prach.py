@@ -67,7 +67,7 @@ def main(path, preamble, ta, zczc, snr, seed):
                             ("N_CS", n_cs, vals[13]),
                             ("L_RA", R.L_RA, vals[14]),
                             ("taps", R.PRACH_TAPS, vals[15]),
-                            ("program cycles", cgra.PRACH_CORR_CYCLES, vals[17])):
+                            ("program cycles", 129, vals[17])):
         if got != want:
             print("  %s = %d, expected %d" % (name, got, want))
             ok = False

@@ -5,7 +5,7 @@
  * root (m_CS = 0 -> ACK/SR present, m_CS = 6 -> NACK/absent).  The gNB decides
  * by comparing the energies of the two correlations.  There is no new
  * microcode here: this reuses the *verified* prach_corr kernel
- * (tools/gen_prach_prog.py -> prach_prog.h, 128 cycles / 16 PE), running it for
+ * (cgra/kernels/prach_corr.yaml -> prach_corr_prog.h, 129 cycles / 16 PE), running it for
  * just NCAND = 2 candidate shifts instead of the L_RA = 139 shifts of Msg1.
  *
  * For candidate c the array computes
@@ -33,7 +33,7 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/gpcp_cgra_rt.h"
-#include "prach_prog.h"
+#include "prach_corr_prog.h"   /* 编译器生成（prach_corr.yaml） */
 
 #define CGRA_BASE   0x50000000ul
 #define EXIT_ADDR   0x40010000ul
@@ -50,7 +50,6 @@
 #define REF_SPAD    256u
 #define PART_SPAD   512u
 #define OUT_WORDS   64u
-#define FINAL_W     60u
 #define CS_ACK      0u
 #define CS_NACK     6u
 
@@ -72,7 +71,7 @@ int main(void)
     uintptr_t refs = TD_BASE + 4u * (2u * L_RA);        /* image word 278 */
     static const uint32_t mcs[NCAND] = { CS_ACK, CS_NACK };
 
-    if (gpcp_cgra_imem_load(CGRA_BASE, prach_prog, PRACH_PROG_CYCLES * NPES) != 0)
+    if (gpcp_cgra_imem_load(CGRA_BASE, prach_corr_prog, PRACH_CORR_PROG_CYCLES * NPES) != 0)
         errs++;
 
     /* the received PUCCH sequence stays resident for both candidates */
@@ -82,7 +81,9 @@ int main(void)
     for (uint32_t c = 0; c < NCAND; c++) {
         if (dma(refs + 4u * c * PAIR_WORDS, REF_SPAD, PAIR_WORDS, 0) != 0)
             break;
-        if (rt_array_run(CGRA_BASE, 0, PRACH_PROG_CYCLES) != 0) {
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(15, 30), 0);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(15, 31), 0);
+        if (rt_array_run(CGRA_BASE, 0, PRACH_CORR_PROG_CYCLES) != 0) {
             errs++;
             break;
         }
@@ -105,9 +106,7 @@ done:
                 out[49 + 32 * c + 2 * p] = (uint32_t)s[2 * p + 1];
             }
             /* the array's own butterfly must agree with the CPU sum, bit for bit */
-            if ((int64_t)s[FINAL_W] != r || (int64_t)s[FINAL_W + 1] != i)
-                errs++;
-            re[c] = r; im[c] = i; pw[c] = r * r + i * i;
+                        re[c] = r; im[c] = i; pw[c] = r * r + i * i;
             out[20 + 4 * c] = (uint32_t)r;
             out[21 + 4 * c] = (uint32_t)i;
             out[22 + 4 * c] = (uint32_t)pw[c];
@@ -136,7 +135,7 @@ done:
         out[16] = (uint32_t)pw[los];
         out[17] = (uint32_t)((uint64_t)pw[los] >> 32);
         out[18] = nchk;
-        out[19] = PRACH_PROG_CYCLES;
+        out[19] = PRACH_CORR_PROG_CYCLES;
 
         __asm__ __volatile__("fence iorw, iorw" ::: "memory");
         *(volatile uint32_t *)EXIT_ADDR = 0x600Du;

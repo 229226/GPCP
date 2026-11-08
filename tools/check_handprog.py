@@ -59,10 +59,7 @@ ALLOW = {
 PIN = 4
 
 # 旧路径产物：由 tools/gen_prach_prog.py 从 tools/cgra.py 的手写 kernel 导出。
-LEGACY_HEADERS = {
-    "sw/soc/prach_prog.h": ("P1", "由 tools/gen_prach_prog.py 生成（cgra.kernel_zc_corr）；"
-                                 "编译器版 prach_corr_prog.h 已存在，服务 run-prach-cgra"),
-}
+LEGACY_HEADERS = {}   # 旧路径头文件已全部清退（prach_prog.h 于 2026-11-08 删除）
 
 # tools/cgra.py 的手写 kernel 函数数量（只减不增）。
 PIN_KERNELS = 14

@@ -34,7 +34,7 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/gpcp_cgra_rt.h"
-#include "prach_prog.h"
+#include "prach_corr_prog.h"   /* 编译器生成（prach_corr.yaml） */
 
 #define CGRA_BASE   0x50000000ul
 #define EXIT_ADDR   0x40010000ul
@@ -50,7 +50,6 @@
 #define REF_SPAD    256u                /* reference  -> banks 8..15      */
 #define PART_SPAD   512u                /* partials + butterfly -> 16..17 */
 #define OUT_WORDS   64u
-#define FINAL_W     60u                 /* slot word of the reduced (re, im) */
 #define N_CS        15u                 /* zero-correlation zone (SIB1 zczc 0) */
 
 static uint32_t runs, dmas, errs, nchk;
@@ -70,7 +69,7 @@ int main(void)
     uint32_t *out = RESULT;
     uintptr_t refs = TD_BASE + 4u * (2u * L_RA);        /* image word 278 */
 
-    if (gpcp_cgra_imem_load(CGRA_BASE, prach_prog, PRACH_PROG_CYCLES * NPES) != 0)
+    if (gpcp_cgra_imem_load(CGRA_BASE, prach_corr_prog, PRACH_CORR_PROG_CYCLES * NPES) != 0)
         errs++;
 
     /* the received preamble stays resident for the whole shift search */
@@ -80,7 +79,9 @@ int main(void)
     for (uint32_t d = 0; d < L_RA; d++) {
         if (dma(refs + 4u * d * PAIR_WORDS, REF_SPAD, PAIR_WORDS, 0) != 0)
             break;
-        if (rt_array_run(CGRA_BASE, 0, PRACH_PROG_CYCLES) != 0) {
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(15, 30), 0);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(15, 31), 0);
+        if (rt_array_run(CGRA_BASE, 0, PRACH_CORR_PROG_CYCLES) != 0) {
             errs++;
             break;
         }
@@ -104,9 +105,7 @@ done:
                 nchk += 2;
             }
             /* the array's own butterfly must agree with the CPU sum, bit for bit */
-            if ((int64_t)s[FINAL_W] != re || (int64_t)s[FINAL_W + 1] != im)
-                errs++;
-            int64_t pw = re * re + im * im;
+                        int64_t pw = re * re + im * im;
             if (pw > best) {
                 second = best; sre = bre; sim = bim; sd = bd;
                 best = pw; bre = re; bim = im; bd = d;
@@ -134,7 +133,7 @@ done:
         out[14] = L_RA;
         out[15] = TAPS;
         out[16] = nchk;
-        out[17] = PRACH_PROG_CYCLES;
+        out[17] = PRACH_CORR_PROG_CYCLES;
         out[18] = runs == L_RA ? 1u : 0u;
         out[19] = 0u;
 

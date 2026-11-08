@@ -157,8 +157,8 @@ compute_changed() {
             tools/dump_*.py|tools/check_*.py)
                 x=${f##*/}; x=${x%.py}; x=${x#dump_}; x=${x#check_}; x=${x//_/-}
                 add_soc "run-$x" ;;
-            tools/gen_prach_prog.py) add_soc run-prach run-rach run-pucch ;;
-            sw/soc/prach_prog.h)    add_soc run-prach run-rach run-pucch ;;
+            tools/gen_kernel_prog.py) add_soc run-prach run-rach run-pucch ;;
+            sw/soc/prach_corr_prog.h) add_soc run-prach run-rach run-pucch ;;
             sw/soc/pdcch_luts.h)    add_soc run-pdcch run-link-e2e run-sib1 run-rach ;;
             sw/soc/link_e2e_bm.c)   add_soc run-link-e2e run-sib1 ;;
             sw/soc/pdsch_full_bm.c) add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam ;;

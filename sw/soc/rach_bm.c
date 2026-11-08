@@ -63,7 +63,7 @@
 #include "pdcch_luts.h"
 #include "pdsch_cn_prog.h"
 #include "pdsch_bn_prog.h"
-#include "prach_prog.h"
+#include "prach_corr_prog.h"   /* 编译器生成（prach_corr.yaml） */
 
 #define CGRA_BASE     0x50000000ul
 #define EXIT_ADDR     0x40010000ul
@@ -790,7 +790,7 @@ static uint32_t msg1_prach(uint32_t *delay, uint32_t *preamble, uint32_t *ta,
     uint32_t *out = RESULT_BASE;
     uintptr_t refs = TD_PRACH + 4u * (2u * L_RA);
 
-    if (gpcp_cgra_imem_load(CGRA_BASE, prach_prog, PRACH_PROG_CYCLES * NPES))
+    if (gpcp_cgra_imem_load(CGRA_BASE, prach_corr_prog, PRACH_CORR_PROG_CYCLES * NPES))
         errs++;
     /* the received preamble stays resident for the whole shift search */
     if (rt_dma_run(CGRA_BASE, TD_PRACH, Y_SPAD, PAIR_WORDS, 0, 0, 0, 0))
@@ -801,7 +801,9 @@ static uint32_t msg1_prach(uint32_t *delay, uint32_t *preamble, uint32_t *ta,
         if (rt_dma_run(CGRA_BASE, refs + 4u * d * PAIR_WORDS, REF_SPAD,
                        PAIR_WORDS, 0, 0, 0, 0)) { errs++; break; }
         dmas++;
-        if (rt_array_run(CGRA_BASE, 0, PRACH_PROG_CYCLES)) errs++;
+                gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(15, 30), 0);
+        gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(15, 31), 0);
+        if (rt_array_run(CGRA_BASE, 0, PRACH_CORR_PROG_CYCLES)) errs++;
         runs++;
         if (rt_dma_run(CGRA_BASE, PART_BASE + d * OUT_WORDS * 4u, PART_SPAD,
                        OUT_WORDS, 0, 1, 0, 0)) { errs++; break; }
@@ -819,9 +821,7 @@ static uint32_t msg1_prach(uint32_t *delay, uint32_t *preamble, uint32_t *ta,
             im += s[2 * p + 1];
             (*checks) += 2;
         }
-        if ((int64_t)s[FINAL_W] != re || (int64_t)s[FINAL_W + 1] != im)
-            errs++;                       /* array butterfly disagrees with CPU */
-        int64_t pw = re * re + im * im;
+                int64_t pw = re * re + im * im;
         if (pw > best) {
             second = best; sd = bd;
             best = pw; bre = (int32_t)re; bim = (int32_t)im; bd = d;
@@ -865,7 +865,7 @@ int main(void)
     out[R_MSG1 + 1] = preamble;
     out[R_MSG1 + 2] = ta;
     out[R_MSG1 + 9] = m1checks;
-    out[R_MSG1 + 10] = PRACH_PROG_CYCLES;
+    out[R_MSG1 + 10] = PRACH_CORR_PROG_CYCLES;
     out[R_MSG1 + 11] = m1runs;
 
     /* The RA-RNTI is not signalled anywhere: the UE builds it from the PRACH

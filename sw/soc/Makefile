@@ -44,11 +44,8 @@ $(BUILD)/pdsch_bg1_bm.elf: pdsch_cn20_prog.h ../include/ldpc_bg1.h
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DUSE_BG1=1 $(LDFLAGS) start.S pdsch_zc64_bm.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/pdsch_bg1_bm.dis
 
-# PRACH 相关微码由 tools/cgra.py 的 kernel_zc_corr() 生成（make test 的 prach_corr）
-prach_prog.h: ../../tools/gen_prach_prog.py ../../tools/cgra.py ../../tools/nr_rach.py
-	python3 ../../tools/gen_prach_prog.py
-
-$(BUILD)/prach_bm.elf: prach_prog.h
+# PRACH 相关微码由编译器生成（cgra/kernels/prach_corr.yaml）
+$(BUILD)/prach_bm.elf: prach_corr_prog.h
 
 # 编译器生成的 PRACH 相关微码（cgra/kernels/prach_corr.yaml）
 prach_corr_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/kernel_spec.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/prach_corr.yaml
@@ -74,7 +71,7 @@ RACH_OCC ?= 1
 rach: $(BUILD)/rach_bm_$(RACH_OCC).bin
 
 $(BUILD)/rach_bm_$(RACH_OCC).elf: rach_bm.c start.S link.ld pdcch_luts.h \
-	                         pdsch_cn_prog.h pdsch_bn_prog.h prach_prog.h | $(BUILD)
+	                         pdsch_cn_prog.h pdsch_bn_prog.h prach_corr_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DOCC=$(RACH_OCC) $(LDFLAGS) \
 		start.S rach_bm.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/rach_bm_$(RACH_OCC).dis
@@ -173,7 +170,7 @@ $(BUILD)/link_e2e_bm.elf: pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h
 $(BUILD)/sib1_bm.elf: link_e2e_bm.c start.S link.ld pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DSIB1 $(LDFLAGS) start.S link_e2e_bm.c -o $@
 # PUCCH format 0: reuses the PRACH correlation microcode header
-$(BUILD)/pucch_bm.elf: pucch_bm.c start.S link.ld prach_prog.h | $(BUILD)
+$(BUILD)/pucch_bm.elf: pucch_bm.c start.S link.ld prach_corr_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S pucch_bm.c -o $@
 
 # 真实 kernel tile：由 L1/L2 编译器生成（mmse_2x1 供 run-mimo 的 b = H^H y）
