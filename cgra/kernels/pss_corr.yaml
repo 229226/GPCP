@@ -1,0 +1,44 @@
+name: pss_corr
+kind: dfg
+desc: "PSS/SSS 复数相关：acc_re=Σ yr_k*r_k, acc_im=Σ yi_k*r_k；y 线性(yr 2k+16pe, yi 2k+1+16pe)，ref 每 PE 一块(256+32pe+k)；汇 768/769+2p（1 个 bank）"
+leaves:
+  yr0..yr7: {addr: {base: "0..14:2", stride: 16}}
+  yi0..yi7: {addr: {base: "1..15:2", stride: 16}}
+  r0..r7:   {addr: {base: "256..263", stride: 32}}
+ops:
+  - {name: pr0, op: mul, a: yr0, b: r0}
+  - {name: qr0, op: mul, a: yi0, b: r0}
+  - {name: accr0, op: mov, a: pr0}
+  - {name: acci0, op: mov, a: qr0}
+  - {name: pr1, op: mul, a: yr1, b: r1}
+  - {name: accr1, op: add, a: accr0, b: pr1}
+  - {name: qr1, op: mul, a: yi1, b: r1}
+  - {name: acci1, op: add, a: acci0, b: qr1}
+  - {name: pr2, op: mul, a: yr2, b: r2}
+  - {name: accr2, op: add, a: accr1, b: pr2}
+  - {name: qr2, op: mul, a: yi2, b: r2}
+  - {name: acci2, op: add, a: acci1, b: qr2}
+  - {name: pr3, op: mul, a: yr3, b: r3}
+  - {name: accr3, op: add, a: accr2, b: pr3}
+  - {name: qr3, op: mul, a: yi3, b: r3}
+  - {name: acci3, op: add, a: acci2, b: qr3}
+  - {name: pr4, op: mul, a: yr4, b: r4}
+  - {name: accr4, op: add, a: accr3, b: pr4}
+  - {name: qr4, op: mul, a: yi4, b: r4}
+  - {name: acci4, op: add, a: acci3, b: qr4}
+  - {name: pr5, op: mul, a: yr5, b: r5}
+  - {name: accr5, op: add, a: accr4, b: pr5}
+  - {name: qr5, op: mul, a: yi5, b: r5}
+  - {name: acci5, op: add, a: acci4, b: qr5}
+  - {name: pr6, op: mul, a: yr6, b: r6}
+  - {name: accr6, op: add, a: accr5, b: pr6}
+  - {name: qr6, op: mul, a: yi6, b: r6}
+  - {name: acci6, op: add, a: acci5, b: qr6}
+  - {name: pr7, op: mul, a: yr7, b: r7}
+  - {name: acc_re, op: add, a: accr6, b: pr7}
+  - {name: qr7, op: mul, a: yi7, b: r7}
+  - {name: acc_im, op: add, a: acci6, b: qr7}
+sinks:
+  acc_re: {addr: {base: 768, stride: 2}}
+  acc_im: {addr: {base: 769, stride: 2}}
+instances: 16

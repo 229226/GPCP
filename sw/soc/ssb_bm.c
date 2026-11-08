@@ -23,6 +23,7 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "pss_corr_prog.h"      /* 编译器生成的 PSS/SSS 复数相关 */
 #include "polar_node_prog.h"      /* 编译器生成的 polar SC 节点微码 */
 
 #define CGRA_BASE        0x50000000ul
@@ -30,7 +31,7 @@
 #define RESULT_BASE      ((uint32_t *)0x80010000ul)
 
 #define NPES             16
-#define CORR_CYCLES      52
+#define CORR_CYCLES   PSS_CORR_PROG_CYCLES
 #define NODE_CYCLES   POLAR_NODE_PROG_CYCLES
 #define RING_DEPTH       16
 #define NREP             127
@@ -66,7 +67,6 @@ static int32_t *bet = (int32_t *)(LC_IN_BASE + 128);
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
-static uint32_t prog[CORR_CYCLES * NPES];
 static uint32_t errs, runs, n_desc, out_idx, done;
 static int32_t  lbuf[SDEPTH + 1][NPOL];
 static uint8_t  bbuf[SDEPTH + 1][NPOL];
@@ -149,33 +149,12 @@ static uint32_t bitrev(uint32_t v, uint32_t bits)
 static int is_frozen(uint32_t i) { return bitrev(i % NPOL, SDEPTH) < (uint32_t)(NPOL - KINFO); }
 
 /* --------------------------------------------------------------- microcode */
-static uint32_t sidx(uint32_t bank, uint32_t word) { return bank * 32u + word; }
 
 static void build_corr_uc(void)
 {
     for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
-        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-    for (uint32_t pe = 0; pe < NPES; pe++) {
-#define E(cyc, op, a, b, d, imm) prog[(cyc) * NPES + pe] = gpcp_cgra_inst(op, a, b, d, imm)
-        E(0, GPCP_OP_LACC, GPCP_SRC_ZERO, 0, 0, 0);
-        E(1, GPCP_OP_MOV, GPCP_SRC_ZERO, 0, 2, 0);
-        for (uint32_t k = 0; k < 8; k++) {
-            uint32_t t = pe * 8 + k;
-            if (t >= NREP) continue;
-            uint32_t b = 2 + k * 6;
-            E(b + 0, GPCP_OP_LD, 0, 0, 4, sidx(t >> 4, 2 * (t & 15)));
-            E(b + 1, GPCP_OP_LD, 0, 0, 5, sidx(t >> 4, 2 * (t & 15) + 1));
-            E(b + 2, GPCP_OP_LD, 0, 0, 6, sidx(8 + (t >> 4), t & 15));
-            E(b + 3, GPCP_OP_MAC, 4, 6, 0, 0);
-            E(b + 4, GPCP_OP_MUL, 5, 6, 7, 0);
-            E(b + 5, GPCP_OP_ADD, 2, 7, 2, 0);
-        }
-        E(50, GPCP_OP_ST, GPCP_SRC_ACC, 0, 0, sidx(16 + pe, 0));
-        E(51, GPCP_OP_ST, 2, 0, 0, sidx(16 + pe, 1));
-#undef E
-    }
-    for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, pss_corr_prog[i]);
+    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(23, 7), 0);   /* ref[127] 幻影 tap */
 }
 
 static void build_node_uc(void)
@@ -235,8 +214,8 @@ static void corr_run(uint32_t y_word_off, uint32_t ref_addr, int64_t *re, int64_
 
     n_desc = 0;
     dsc(Y_BASE + 4u * y_word_off, 0, 2 * NREP, 0, 0, 0, 0);
-    dsc(ref_addr, 8 * 32, NREP, 0, 0, 32, 16);
-    dsc((uint32_t)(uintptr_t)fb, 16 * 32, 32, 0, 1, 32, 2);
+    dsc(ref_addr, 8 * 32, NREP, 0, 0, 32, 8);
+    dsc((uint32_t)(uintptr_t)fb, 24 * 32, 32, 0, 1, 0, 0);
 
     ring_on(0, 2);
     done += 2;

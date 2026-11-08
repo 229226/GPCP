@@ -22,13 +22,14 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "pss_corr_prog.h"      /* 编译器生成的 PSS 复数相关 */
 
 #define CGRA_BASE        0x50000000ul
 #define EXIT_ADDR        0x40010000ul
 #define RESULT_BASE      ((uint32_t *)0x80010000ul)
 
 #define NPES             16
-#define CORR_CYCLES      52
+#define CORR_CYCLES   PSS_CORR_PROG_CYCLES
 #define RING_DEPTH       16
 #define NREP             127
 #define TAPS_PER_PE      8
@@ -48,7 +49,6 @@ static int32_t *refw = (int32_t *)REF_BASE;
 static int32_t *outw = (int32_t *)OUT_BASE;
 
 
-static uint32_t prog[CORR_CYCLES * NPES];
 static uint32_t cycles;
 static uint32_t errs;
 static uint32_t runs;
@@ -87,37 +87,12 @@ static void build_rx(int nid2)
 }
 
 /* --------------------------------------------------------------- microcode */
-static uint32_t sidx(uint32_t bank, uint32_t word) { return bank * 32u + word; }
 
 static void build_microcode(void)
 {
     for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
-        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-
-    for (uint32_t pe = 0; pe < NPES; pe++) {
-#define EMIT(cyc, op, a, b, d, imm) \
-        prog[(cyc) * NPES + pe] = gpcp_cgra_inst(op, a, b, d, imm)
-        EMIT(0, GPCP_OP_LACC, GPCP_SRC_ZERO, 0, 0, 0);
-        EMIT(1, GPCP_OP_MOV, GPCP_SRC_ZERO, 0, 2, 0);
-        for (uint32_t k = 0; k < TAPS_PER_PE; k++) {
-            uint32_t t = pe * TAPS_PER_PE + k;
-            if (t >= NREP)
-                continue;
-            uint32_t b = 2 + k * 6;
-            EMIT(b + 0, GPCP_OP_LD, 0, 0, 4, sidx(t >> 4, 2 * (t & 15)));
-            EMIT(b + 1, GPCP_OP_LD, 0, 0, 5, sidx(t >> 4, 2 * (t & 15) + 1));
-            EMIT(b + 2, GPCP_OP_LD, 0, 0, 6, sidx(8 + (t >> 4), t & 15));
-            EMIT(b + 3, GPCP_OP_MAC, 4, 6, 0, 0);          /* acc += re*ref */
-            EMIT(b + 4, GPCP_OP_MUL, 5, 6, 7, 0);
-            EMIT(b + 5, GPCP_OP_ADD, 2, 7, 2, 0);          /* im accumulator */
-        }
-        EMIT(50, GPCP_OP_ST, GPCP_SRC_ACC, 0, 0, sidx(16 + pe, 0));
-        EMIT(51, GPCP_OP_ST, 2, 0, 0, sidx(16 + pe, 1));
-#undef EMIT
-    }
-
-    for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, pss_corr_prog[i]);
+    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(23, 7), 0);   /* ref[127] 幻影 tap */
 }
 
 /* ---------------------------------------------------------------- ring glue */
@@ -185,9 +160,9 @@ int main(void)
     for (int c = 0; c < NCAND; c++) {
         n_desc = 0;
         dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);                       /* rx: linear */
-        dsc(REF_BASE + 4u * (uint32_t)(c * REF_STRIDE), 8 * 32, NREP, 0, 0, 32, 16);
+        dsc(REF_BASE + 4u * (uint32_t)(c * REF_STRIDE), 8 * 32, NREP, 0, 0, 32, 8);
         /* results are scattered: 2 words per bank (bank 16..31), stride 32 */
-        dsc(OUT_BASE + 4u * (uint32_t)(c * 32), 16 * 32, 32, 0, 1, 32, 2);
+        dsc(OUT_BASE + 4u * (uint32_t)(c * 32), 24 * 32, 32, 0, 1, 0, 0);
 
         ring_on(0, 2);
         done += 2;

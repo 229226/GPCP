@@ -30,6 +30,7 @@
  * ----------------------------------------------------------------------------- */
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
+#include "pss_corr_prog.h"      /* 编译器生成的 PSS/SSS 复数相关 */
 #include "polar_node_prog.h"      /* 编译器生成的 polar SC 节点微码 */
 
 #define CGRA_BASE        0x50000000ul
@@ -37,7 +38,7 @@
 #define RESULT_BASE      ((uint32_t *)0x80010000ul)
 
 #define NPES             16
-#define CORR_CYCLES      52
+#define CORR_CYCLES   PSS_CORR_PROG_CYCLES
 #define RING_DEPTH       1024
 #define NREP             127
 #define NPSS_RE0         56
@@ -103,7 +104,6 @@ static uint32_t nblk;          /* node runs never reuse a block (CPU D$ stays co
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
-static uint32_t prog[CORR_CYCLES * NPES];
 static uint32_t errs, runs, n_desc, out_idx, done;
 static uint32_t dbg_wait, dbg_corr_spin, dbg_array_spin, dbg_nblk;   /* errs breakdown */
 static int32_t *last_fb;        /* result block of the most recent corr_run */
@@ -126,7 +126,6 @@ static void wait_desc(uint32_t want)
 #include "ssb_fft.inc"          /* 4096-point FFT engine (verified in run-fft) */
 
 /* --------------------------------------------------------------- microcode */
-static uint32_t sidx(uint32_t bank, uint32_t word) { return bank * 32u + word; }
 
 static uint8_t mseq[2 * NREP];
 
@@ -166,28 +165,8 @@ static int sss_sym(int nid1, int nid2, int n)
 static void build_corr_uc(void)
 {
     for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
-        prog[i] = gpcp_cgra_inst(GPCP_OP_NOP, 0, 0, 0, 0);
-    for (uint32_t pe = 0; pe < NPES; pe++) {
-#define E(cyc, op, a, b, d, imm) prog[(cyc) * NPES + pe] = gpcp_cgra_inst(op, a, b, d, imm)
-        E(0, GPCP_OP_LACC, GPCP_SRC_ZERO, 0, 0, 0);
-        E(1, GPCP_OP_MOV, GPCP_SRC_ZERO, 0, 2, 0);
-        for (uint32_t k = 0; k < 8; k++) {
-            uint32_t t = pe * 8 + k;
-            if (t >= NREP) continue;
-            uint32_t base = 2 + k * 6;
-            E(base + 0, GPCP_OP_LD, 0, 0, 4, sidx(t >> 4, 2 * (t & 15)));
-            E(base + 1, GPCP_OP_LD, 0, 0, 5, sidx(t >> 4, 2 * (t & 15) + 1));
-            E(base + 2, GPCP_OP_LD, 0, 0, 6, sidx(8 + (t >> 4), t & 15));
-            E(base + 3, GPCP_OP_MAC, 4, 6, 0, 0);
-            E(base + 4, GPCP_OP_MUL, 5, 6, 7, 0);
-            E(base + 5, GPCP_OP_ADD, 2, 7, 2, 0);
-        }
-        E(50, GPCP_OP_ST, GPCP_SRC_ACC, 0, 0, sidx(16 + pe, 0));
-        E(51, GPCP_OP_ST, 2, 0, 0, sidx(16 + pe, 1));
-#undef E
-    }
-    for (uint32_t i = 0; i < CORR_CYCLES * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, prog[i]);
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, pss_corr_prog[i]);
+    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_ADDR(23, 7), 0);   /* ref[127] 幻影 tap */
 }
 
 /* ---------------------------------------------------------------- ring glue */
@@ -213,7 +192,7 @@ static void corr_one(uint32_t ref_ram, int32_t *fb, int with_rx, int cap)
     n_desc = 0;
     uint32_t n_in;
     if (with_rx) dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);    /* rx: linear 254 words */
-    dsc(ref_ram, 8 * 32, NREP, 0, 0, 32, 16);             /* refs: 16 words/bank */
+    dsc(ref_ram, 8 * 32, NREP, 0, 0, 32, 8);              /* refs: 8 words/bank */
     n_in = n_desc;
 
     done = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
@@ -240,7 +219,7 @@ static void corr_one(uint32_t ref_ram, int32_t *fb, int with_rx, int cap)
         }
     }
     runs++;
-    dsc((uint32_t)(uintptr_t)fb, 16 * 32, 32, 0, 1, 32, 2); /* results: 2 words/bank */
+    dsc((uint32_t)(uintptr_t)fb, 24 * 32, 32, 0, 1, 0, 0); /* results: 2 words/bank */
     gpcp_cgra_ring_push(CGRA_BASE, n_in + 1u);
     done += 1;
     wait_desc(done);

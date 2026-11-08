@@ -101,15 +101,15 @@ def main(path):
         print(f"  probe: latched descriptor src=0x{lat[0] & 0xFFFFFFFF:08x} "
               f"len={lat[1]} stride={lat[2]} row={lat[3]}")
         if len(vals) >= 430 + 512:
-            rows = [want_ref[16 * r:16 * r + 16] for r in range(8)]
+            rows = [want_ref[8 * r:8 * r + 8] for r in range(16)]
             banks = [[sx32(vals[430 + 32 * b + w]) for w in range(32)]
                      for b in range(16)]        # banks 8..23
             used = [8 + b for b in range(16) if any(banks[b][w] != 0 for w in range(32))]
             print(f"  probe: non-empty banks {used}")
-            for r in range(8):
-                got = banks[r][:15]
-                same = got == rows[r][:15]
-                print(f"  probe: row {r} (t={16 * r}..{16 * r + 15}) -> bank {8 + r}: "
+            for r in range(16):
+                got = banks[r][:len(rows[r])]
+                same = got == rows[r]
+                print(f"  probe: row {r} (t={8 * r}..{8 * r + 7}) -> bank {8 + r}: "
                       f"{'match' if same else 'MISMATCH'}"
                       + ("" if same else f"  hw={got[:4]} want={rows[r][:4]}"))
     # ---- SSS: 336 hypotheses on the spectrum of symbol 3 ---------------------
