@@ -88,10 +88,10 @@ declare -A MODEL_CMD=(
     [model-reg]="python3 tools/nr_pdcch_reg.py selftest"
     [model-pc]="python3 tools/nr_pc.py selftest"
 )
-SOCCORE_QUICK="run-pbch-pack run-ifft run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
+SOCCORE_QUICK="run-pbch-pack run-ifft run-overhead run-ssb-tx run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
 # run-rach is the single longest gate (~9 min, 11.8 M cycles); it lives in the
 # `slow` tier so the default full run stays ~10-12 min.
-SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot"
+SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot"
 SLOW_EXTRA="run-rach"
 
 MODEL_SET=()

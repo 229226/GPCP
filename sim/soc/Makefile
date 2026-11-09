@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -686,3 +686,44 @@ run-ifft: all
 		--dump $(ROOT)/$(OBJ)/ifft_dump.txt \
 		--max-cycles 40000000
 	python3 $(ROOT)/tools/check_ifft.py $(ROOT)/$(OBJ)/ifft_dump.txt $(IFFT_TD)
+
+# ---- T0: fixed cost of one array run (no changes to rt_array_run) ---------
+run-overhead: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/overhead_bm.bin@0x80000000 \
+		--results 0x80010000 --nwords 24 \
+		--dump $(ROOT)/$(OBJ)/overhead_dump.txt \
+		--max-cycles 10000000
+	python3 $(ROOT)/tools/check_overhead.py $(ROOT)/$(OBJ)/overhead_dump.txt
+
+# ---- G1/A4: 4-symbol SSB TX + hardware loopback (MIB 32/32) ----------------
+# One gate, two simulations: ssb_tx_bm produces the waveform on the CGRA,
+# check_ssb_tx exports it verbatim as the P1 TD, then the existing P1 receiver
+# (ssb_fid_bm) decodes it.  Keeping both in one target avoids a race when
+# verify.sh runs gates in parallel.
+SSB_TX_CONJ_TD = $(ROOT)/build/soc/ssb_tx_conj.td
+SSB_LOOP_TD    = $(ROOT)/build/soc/ssb_loop.td
+
+run-ssb-tx: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(SSB_TX_CONJ_TD))
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	python3 $(ROOT)/tools/nr_ofdm_tx.py selftest-ssb-tx
+	python3 $(ROOT)/tools/nr_ofdm_tx.py dump-ssb-tx --out $(SSB_TX_CONJ_TD)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/ssb_tx_bm.bin@0x80000000 \
+		--load $(SSB_TX_CONJ_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80010000 --nwords 35088 \
+		--dump $(ROOT)/$(OBJ)/ssb_tx_dump.txt \
+		--max-cycles 40000000
+	python3 $(ROOT)/tools/check_ssb_tx.py $(ROOT)/$(OBJ)/ssb_tx_dump.txt $(SSB_TX_CONJ_TD) $(SSB_LOOP_TD)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/ssb_fid_bm.bin@0x80000000 \
+		--load $(SSB_LOOP_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80010000 --nwords 32 \
+		--dump $(ROOT)/$(OBJ)/ssb_loop_dump.txt \
+		--max-cycles 100000000
+	python3 $(ROOT)/tools/check_ssb_fid.py $(ROOT)/$(OBJ)/ssb_loop_dump.txt
