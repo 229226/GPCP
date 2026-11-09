@@ -75,8 +75,9 @@ static uint32_t runs, dmas, errs;
 /* 变量块 → 自己的边表，启动时建一次（避免每个块扫 42×10 条边） */
 static uint8_t blk_n[BG2_COLS];
 static uint8_t blk_r[BG2_COLS][24], blk_k[BG2_COLS][24], blk_sh[BG2_COLS][24];
-/* 反向查表：(r,k) 属于哪个变量块、在块内的槽号（重构时直接落位到 gather） */
-static uint8_t edge_b[BG2_ROWS][MAXD], edge_e[BG2_ROWS][MAXD];
+/* 反向查表：(r,k) 的移位与它在 gather 缓冲里的字偏移 */
+static uint8_t  edge_s[BG2_ROWS][MAXD];
+static uint16_t edge_off[BG2_ROWS][MAXD];
 
 static void build_tables(void)
 {
@@ -88,8 +89,8 @@ static void build_tables(void)
                     blk_r[b][n] = (uint8_t)r;
                     blk_k[b][n] = (uint8_t)k;
                     blk_sh[b][n] = (uint8_t)(bg2_sh[r][k] % ZC);
-                    edge_b[r][k] = (uint8_t)b;
-                    edge_e[r][k] = n;
+                    edge_s[r][k] = (uint8_t)(bg2_sh[r][k] % ZC);
+                    edge_off[r][k] = (uint16_t)(b * GSPAD + n * ZC);
                     n++;
                 }
         blk_n[b] = n;
@@ -110,14 +111,12 @@ static void cn_row_out(uint32_t r, uint32_t page)
 }
 
 /* 重构 + gather 合并：m' = sign(a)·mag 直接写进**该边所属块**的 gather 缓冲，
- * 并按 (i-sh)%Zc 落位（gather 那一整趟就不用再做）。
+ * 并按 (i+sh)%Zc 落位（gather 那一整趟就不用再做）。
  *
- * 为什么合并：本项目 CPU 侧的瓶颈是 "WT store 排队 → AXI 单笔 write"（实测
- * 约 20 拍/8 字节）。原来每条边要写两次（先 m' 写回 msg，再 gather 搬一遍），
- * 合并后只写一次；msg 也不必再存 m'（下一轮 CN 读的是 scatter 写回的 BN 输出）。
- *
- * 落位用两段连续写（src 顺序 j=0..Zc-1）：
- *   dst[sh..Zc-1] <- m'(0..Zc-1-sh)，dst[0..sh-1] <- m'(Zc-sh..Zc-1) */
+ * 每条边按"两段连续拷贝"处理（src/dst 指针都提到边外层），符号用 0/-1 掩码
+ * 无分支实现。实测这条通路是**指令数受限**（约 26 拍/元素：4 次 load
+ * = msg + min1/min2/sign、1 次 store、约 10 条 ALU），所以下面的形态比
+ * "提升行在外层"更快（那个版本每条边的 20 个字跨 80 B 步长，索引还要乘法）。 */
 static void reconstruct_gather(void)
 {
     for (uint32_t r = 0; r < BG2_ROWS; r++) {
@@ -126,22 +125,25 @@ static void reconstruct_gather(void)
         const int32_t *m2p = res[r][1];
         const int32_t *sgp = res[r][2];
         for (uint32_t k = 0; k < d; k++) {
-            uint32_t b = edge_b[r][k], e = edge_e[r][k];
-            uint32_t sh = bg2_sh[r][k] % ZC;
+            uint32_t sh = edge_s[r][k];
             const int32_t *src = msg[r][k];
-            int32_t *dst = (int32_t *)(g_all + b * GSPAD) + e * ZC;
+            int32_t *dst = g_all + edge_off[r][k];
             for (uint32_t j = 0; j < ZC - sh; j++) {
                 int32_t a = src[j];
-                int32_t ab = a < 0 ? -a : a;
+                int32_t am = a >> 31;
+                int32_t ab = (a ^ am) - am;
                 int32_t mag = (ab == m1p[j]) ? m2p[j] : m1p[j];
-                dst[sh + j] = ((a < 0) ^ (sgp[j] != 0)) ? -mag : mag;
+                int32_t nm = am ^ sgp[j];
+                dst[sh + j] = (mag ^ nm) - nm;
             }
             for (uint32_t j = 0; j < sh; j++) {
                 uint32_t i = ZC - sh + j;
                 int32_t a = src[i];
-                int32_t ab = a < 0 ? -a : a;
+                int32_t am = a >> 31;
+                int32_t ab = (a ^ am) - am;
                 int32_t mag = (ab == m1p[i]) ? m2p[i] : m1p[i];
-                dst[j] = ((a < 0) ^ (sgp[i] != 0)) ? -mag : mag;
+                int32_t nm = am ^ sgp[i];
+                dst[j] = (mag ^ nm) - nm;
             }
         }
     }
