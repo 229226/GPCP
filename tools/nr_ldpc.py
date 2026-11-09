@@ -135,6 +135,38 @@ def dump_td(path, zc=64, snr_db=3.0, iters=1, seed=5, nseed=9, sigma=0.5, bg=2):
     return 0
 
 
+
+ENC_MAGIC = 0x1D5C0DE1          # B1 encoder TD
+
+
+def dump_enc(path, bg=2, zc=20, kb_used=None, seed=5):
+    """Write the B1 encoder TD: header + information bits packed LSB-first.
+
+    No expected codeword is stored: check_ldpc_enc.py recomputes it from
+    ldpc_nr.encode, so the model cannot agree with itself by construction.
+    """
+    _rows, _cols, kb = NR.dims(bg)
+    if kb_used is None:
+        kb_used = KB_BY_BG[bg]
+    kb_used = min(kb_used, kb)
+    nbits = kb_used * zc
+    rnd = random.Random(seed)
+    info = [rnd.randint(0, 1) for _ in range(nbits)]
+    ils = NR.zc_to_ils(zc)
+    words = [ENC_MAGIC, bg, ils, zc, kb_used, nbits, 0, 0]
+    for i in range(0, nbits, 32):
+        w = 0
+        for j in range(32):
+            if i + j < nbits and info[i + j]:
+                w |= 1 << j
+        words.append(w)
+    with open(path, "wb") as f:
+        f.write(struct.pack("<%dI" % len(words), *words))
+    print("wrote %s: BG%d i_LS=%d Zc=%d kb_used=%d, %d info bits"
+          % (path, bg, ils, zc, kb_used, nbits))
+    return 0
+
+
 def main():
     print("QC-LDPC extension: BG2 graph, Zc list %s, PE width %d" % (ZC_LIST, PES))
     ok = True
@@ -181,4 +213,14 @@ if __name__ == "__main__":
         ap.add_argument("--bg", type=int, default=2)
         a = ap.parse_args()
         raise SystemExit(dump_td(a.out, a.zc, a.snr, a.iters, a.seed, a.nseed, a.sigma, a.bg))
+    if len(sys.argv) > 1 and sys.argv[1] == "dump-enc":
+        ap = argparse.ArgumentParser(prog="nr_ldpc.py dump-enc")
+        ap.add_argument("dump-enc")
+        ap.add_argument("--out", required=True)
+        ap.add_argument("--bg", type=int, default=2, choices=(1, 2))
+        ap.add_argument("--zc", type=int, default=20)
+        ap.add_argument("--kb", type=int, default=None)
+        ap.add_argument("--seed", type=int, default=5)
+        a = ap.parse_args()
+        raise SystemExit(dump_enc(a.out, a.bg, a.zc, a.kb, a.seed))
     raise SystemExit(main())

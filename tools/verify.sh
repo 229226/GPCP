@@ -88,10 +88,10 @@ declare -A MODEL_CMD=(
     [model-reg]="python3 tools/nr_pdcch_reg.py selftest"
     [model-pc]="python3 tools/nr_pc.py selftest"
 )
-SOCCORE_QUICK="run-pbch-pack run-ifft run-overhead run-ssb-tx run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
+SOCCORE_QUICK="run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
 # run-rach is the single longest gate (~9 min, 11.8 M cycles); it lives in the
 # `slow` tier so the default full run stays ~10-12 min.
-SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot"
+SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot"
 SLOW_EXTRA="run-rach"
 
 MODEL_SET=()
@@ -139,7 +139,7 @@ compute_changed() {
             tools/nr_pdcch.py)      add_model model-pdcch; add_soc run-pdcch run-link-e2e run-sib1 ;;
             tools/nr_pbch.py)       add_soc run-pbch-pack run-pbch-tx run-ssb-fid run-ssb-slot ;;
             tools/nr_ofdm_tx.py)    add_soc run-ifft ;;
-            tools/nr_ldpc.py)       add_model model-ldpc ;;
+            tools/nr_ldpc.py)       add_model model-ldpc; add_soc run-ldpc-enc ;;
             tools/nr_mimo.py)       add_model model-mimo ;;
             tools/nr_mac.py)        add_model model-mac model-link model-rach model-conn ;;
             tools/pdsch_full_plan.py) add_model model-harq; add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam ;;

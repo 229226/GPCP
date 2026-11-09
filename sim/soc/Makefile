@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -727,3 +727,23 @@ run-ssb-tx: all
 		--dump $(ROOT)/$(OBJ)/ssb_loop_dump.txt \
 		--max-cycles 100000000
 	python3 $(ROOT)/tools/check_ssb_fid.py $(ROOT)/$(OBJ)/ssb_loop_dump.txt
+
+# ---- G2/B1: 38.212 LDPC encoder on CVA6 (BG1/BG2 x Zc=20/64) --------------
+LDPC_ENC_TD = $(ROOT)/build/ldpc/enc.td
+
+run-ldpc-enc: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(LDPC_ENC_TD))
+	@set -e; for spec in "2 20" "2 64" "1 20" "1 64"; do \
+		set -- $$spec; bg=$$1; zc=$$2; \
+		echo "---- LDPC encode BG$$bg Zc=$$zc ----"; \
+		python3 $(ROOT)/tools/nr_ldpc.py dump-enc --out $(LDPC_ENC_TD) --bg $$bg --zc $$zc; \
+		env -u LD_LIBRARY_PATH $(BIN) \
+			--load $(ROOT)/build/sw/ldpc_enc_bm.bin@0x80000000 \
+			--load $(LDPC_ENC_TD)@0x80400000 \
+			--results 0x80010000 --nwords 160 \
+			--dump $(ROOT)/$(OBJ)/ldpc_enc_bg$${bg}_zc$${zc}.txt \
+			--max-cycles 20000000; \
+		python3 $(ROOT)/tools/check_ldpc_enc.py \
+			$(ROOT)/$(OBJ)/ldpc_enc_bg$${bg}_zc$${zc}.txt $(LDPC_ENC_TD); \
+	done
