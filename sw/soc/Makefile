@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm pdcch_loop_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm pbch_pack_bm ifft_bm overhead_bm ssb_tx_bm ldpc_enc_bm dl_mod_bm pdcch_tx_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm pdcch_loop_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm pbch_pack_bm ifft_bm overhead_bm ssb_tx_bm ldpc_enc_bm dl_mod_bm pdcch_tx_bm pdsch_loop_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -121,6 +121,9 @@ $(BUILD)/ssb_fid_bm.elf: ssb_fid_bm.c start.S link.ld | $(BUILD)
 
 # PDSCH full receive chain: needs the generated CN/BN microcode headers
 $(BUILD)/pdsch_full_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h
+# G2/B5 PDSCH self-loop: 收发两侧都在一个程序里（编码表 + CN/BN 微码 + FFT 镜像）
+$(BUILD)/pdsch_loop_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h ../include/ldpc_enc_tables.h \
+		fft_stage_prog.h fft_block_prog.h
 $(BUILD)/pusch_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h
 
 # DFT-s-OFDM variant: 360-point IDFT deprecoding, integer Q20 table.

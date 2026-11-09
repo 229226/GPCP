@@ -765,6 +765,23 @@ run-pdcch-loop: all
 		--max-cycles 40000000
 	python3 $(ROOT)/tools/check_pdcch_loop.py $(ROOT)/$(OBJ)/pdcch_loop_dump.txt $(PDCCH_TX_TD)
 
+# G2/B5: PDSCH self-loopback -- TB -> LDPC -> two-symbol waveform -> LDPC -> TB
+# in one program (the second half of docs/19 G2's acceptance).
+run-pdsch-loop: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(DL_MOD_TD))
+	python3 $(ROOT)/tools/nr_dl_mod.py selftest
+	python3 $(ROOT)/tools/nr_dl_mod.py dump-td --out $(DL_MOD_TD)
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pdsch_loop_bm.bin@0x80000000 \
+		--load $(DL_MOD_TD)@0x80600000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80070000 --nwords 1260 \
+		--dump $(ROOT)/$(OBJ)/pdsch_loop_dump.txt \
+		--max-cycles 40000000
+	python3 $(ROOT)/tools/check_pdsch_loop.py $(ROOT)/$(OBJ)/pdsch_loop_dump.txt $(DL_MOD_TD)
+
 run-dl-mod: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(DL_MOD_TD))
