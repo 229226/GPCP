@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-proto-nr_pdcch run-proto-nr_pdsch
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -796,6 +796,7 @@ run-proto-$(PROTO): all
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/proto_runner_$(PROTO).bin@0x80000000 \
+		--load $(PROTO_DIR)/stimulus.bin@0x80400000 \
 		--load $(PROTO_DIR)/stimulus.bin@0x80600000 \
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
 		--results 0x80070000 --nwords 1200 \

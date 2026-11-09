@@ -100,10 +100,10 @@ class Scenario:
     def transport_block(self, bits, rnti=None):
         return self._node("transport_block", [], "tb", length=bits, rnti=rnti)
 
-    def received(self, kind="td", length=0, **attrs):
+    def received(self, form="td", length=0, **attrs):
         """接收波形来自激励（外部设备已经发过），不是本程序算出来的。
         CSI/PRACH/PUCCH/PUSCH/SSB/MIMO 这些接收类基准都从这里开始。"""
-        return self._node("received", [], "wave", kind=kind, length=length, **attrs)
+        return self._node("received", [], "wave", form=form, length=length, **attrs)
 
     def encode(self, x, scheme, **kw):
         return self._node("encode", [x], "cw", scheme=scheme,
@@ -113,8 +113,8 @@ class Scenario:
         return self._node("modulate", [cw], "sym", qm=qm, scrambler=scrambler,
                           length=cw.length // max(1, (qm or 2)) if cw.length else 0)
 
-    def dmrs(self, type="type1", n_id=None, l=None):
-        return self._node("dmrs", [], "ref", type=type, n_id=n_id, l=l)
+    def dmrs(self, type="type1", n_id=None, l=None, **kw):
+        return self._node("dmrs", [], "ref", type=type, n_id=n_id, l=l, **kw)
 
     def correlate(self, src, ref, hypotheses=1, seq="zc", metric="energy"):
         """在 src 上与参考序列做相关搜索，输出每个候选假设的能量。

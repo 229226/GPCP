@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check yaml-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam soc-run-proto-nr_pdcch kernels
+.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check yaml-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam soc-run-proto-nr_pdcch soc-run-proto-nr_pdsch soc-run-proto-nr_csi kernels
 
 all: test
 
@@ -137,8 +137,10 @@ soc-run-rach: ; $(MAKE) -C sim/soc run-rach
 soc-run-pucch: ; $(MAKE) -C sim/soc run-pucch
 # P4 MCS-driven downlink: 16QAM PDSCH
 soc-run-pdsch-16qam: ; $(MAKE) -C sim/soc run-pdsch-16qam
-# docs/20 阶段 0：协议运行器（场景 -> plan.h -> 运行 -> 评估）
+# docs/20 阶段 2：协议运行器（场景 -> plan.h -> 运行 -> 评估）
 soc-run-proto-nr_pdcch: ; $(MAKE) -C sim/soc run-proto-nr_pdcch
+soc-run-proto-nr_pdsch: ; $(MAKE) -C sim/soc run-proto-nr_pdsch
+soc-run-proto-nr_csi: ; $(MAKE) -C sim/soc run-proto-nr_csi
 
 # B3: OpenSBI + Linux on the SoC
 linux:

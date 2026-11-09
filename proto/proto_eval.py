@@ -32,6 +32,11 @@ STAGE_WORDS = 3
 CYCLES_TOL = 0.01
 
 
+def _sx(v):
+    """32 位无符号 -> 有符号（dump 里存的是补码）。"""
+    return v - 0x100000000 if v & 0x80000000 else v
+
+
 def _model(scenario):
     path = os.path.join(_HERE, "models", scenario + ".py")
     spec = importlib.util.spec_from_file_location("proto_model_" + scenario, path)
@@ -280,7 +285,15 @@ def main(argv):
             lo, hi = gold["windows"][name]
             rep.window(name, got, lo, hi, "定点增益窗口（符号才是硬门）")
             continue
+        if kind == "nonzero":
+            rep.add(name, "非零", got, got != 0)
+            continue
         want = gold["anchors"][name]
+        if kind == "sign":
+            got_s = _sx(got)
+            ok = got_s != 0 and (got_s > 0) == (want > 0)
+            rep.add(name, "正" if want > 0 else "负", got_s, ok, "只判符号")
+            continue
         tol = int(gold.get("tol", {}).get(name, 0))
         ok = abs(got - want) <= tol
         want_s = "0x%08x" % want if kind == "hex" else want
@@ -295,9 +308,18 @@ def main(argv):
         rep.bits(name, got_b, want, note)
 
     # ---- 平台锚点：阵列运行 / DMA / 忙拍 ----
+    # 纯接收场景的 FFT 描述符不走 DMA API（ssb_fft.inc 自己编排），模型的
+    # SPEC["platform"] 可以声明"本场景不统计"，此时只打印数值不判。
+    plat = spec.get("platform", {})
     rep.eq("阵列运行总数", w[3], sum(s["runs"] for s in stages))
-    rep.add("DMA 次数 > 0", "> 0", w[4], w[4] > 0)
-    rep.add("阵列忙拍 ≤ 总周期", "≤ %d" % cycles, w[5], 0 < w[5] <= cycles)
+    if plat.get("dma", True):
+        rep.add("DMA 次数 > 0", "> 0", w[4], w[4] > 0)
+    else:
+        rep.add("DMA 次数", "本场景不统计", w[4], True, "FFT 内部描述符不计入")
+    if plat.get("busy", True):
+        rep.add("阵列忙拍 ≤ 总周期", "≤ %d" % cycles, w[5], 0 < w[5] <= cycles)
+    else:
+        rep.add("阵列忙拍", "本场景不统计", w[5], True)
 
     # ---- 按时率 / 负载时间轴（docs/20 §5）----
     # 单次到达：预算只报不判（阶段 0 的等价门不掺负载）。
@@ -349,11 +371,12 @@ def main(argv):
             rep.add("参照 %s" % name, "逐位一致", "%d/%d 不同" % (bad, len(r0)),
                     bad == 0)
         d = abs(cycles - r[2]) / float(r[2] or 1)
-        ok = d <= CYCLES_TOL
+        tol = float(getattr(model, "CYCLES_TOL", CYCLES_TOL))
+        ok = d <= tol
         ref_rows.append(("周期", r[2], cycles, "OK（Δ %.2f%%）" % (100 * d) if ok
                          else "FAIL（Δ %.2f%%）" % (100 * d)))
-        rep.add("参照周期（±1%）", "±%.0f%%" % (CYCLES_TOL * 100), "Δ %.2f%%"
-                % (100 * d), ok)
+        rep.add("参照周期（±%.0f%%）" % (tol * 100), "±%.0f%%" % (tol * 100),
+                "Δ %.2f%%" % (100 * d), ok)
         rep.eq("参照阵列运行数", r[3], w[3])
 
     report = os.path.join(pdir, "report.md")

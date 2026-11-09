@@ -132,7 +132,7 @@ $(BUILD)/pusch_tp_bm.elf: pusch_bm.c start.S link.ld pusch_idft_tab.h pdsch_cn_p
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/pusch_tp_bm.dis
 
 # CSI-RS + CQI report (no LDPC, no DMA; FFT + 80-point LS estimate)
-$(BUILD)/csi_bm.elf: csi_bm.c start.S link.ld csi_cqi_tab.h | $(BUILD)
+$(BUILD)/csi_bm.elf: csi_bm.c start.S link.ld csi_cqi_tab.h csi_stages.inc | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S csi_bm.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/csi_bm.dis
 
@@ -215,8 +215,8 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		polar_inword_s3_prog.h polar_inword_s4_prog.h \
 		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
 		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
-		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h \
-		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc ssb_fft.inc \
+		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h csi_cqi_tab.h \
+		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc ssb_fft.inc \
 		fft_stage_prog.h fft_block_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) \
 		-DPROTO_OPS_INC='"$(PROTO)_ops.inc"' $(LDFLAGS) \
