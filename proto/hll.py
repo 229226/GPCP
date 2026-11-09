@@ -25,6 +25,13 @@ def _derive(cfg):
     bw = cfg.get("bw_mhz")
     scs = cfg.get("scs_khz")
     d = {}
+    # WiFi（802.11be）直接给 FFT 点数/CP/数据子载波：这些是协议 numerology，
+    # 不是芯片参数；不在 3GPP 的带宽表里。
+    if "fft_points" in cfg:
+        n = int(cfg["fft_points"])
+        d["n_fft_min"] = n
+        d["cp_len"] = int(cfg.get("cp_len", int(round(n * 0.0703125))))
+        d["n_subcarriers"] = int(cfg.get("n_data_subcarriers", 0))
     if bw is not None and scs is not None:
         key = (bw, scs)
         if key not in _N_RB:

@@ -41,7 +41,6 @@
 #define QPSK          2000
 #define H_SCALE       16
 #define LLR_SHIFT     8
-#define QM            2
 #define GOLD_NC       1600
 #define GOLD_LEN      (E_BITS + GOLD_NC + 31)
 #define USABLE        984
@@ -54,7 +53,8 @@
 #define CRC_POLY      0x864CFBu
 #define KB            6
 #define RV_STEP       (USABLE / 4)
-#define MAX_SYM       (E_BITS / QM)       /* 360 QPSK symbols */
+/* Qm 由激励驱动（par[8]），数组按最大符号数（QPSK 360）开。 */
+#define MAX_SYM_CAP   (E_BITS / 2)
 
 /* 38.211 7.4.1.1 DMRS 参数（n_ID=1、l0=2） */
 #define DMRS_NID      1
@@ -109,7 +109,7 @@ static uint8_t used_bits[USABLE];
 static uint8_t e_bits[E_BITS];
 static uint8_t e_sc[E_BITS];
 static uint8_t f_bits[E_BITS];
-static int32_t sym[2 * MAX_SYM];
+static int32_t sym[2 * MAX_SYM_CAP];
 static int32_t *freq[NSYM] = { (int32_t *)FREQ_BASE, (int32_t *)FREQ2_BASE };
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
@@ -354,17 +354,79 @@ static int rate_match(const uint8_t *cw, uint32_t rv)
 }
 
 /* 38.212 5.4.2.2 比特交织：按 Qm 行写、按列读 */
-static void interleave(const uint8_t *in, uint8_t *out)
+static void interleave(const uint8_t *in, uint8_t *out, uint32_t qm)
 {
-    uint32_t rows = E_BITS / QM, i, j;
+    uint32_t rows = E_BITS / qm, i, j;
     for (i = 0; i < rows; i++)
-        for (j = 0; j < QM; j++)
-            out[QM * i + j] = in[j * rows + i];
+        for (j = 0; j < qm; j++)
+            out[qm * i + j] = in[j * rows + i];
+}
+
+/* 38.211 7.3.1.2 方星座的一个 I/Q 分支：b0 符号位，其余为 Gray 幅度位。 */
+static int32_t qam_branch_level(uint32_t pat, uint32_t n)
+{
+    uint32_t sign = ((pat >> (n - 1)) & 1u) ? 0u : 1u;   /* 0 -> + */
+    int32_t mag;
+    if (n == 1)
+        mag = 1;
+    else if (n == 2)
+        mag = (int32_t)((pat & 1u) ? 1 : 3);
+    else {
+        uint32_t m = pat & 3u;
+        /* 64QAM 幅度 Gray：b1b2 = 00->1, 01->3, 11->5, 10->7。 */
+        mag = (m == 0u) ? 1 : (m == 1u) ? 3 : (m == 3u) ? 5 : 7;
+    }
+    return sign ? mag : -mag;
+}
+
+static int32_t qam_branch_map(const uint8_t *b, uint32_t n, int32_t amp)
+{
+    uint32_t pat = 0, j;
+    for (j = 0; j < n; j++)
+        pat = (pat << 1) | (uint32_t)(b[j] & 1u);
+    return qam_branch_level(pat, n) * amp;
+}
+
+/* max-log LLR，与 tools/nr_qam.py 的 qam_llr 逐值同口径。 */
+static void qam_llr(int64_t eq_r, int64_t eq_i, int64_t h2, uint32_t qm,
+                    int32_t *out)
+{
+    int32_t amp = (qm == 4) ? 894 : 436;
+    uint32_t n = qm / 2u, b, k, p;
+    int64_t ref = (h2 / H_SCALE) * amp;
+    int64_t den, u[2];
+    if (ref <= 0)
+        ref = amp;
+    den = 2 * ref;
+    u[0] = eq_r;
+    u[1] = eq_i;
+    for (b = 0; b < 2; b++) {
+        for (k = 0; k < n; k++) {
+            int64_t d1 = (int64_t)1 << 62, d0 = (int64_t)1 << 62;
+            for (p = 0; p < (1u << n); p++) {
+                int64_t d = u[b] - ref * qam_branch_level(p, n);
+                uint32_t bit = (p >> (n - 1u - k)) & 1u;
+                d *= d;
+                if (bit) {
+                    if (d < d1) d1 = d;
+                } else {
+                    if (d < d0) d0 = d;
+                }
+            }
+            {
+                int64_t num = d1 - d0;
+                int64_t q = (num < 0 ? -num : num) / den;
+                out[n * b + k] = (int32_t)(num < 0 ? -q : q);
+            }
+        }
+    }
 }
 
 /* --------------------------------------------------------- 阶段状态与激励 */
 static const uint32_t *qs_par;
 static uint32_t qs_rv, qs_n_rnti;
+static uint32_t qs_qm, qs_max_sym;         /* 由激励 par[8] 驱动 */
+static uint32_t qs_decode_iters = ITERS;   /* 纯接收 QAM 可加迭代 */
 static uint32_t qs_syn;                    /* 编码后 syndrome（必须 0） */
 static uint32_t qs_sym_max;                /* max|symbol| */
 static uint32_t qs_mm;                     /* 已处理的软符号数（跨两符号） */
@@ -383,11 +445,46 @@ static int qs_setup(const uint32_t *par)
         return 1;
     qs_rv = par[9];                 /* variants[0] = {qm, rv, rnti, pad} at 8..11 */
     qs_n_rnti = par[10];
+    qs_qm = par[8];
+    if (qs_qm != 2u && qs_qm != 4u && qs_qm != 6u)
+        return 3;
+    qs_max_sym = E_BITS / qs_qm;
     if (qs_rv != 0)                 /* 接收链的 rv_k0[0] == 0 */
         return 2;
     qs_par = par;
+    qs_decode_iters = ITERS;
     errs = runs = dmas = busy = 0;
     qs_syn = qs_sym_max = qs_mm = qs_re_cnt = 0;
+    qs_llr_bad = qs_crc_ok = qs_tb_bad = 0;
+    qs_llr_first = 0xFFFFFFFFu;
+    qs_llr_val = 0;
+    return 0;
+}
+
+/* 高阶 QAM 的纯接收激励：2 符号 TD + 尾部 7 字
+ *   [0..2] TB 80 bit  [3] qm  [4] rv  [5] n_RNTI  [6] magic
+ * 硬件只做 FFT -> LS -> QAM max-log -> LDPC；与 run-pdsch-16qam/64qam 同口径。 */
+#define QAM_RX_MAGIC  0x51414D31ul
+static int qs_rx_setup(const uint32_t *par)
+{
+    const uint32_t *tail = (const uint32_t *)(TD_RAM + NSYM * SYM_WORDS * 4u);
+    (void)par;
+    if (tail[6] != QAM_RX_MAGIC)
+        return 1;
+    for (uint32_t i = 0; i < A_TB; i++)
+        tb_bits[i] = (uint8_t)((tail[i >> 5] >> (i & 31u)) & 1u);
+    qs_qm = tail[3];
+    qs_rv = tail[4];
+    qs_n_rnti = tail[5];
+    if (qs_qm != 2u && qs_qm != 4u && qs_qm != 6u)
+        return 2;
+    if (qs_rv != 0)
+        return 3;
+    qs_max_sym = E_BITS / qs_qm;
+    qs_sym_max = (qs_qm == 2u) ? QPSK : ((qs_qm == 4u) ? 894u : 436u);
+    qs_decode_iters = ITERS;
+    errs = runs = dmas = busy = 0;
+    qs_syn = qs_mm = qs_re_cnt = 0;
     qs_llr_bad = qs_crc_ok = qs_tb_bad = 0;
     qs_llr_first = 0xFFFFFFFFu;
     qs_llr_val = 0;
@@ -421,23 +518,25 @@ static int qs_encode(void)
     return 0;
 }
 
-/* -------------------- 阶段 2：速率匹配 + 加扰 + 交织 + QPSK（全标量） */
+/* -------------------- 阶段 2：速率匹配 + 加扰 + 交织 + QAM（全标量） */
 static int qs_modulate(void)
 {
-    uint32_t k;
+    uint32_t k, n = qs_qm / 2u;
     if (rate_match(cw_bits, qs_rv) != 0)
         errs++;
     gold_init(qs_n_rnti << 15);                 /* 38.211 7.3.1.1 */
     for (k = 0; k < E_BITS; k++)
         e_sc[k] = (uint8_t)(e_bits[k] ^ gold_bit(k));
-    interleave(e_sc, f_bits);
-    qs_sym_max = 0;
-    for (k = 0; k < MAX_SYM; k++) {
-        sym[2 * k] = (1 - 2 * (int32_t)f_bits[2 * k]) * QPSK;
-        sym[2 * k + 1] = (1 - 2 * (int32_t)f_bits[2 * k + 1]) * QPSK;
-        {
-            uint32_t a = (uint32_t)(sym[2 * k] < 0 ? -sym[2 * k] : sym[2 * k]);
-            if (a > qs_sym_max) qs_sym_max = a;
+    interleave(e_sc, f_bits, qs_qm);
+    qs_sym_max = (qs_qm == 2u) ? QPSK : ((qs_qm == 4u) ? 894u : 436u);
+    for (k = 0; k < qs_max_sym; k++) {
+        if (qs_qm == 2u) {
+            sym[2 * k] = (1 - 2 * (int32_t)f_bits[2 * k]) * QPSK;
+            sym[2 * k + 1] = (1 - 2 * (int32_t)f_bits[2 * k + 1]) * QPSK;
+        } else {
+            int32_t amp = (int32_t)qs_sym_max;
+            sym[2 * k] = qam_branch_map(&f_bits[qs_qm * k], n, amp);
+            sym[2 * k + 1] = qam_branch_map(&f_bits[qs_qm * k + n], n, amp);
         }
     }
     return 0;
@@ -466,11 +565,14 @@ static int qs_map_to_grid(void)
                 vr = dmrs_re[s][p];
                 vi = dmrs_im[s][p];
             } else {                            /* 数据 RE（顺序与接收一致） */
-                vr = sym[2 * qs_re_cnt];
-                vi = sym[2 * qs_re_cnt + 1];
+                if (qs_re_cnt < qs_max_sym) {
+                    vr = sym[2 * qs_re_cnt];
+                    vi = sym[2 * qs_re_cnt + 1];
+                } else {
+                    vr = 0;                     /* Qm>2 时剩余数据 RE 空闲 */
+                    vi = 0;
+                }
                 qs_re_cnt++;
-                if (qs_re_cnt > MAX_SYM)
-                    errs++;
             }
             freq[s][2 * (BIN0 + r)] = vr;       /* 共轭输入：虚部取负 */
             freq[s][2 * (BIN0 + r) + 1] = -vi;
@@ -541,8 +643,8 @@ static int qs_estimate(void)
             acci += (int64_t)yi * dr - (int64_t)yr * di;
             p++;
         }
-        qs_hre[s] = floor_div(accr, den);
-        qs_him[s] = floor_div(acci, den);
+        qs_hre[s] = (int32_t)((accr >= 0 ? accr + den / 2 : accr - den / 2) / den);
+        qs_him[s] = (int32_t)((acci >= 0 ? acci + den / 2 : acci - den / 2) / den);
     }
     return 0;
 }
@@ -550,33 +652,42 @@ static int qs_estimate(void)
 /* ---- 阶段 8：均衡 + 软解调（LLR → 解交织 → 符号锚点 → 解扰 → 解速率匹配） */
 static int qs_equalise_demap(void)
 {
-    uint32_t s, r, i, k;
-    int rows = E_BITS / QM;
+    uint32_t s, r, i, k, rows = E_BITS / qs_qm;
     uint32_t u;
 
-    /* 均衡 + QPSK 软 LLR（720 个，交织顺序） */
+    /* 均衡 + QAM 软 LLR（E_BITS 个，交织顺序） */
     qs_mm = 0;
-    for (s = 0; s < NSYM; s++)
+    for (s = 0; s < NSYM; s++) {
+        int64_t h2 = (int64_t)qs_hre[s] * qs_hre[s]
+                   + (int64_t)qs_him[s] * qs_him[s];
         for (r = 0; r < NRE; r++) {
             int32_t yr, yi;
             int64_t er, ei;
             if (r % 4u == 0)
                 continue;                       /* DMRS RE */
-            if (qs_mm >= MAX_SYM)
+            if (qs_mm >= qs_max_sym)
                 break;
             yr = yw[(s * NRE + r) * 2 + 0];
             yi = yw[(s * NRE + r) * 2 + 1];
             er = (int64_t)yr * qs_hre[s] + (int64_t)yi * qs_him[s];
             ei = (int64_t)yi * qs_hre[s] - (int64_t)yr * qs_him[s];
-            llr_e[2 * qs_mm + 0] = (int32_t)er;
-            llr_e[2 * qs_mm + 1] = (int32_t)ei;
+            if (qs_qm == 2u) {
+                llr_e[2 * qs_mm + 0] = (int32_t)er;
+                llr_e[2 * qs_mm + 1] = (int32_t)ei;
+            } else {
+                int32_t tmp[6];
+                qam_llr(er, ei, h2, qs_qm, tmp);
+                for (k = 0; k < qs_qm; k++)
+                    llr_e[qs_qm * qs_mm + k] = tmp[k];
+            }
             qs_mm++;
         }
+    }
 
-    /* 38.212 5.4.2.2 解交织（Qm=2，360 行） */
-    for (i = 0; i < (uint32_t)rows; i++)
-        for (k = 0; k < QM; k++)
-            llr_i[k * rows + i] = llr_e[QM * i + k];
+    /* 38.212 5.4.2.2 解交织 */
+    for (i = 0; i < rows; i++)
+        for (k = 0; k < qs_qm; k++)
+            llr_i[k * rows + i] = llr_e[qs_qm * i + k];
 
     {   /* LLR 符号 anchor（解扰之前）：此时 llr_i 是 E 顺序，应与发射的
          * 加扰序列 e_sc 逐位同号。解扰之后它对应的是 e_bits，不能再比。 */
@@ -622,6 +733,7 @@ static int qs_decode(void)
     uint8_t bits[A_TB + CRC_LEN], crc_b[CRC_LEN];
     uint32_t crc_ok = 1;
 
+    build_tables();                 /* 纯接收路径没有 encode 阶段，这里补建 */
     for (uint32_t r2 = 0; r2 < BG2_ROWS; r2++)
         for (uint32_t kk = 0; kk < MAXD; kk++)
             for (i = 0; i < ZC; i++)
@@ -644,7 +756,7 @@ static int qs_decode(void)
     if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CN_PROG_CYCLES * NPES))
         errs++;
 
-    for (uint32_t it = 0; it < ITERS; it++) {
+    for (uint32_t it = 0; it < qs_decode_iters; it++) {
         if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CN_PROG_CYCLES * NPES))
             errs++;
         cn_row_in(0, 0);
@@ -666,7 +778,7 @@ static int qs_decode(void)
         if (gpcp_cgra_imem_load(CGRA_BASE, bn_prog, BN_PROG_CYCLES * NPES))
             errs++;
         {
-            int want_hard = (it + 1u == ITERS);
+            int want_hard = (it + 1u == qs_decode_iters);
             bn_dma_in(0);
             if (rt_dma_wait(CGRA_BASE)) errs++;
             for (uint32_t b = 0; b < BG2_COLS; b++) {

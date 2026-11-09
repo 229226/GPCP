@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check yaml-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam soc-run-proto-nr_pdcch soc-run-proto-nr_pdsch soc-run-proto-nr_csi soc-run-proto-nr_prach soc-run-proto-nr_pucch soc-run-proto-nr_mimo soc-run-proto-nr_pusch soc-run-proto-nr_ssb soc-run-proto-lte_pdsch kernels
+.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check yaml-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam soc-run-proto-nr_pdcch soc-run-proto-nr_pdsch soc-run-proto-nr_csi soc-run-proto-nr_prach soc-run-proto-nr_pucch soc-run-proto-nr_mimo soc-run-proto-nr_pusch soc-run-proto-nr_ssb soc-run-proto-lte_pdsch soc-run-proto-nr_pdsch_16qam soc-run-proto-nr_pdsch_64qam soc-run-proto-nr_pdsch_harq soc-run-proto-nr_pusch_tp soc-run-proto-lte_pusch soc-run-proto-lte_prach soc-run-proto-lte_cell_search soc-run-proto-wifi_11be kernels
 
 all: test
 
@@ -147,6 +147,15 @@ soc-run-proto-nr_mimo: ; $(MAKE) -C sim/soc run-proto-nr_mimo
 soc-run-proto-nr_pusch: ; $(MAKE) -C sim/soc run-proto-nr_pusch
 soc-run-proto-nr_ssb: ; $(MAKE) -C sim/soc run-proto-nr_ssb
 soc-run-proto-lte_pdsch: ; $(MAKE) -C sim/soc run-proto-lte_pdsch
+# 多制式扩展批次：5G 变体 4 + LTE 3 + WiFi 1
+soc-run-proto-nr_pdsch_16qam: ; $(MAKE) -C sim/soc run-proto-nr_pdsch_16qam
+soc-run-proto-nr_pdsch_64qam: ; $(MAKE) -C sim/soc run-proto-nr_pdsch_64qam
+soc-run-proto-nr_pdsch_harq: ; $(MAKE) -C sim/soc run-proto-nr_pdsch_harq
+soc-run-proto-nr_pusch_tp: ; $(MAKE) -C sim/soc run-proto-nr_pusch_tp
+soc-run-proto-lte_pusch: ; $(MAKE) -C sim/soc run-proto-lte_pusch
+soc-run-proto-lte_prach: ; $(MAKE) -C sim/soc run-proto-lte_prach
+soc-run-proto-lte_cell_search: ; $(MAKE) -C sim/soc run-proto-lte_cell_search
+soc-run-proto-wifi_11be: ; $(MAKE) -C sim/soc run-proto-wifi_11be
 
 # B3: OpenSBI + Linux on the SoC
 linux:

@@ -51,7 +51,7 @@ static void write_anchors(uint32_t *o)
     o[8] = dmrs_cinit(0);
     o[9] = dmrs_cinit(1);
     o[10] = qs_rv;
-    o[11] = QM;
+    o[11] = qs_qm;
     o[12] = qs_sym_max;
     o[13] = E_BITS;
     for (i = 0; i < A_TB; i++)

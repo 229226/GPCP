@@ -91,7 +91,7 @@ declare -A MODEL_CMD=(
 SOCCORE_QUICK="run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
 # run-rach is the single longest gate (~9 min, 11.8 M cycles); it lives in the
 # `slow` tier so the default full run stays ~10-12 min.
-SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch"
+SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be"
 SLOW_EXTRA="run-rach"
 
 MODEL_SET=()
@@ -148,7 +148,15 @@ compute_changed() {
             sw/soc/pdcch_stages.inc)
                 add_soc run-pdcch-loop run-proto-nr_pdcch ;;
             sw/soc/pdsch_stages.inc)
-                add_soc run-pdsch-loop run-proto-nr_pdsch ;;
+                add_soc run-pdsch-loop run-proto-nr_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam ;;
+            sw/soc/pdsch_harq_stages.inc)
+                add_soc run-proto-nr_pdsch_harq ;;
+            sw/soc/lte_ul_stages.inc|sw/soc/lte_ul_dft200_tab.h)
+                add_soc run-proto-lte_pusch ;;
+            sw/soc/lte_cell_stages.inc|sw/soc/lte_pss_tab.h)
+                add_soc run-proto-lte_cell_search ;;
+            sw/soc/wifi_stages.inc|sw/soc/wifi_cos256_tab.h|sw/soc/wifi_ldpc_648_r12.h|tools/wifi_ldpc.py)
+                add_soc run-proto-wifi_11be ;;
             sw/soc/csi_stages.inc)
                 add_soc run-csi run-proto-nr_csi ;;
             sw/soc/zc_corr.inc)
@@ -162,16 +170,16 @@ compute_changed() {
             sw/soc/lte_stages.inc)
                 add_soc run-proto-lte_pdsch ;;
             sw/soc/proto_runner.c|sw/soc/nr_*_ops.inc)
-                add_soc run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch ;;
-            proto/*)                add_soc run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch ;;
+                add_soc run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be ;;
+            proto/*)                add_soc run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be ;;
             tools/nr_mimo.py)       add_model model-mimo ;;
             tools/nr_mac.py)        add_model model-mac model-link model-rach model-conn ;;
-            tools/pdsch_full_plan.py) add_model model-harq; add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam ;;
+            tools/pdsch_full_plan.py) add_model model-harq; add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam run-proto-nr_pdsch_harq ;;
             tools/nr_ul.py)         add_model model-ul ;;
-            tools/nr_pusch.py)      add_model model-pusch model-link model-conn; add_soc run-pusch ;;
+            tools/nr_pusch.py)      add_model model-pusch model-link model-conn; add_soc run-pusch run-proto-nr_pusch_tp ;;
             tools/nr_sib1.py)       add_model model-sib1; add_soc run-sib1 ;;
             tools/nr_link.py)       add_model model-link ;;
-            tools/nr_rach.py)       add_model model-rach; add_soc run-prach run-rach ;;
+            tools/nr_rach.py)       add_model model-rach; add_soc run-prach run-rach run-proto-lte_prach ;;
             tools/nr_rrc.py)        add_model model-rrc model-conn ;;
             tools/nr_conn.py)       add_model model-conn ;;
             tools/nr_pucch.py)      add_model model-pucch; add_soc run-pucch ;;

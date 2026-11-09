@@ -70,3 +70,6 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-09,,,45,sw,feature,"SSB 迁入：ssb_stages.inc 抽取（7 阶段）+ 运行器按 (op, impl) 派发 + 每个场景自带结果区地址；修 SSB 激励（dump_td 是文本，要 dump_td_bin）",cc66297,measured,"3,737,638 周期 vs run-ssb-fid 3,695,029（Δ1.15%，2% 门）；1907 阵列（448 FFT + 3 PSS + 336 SSS + 1120 polar）；N_ID1=200/N_ID2=1/DMRS c_init 0x12e101/MIB 32/32"
 2026-11-09,,,10,verif,feature,run-proto-nr_ssb 门与 verify_cache 接线；8 个 proto 门全量回归,cc66297,measured,verify smart 75 passed / 0 failed / 824 s（8 个 run-proto 全部 PASS，0 skipped）
 2026-11-09,,,5,doc,doc,docs/20 §9 阶段2 完成 + AGENTS §2/§6（8/8、手写代码 1986→480 行口径）,,measured,docs/20 §9 阶段2 勾选；AGENTS §2 阶段2 行补 SSB
+2026-11-10,,,210,sw,feature,多制式批次 8 场景：5G QAM/HARQ/TP + LTE PUSCH/PRACH/cell search + WiFi 11be,,estimate,"16QAM 2,914,888 / 976；64QAM 3,026,735 / 976；HARQ 3,548,800 / 1200；PUSCH-TP 7,719,998 / 976；LTE PUSCH 10,730,753 / 448；LTE PRACH 104,341 / 139；cell search 443,279 / 0；WiFi 11be 12,822,967 / 0"
+2026-11-10,,,15,verif,feature,8 个 run-proto 门接入 verify.sh full / verify_cache,,measured,verify full 83 passed / 0 failed / 1126 s；8 个新 proto 门全部 PASS
+2026-11-10,,,10,doc,doc,docs/20 §9 + AGENTS 多制式批次（Rel-19 / Rel-18 / 802.11be-2024）,,estimate,8 场景周期/阵列数字与版本基线已记录

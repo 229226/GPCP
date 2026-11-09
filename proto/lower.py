@@ -67,7 +67,13 @@ def lower(ir, target):
 
         if op in ("ofdm_modulate", "ofdm_demodulate"):
             need = d.get("n_fft_min")
-            if need is None:
+            if ir.get("rat") == "wifi":
+                # WiFi 没有 256 点 FFT 微码：编译器把它落到控制核的标量 DFT。
+                st["where"] = "control-core"
+                st["impl"] = "dft%d_scalar" % need if need else "dft_scalar"
+                st["array_runs"] = 0
+                st["notes"].append("802.11be 256 点 DFT 由 CVA6 标量执行")
+            elif need is None:
                 st["notes"].append("cfg 未给出带宽/子空间隔，无法推导 FFT 点数")
                 plan["ok"] = False
                 plan["needs"].append("cfg(bw_mhz, scs_khz)")
@@ -101,6 +107,18 @@ def lower(ir, target):
             st["impl"] = "polar9@%d" % POLAR_N
             st["array_runs"] = 9
             st["notes"].append("9 级变换，512 点由 16 PE 并行")
+
+        elif op in ("encode", "decode") and nd["params"].get("scheme") == "ldpc_wifi":
+            # IEEE 802.11 N=648 / Z=27 / rate 1/2：标量 min-sum，不占阵列。
+            st["where"] = "control-core"
+            st["impl"] = "wifi_ldpc_z27"
+            st["notes"].append("802.11 N648 R1/2 (Z=27) 标量 min-sum")
+
+        elif op in ("encode", "decode") and nd["params"].get("scheme") == "conv":
+            # EHT-SIG 的 K=7 卷积码：标量 Viterbi，不占阵列。
+            st["where"] = "control-core"
+            st["impl"] = "viterbi_k7"
+            st["notes"].append("K=7 BCC (0o133/0o171)")
 
         elif op in ("encode", "decode") and nd["params"].get("scheme") == "turbo":
             # 36.212 Turbo（1/3、QPP）：标量实现，跑在控制核上；不占阵列。
@@ -139,11 +157,19 @@ def lower(ir, target):
             # 相关搜索：一个候选假设 = 一次阵列运行（prach_corr / pss_corr /
             # sss_corr 都是 16 PE 的部分和 + 阵列内归约）。
             seq = nd["params"].get("seq", "zc")
-            st["where"] = "array"
-            st["impl"] = {"zc": "prach_corr", "pss": "pss_corr",
-                          "sss": "sss_corr"}.get(seq, "prach_corr")
-            st["array_runs"] = int(nd["params"].get("hypotheses", 1))
-            st["notes"].append("%d 个候选假设，每个一次阵列运行" % st["array_runs"])
+            if seq in ("lte_pss", "lte_sss"):
+                # LTE 小区搜索的 62 点相关没有对应微码：落控制核标量。
+                st["where"] = "control-core"
+                st["impl"] = "cell_search_scalar"
+                st["array_runs"] = 0
+                st["notes"].append("%d 个假设，CVA6 标量相关" % int(
+                    nd["params"].get("hypotheses", 1)))
+            else:
+                st["where"] = "array"
+                st["impl"] = {"zc": "prach_corr", "pss": "pss_corr",
+                              "sss": "sss_corr"}.get(seq, "prach_corr")
+                st["array_runs"] = int(nd["params"].get("hypotheses", 1))
+                st["notes"].append("%d 个候选假设，每个一次阵列运行" % st["array_runs"])
 
         elif op == "mimo_equalise":
             # 每层每 RE 出 qm 个硬判比特；mmse_2x1 tile 一次算 n_pes 个 RE、

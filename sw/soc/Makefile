@@ -216,8 +216,10 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
 		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
 		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h csi_cqi_tab.h \
-		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc zc_corr.inc mimo_stages.inc \
-		ssb_stages.inc lte_stages.inc \
+		ldpc_enc.inc pdsch_stages.inc pdsch_qam_rx_ops.inc pdcch_stages.inc csi_stages.inc zc_corr.inc mimo_stages.inc \
+		ssb_stages.inc lte_stages.inc pdsch_harq_stages.inc \
+		lte_ul_stages.inc lte_ul_dft200_tab.h lte_cell_stages.inc lte_pss_tab.h \
+		wifi_stages.inc wifi_cos256_tab.h wifi_ldpc_648_r12.h \
 		pusch_stages.inc \
 		prach_corr_prog.h prach_corr_layout.h mmse_2x1_prog.h ssb_fft.inc \
 		pss_corr_prog.h pss_corr_layout.h ../../tools/ssb_fid_luts.h \
@@ -226,5 +228,9 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		-DPROTO_OPS_INC='"$(PROTO)_ops.inc"' $(LDFLAGS) \
 		start.S proto_runner.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/proto_runner_$(PROTO).dis
+
+# 802.11 N648 R1/2 基图的 C 头文件由 tools/wifi_ldpc.py 生成（单一真相）。
+wifi_ldpc_648_r12.h: ../../tools/wifi_ldpc.py
+	python3 ../../tools/wifi_ldpc.py dump-h $@
 
 .PHONY: proto
