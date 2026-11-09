@@ -56,7 +56,10 @@ GLOBAL_GLOBS = [
 # sync when a scenario gains a new model module.
 GATE_EXTRA = {
     "run-proto-nr_pdcch": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                           "sw/soc/pdcch_stages.inc"],
+                           "sw/soc/pdcch_stages.inc", "sw/soc/nr_pdcch_ops.inc"],
+    "run-proto-nr_pdsch": ["proto/**/*.py", "sw/soc/proto_runner.c",
+                           "sw/soc/pdsch_stages.inc", "sw/soc/nr_pdsch_ops.inc",
+                           "sw/soc/ldpc_enc.inc"],
 }
 
 # Binary -> C source for the few targets whose binary is not named after its

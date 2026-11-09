@@ -91,7 +91,7 @@ declare -A MODEL_CMD=(
 SOCCORE_QUICK="run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
 # run-rach is the single longest gate (~9 min, 11.8 M cycles); it lives in the
 # `slow` tier so the default full run stays ~10-12 min.
-SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot run-proto-nr_pdcch"
+SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot run-proto-nr_pdcch run-proto-nr_pdsch"
 SLOW_EXTRA="run-rach"
 
 MODEL_SET=()
@@ -147,9 +147,11 @@ compute_changed() {
                 add_soc run-ldpc-enc run-pbch-pack run-dl-mod ;;
             sw/soc/pdcch_stages.inc)
                 add_soc run-pdcch-loop run-proto-nr_pdcch ;;
-            sw/soc/proto_runner.c)
-                add_soc run-proto-nr_pdcch ;;
-            proto/*)                add_soc run-proto-nr_pdcch ;;
+            sw/soc/pdsch_stages.inc)
+                add_soc run-pdsch-loop run-proto-nr_pdsch ;;
+            sw/soc/proto_runner.c|sw/soc/nr_*_ops.inc)
+                add_soc run-proto-nr_pdcch run-proto-nr_pdsch ;;
+            proto/*)                add_soc run-proto-nr_pdcch run-proto-nr_pdsch ;;
             tools/nr_mimo.py)       add_model model-mimo ;;
             tools/nr_mac.py)        add_model model-mac model-link model-rach model-conn ;;
             tools/pdsch_full_plan.py) add_model model-harq; add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam ;;

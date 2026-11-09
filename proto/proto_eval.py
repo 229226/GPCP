@@ -22,6 +22,9 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
+sys.path.insert(0, _HERE)
+
+import load as LOAD                     # noqa: E402
 
 MARKER = 0x50524F54          # 'PROT'
 PAYLOAD_HDR = 10             # [10..] 每阶段 (id, cycles, runs)，其后是锚点块
@@ -70,7 +73,8 @@ class Report:
                         bad == 0, note)
 
 
-def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget, dma):
+def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget, dma,
+                 timeline=None):
     tgt = plan["target"]
     arrival = (ir.get("traffic") or {}).get("arrival", "single")
     enforced = arrival not in ("single", "none", None, "")
@@ -106,6 +110,33 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
            else "在预算内",
            "按时" if on_time else "**超时**",
            "" if enforced else "（单次到达：阶段 0 只报不判，负载模型见 docs/20 §5）"),
+        "",
+    ]
+    if timeline:
+        lines += [
+            "### 负载时间轴（docs/20 §5）",
+            "",
+            "- 到达模型：`%s`，每格 %d 个作业，共 **%d 格**"
+            % ((ir.get("traffic") or {}).get("arrival", "?"),
+               timeline["jobs_per_slot"][0], timeline["slots"]),
+            "- 每作业代价：**%d 周期**（硬件实测的整链）" % timeline["cost_per_job"],
+            "- **按时率 %.1f%%**（超时 %d 格），最差积压 **%d 周期 = %.1f 格**"
+            % (100 * timeline["on_time_rate"], timeline["late_slots"],
+               timeline["worst_backlog"],
+               timeline["worst_backlog"] / float(budget or 1)),
+            "- 逐格记录：`timeline.csv`（%d 行）" % timeline["slots"],
+            "",
+            "| 格 | 作业 | 代价 | 完成时刻 | 截止 | 积压 | 按时 |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        rows = timeline.get("rows") or []
+        for r in rows[:3] + rows[3:4] + rows[-2:]:
+            lines.append("| %d | %d | %d | %d | %d | %d | %s |"
+                         % (r["slot"], r["jobs"], r["cost"], r["finish"],
+                            r["deadline"], r["backlog"], "是" if r["on_time"] else "否"))
+        lines += ["", "> 单服务器、非抢占：上一格没做完的继续占用，后面的格排队。"
+                  "跨格状态（HARQ 软合并）留到阶段 2。"]
+    lines += [
         "",
         "## 阶段占比",
         "",
@@ -150,7 +181,7 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
         lines.append("（无差异：每个阶段的计划运行数与实测一致，且没有"
                      "「标量落点里跑阵列」的情况。）")
     if ref_rows:
-        lines += ["", "## 与手写基准的对账（阶段 0 等价门）", "",
+        lines += ["", "## 与手写基准的对账（等价门）", "",
                   "| 项 | 手写 | 协议运行器 | 结论 |", "|---|---|---|---|"]
         for name, refv, gotv, verdict in ref_rows:
             lines.append("| %s | %s | %s | %s |" % (name, refv, gotv, verdict))
@@ -202,15 +233,19 @@ def main(argv):
     n = len(plan["stages"])
     stage0 = PAYLOAD_HDR                 # 每阶段 (id, cycles, runs)
     base = PAYLOAD_HDR + STAGE_WORDS * n  # 锚点块起点
-    # 锚点块 = 10 个标量 + 发射比特 + 译码比特 + CRC 比特 + 码字（长度由 golden 决定，
-    # 顺序由 proto_runner.c 的 write_anchors 定义）
-    nb_dci = len(gold["bits"]["dci_tx"])
-    nb_crc = len(gold["bits"]["crc"])
-    nb_esc = len(gold["bits"]["e_sc"])
-    anchor_words = 10 + 2 * nb_dci + nb_crc + nb_esc
+    # 锚点块的布局由场景模型声明（SPEC），这里只按声明取数——加场景不用改本文件。
+    spec = getattr(model, "SPEC", None)
+    if spec is None:
+        print("[FAIL] proto/models/%s.py 没有声明 SPEC" % a.scenario)
+        return 1
+    need = 0
+    for _, off, _k in spec["scalars"]:
+        need = max(need, off + 1)
+    for _, off, key, _note in spec["bits"]:
+        need = max(need, off + len(gold["bits"][key]))
     w = read_dump(a.dump)
-    if len(w) < base + anchor_words:
-        print("  dump too short: %d words（至少要 %d）" % (len(w), base + anchor_words))
+    if len(w) < base + need:
+        print("  dump too short: %d words（至少要 %d）" % (len(w), base + need))
         return 1
 
     rep = Report()
@@ -236,60 +271,61 @@ def main(argv):
     rep.add("阶段周期合计 ≤ 总周期", "≤ %d" % cycles, total_stage_cycles,
             total_stage_cycles <= cycles, "差值 = 循环与收尾开销")
 
-    # ---- 模型锚点 ----
-    an = gold["anchors"]
-    got = {"dci_tx": w[base], "dci_rx": w[base + 1], "rnti": w[base + 2],
-           "rnti_match": w[base + 3], "crc_ok": w[base + 4],
-           "llr_bad": w[base + 5], "llr_amin": w[base + 6],
-           "llr_amax": w[base + 7], "n_id": w[base + 8],
-           "max_sym": w[base + 9]}
-    for k in ("dci_tx", "dci_rx", "rnti", "rnti_match", "crc_ok", "llr_bad", "n_id"):
-        want = an[k]
-        g = got[k]
-        show = ("0x%08x" % g) if k.startswith("dci") else g
-        want_show = ("0x%08x" % want) if k.startswith("dci") else want
-        rep.add(k, want_show, show, g == want,
-                "" if g == want else "模型给出 %s" % want_show)
-    win = gold["windows"]
-    rep.window("llr_amin", got["llr_amin"], win["llr_amin"][0], win["llr_amin"][1],
-               "定点增益窗口（符号才是硬门）")
-    rep.window("llr_amax", got["llr_amax"], win["llr_amax"][0], win["llr_amax"][1])
-    rep.eq("max_sym", got["max_sym"], an["max_sym"])
+    # ---- 模型锚点（布局由 SPEC 声明）----
+    anchors = {}
+    for name, off, kind in spec["scalars"]:
+        got = w[base + off]
+        anchors[name] = got
+        if kind == "window":
+            lo, hi = gold["windows"][name]
+            rep.window(name, got, lo, hi, "定点增益窗口（符号才是硬门）")
+            continue
+        want = gold["anchors"][name]
+        tol = int(gold.get("tol", {}).get(name, 0))
+        ok = abs(got - want) <= tol
+        want_s = "0x%08x" % want if kind == "hex" else want
+        got_s = "0x%08x" % got if kind == "hex" else got
+        rep.add(name, want_s, got_s, ok, ("±%d" % tol) if tol else "")
 
-    o_dci = base + 10                       # 锚点块的比特段偏移（顺序见 write_anchors）
-    o_rx = o_dci + nb_dci
-    o_crc = o_rx + nb_dci
-    o_esc = o_crc + nb_crc
-    rep.bits("DCI 比特（发射）", w[o_dci:o_dci + nb_dci], gold["bits"]["dci_tx"])
-    rep.bits("DCI 比特（译码）", w[o_rx:o_rx + nb_dci], gold["bits"]["dci_tx"])
-    rep.bits("CRC24C 比特（去掩码）", w[o_crc:o_crc + nb_crc], gold["bits"]["crc"])
-    rep.bits("e_sc（加扰码字）", w[o_esc:o_esc + nb_esc], gold["bits"]["e_sc"],
-             "与 tools/nr_pdcch_tx.py 逐位")
+    bits_seen = {}
+    for name, off, key, note in spec["bits"]:
+        want = gold["bits"][key]
+        got_b = w[base + off:base + off + len(want)]
+        bits_seen[key] = got_b
+        rep.bits(name, got_b, want, note)
 
     # ---- 平台锚点：阵列运行 / DMA / 忙拍 ----
     rep.eq("阵列运行总数", w[3], sum(s["runs"] for s in stages))
     rep.add("DMA 次数 > 0", "> 0", w[4], w[4] > 0)
     rep.add("阵列忙拍 ≤ 总周期", "≤ %d" % cycles, w[5], 0 < w[5] <= cycles)
 
-    # ---- 按时率 ----
-    # 阶段 0 只有"单次到达"，还没有负载模型（docs/20 §5 是阶段 1）；此时预算只报
-    # 不判。连续业务（periodic / poisson / on-off）才把"按时"当门。
+    # ---- 按时率 / 负载时间轴（docs/20 §5）----
+    # 单次到达：预算只报不判（阶段 0 的等价门不掺负载）。
+    # 连续业务：每格的代价 = 硬件实测的整链周期，时间轴与队列在 proto/load.py 里推。
     slot_ms = float(ir.get("budget", {}).get("slot_ms", 0) or 0)
     clock = int(plan["target"].get("clock_hz", 0))
     budget = int(round(slot_ms * clock / 1000.0)) if slot_ms and clock else 0
     arrival = (ir.get("traffic") or {}).get("arrival", "single")
-    enforced = arrival not in ("single", "none", None, "")
-    if budget:
-        over = cycles > budget
-        if enforced:
-            rep.add("每时隙预算内", "≤ %d" % budget, cycles, not over,
-                    "%.3f ms @ %d Hz" % (slot_ms, clock))
-            rep.eq("overrun 标志", w[7], 0 if not over else 1)
+    threshold = ir.get("budget", {}).get("on_time")
+    timeline = None
+    counts = LOAD.profile(ir.get("traffic"), int((ir.get("traffic") or {}).get("slots", 40)))
+    if budget and counts:
+        rows, late = LOAD.simulate(cycles, counts, budget)
+        timeline = LOAD.dump(pdir, rows, late, cycles, budget, len(rows))
+        rate = timeline["on_time_rate"]
+        if threshold is None:
+            rep.add("按时率（未设门槛，只报）", "—", "%.1f%%" % (100 * rate), True,
+                    "每格 %d 作业 × %d 周期 vs 预算 %d 周期"
+                    % (counts[0], cycles, budget))
         else:
-            rep.add("每时隙预算（单次到达，只报不判）", "≤ %d" % budget, cycles,
-                    True, "%.3f ms，实测 %s" % (slot_ms,
-                                              "超 %.1f×" % (cycles / float(budget))
-                                              if over else "在预算内"))
+            rep.add("按时率 ≥ %.0f%%" % (100 * float(threshold)), "%d%%" % int(100 * float(threshold)),
+                    "%.1f%%" % (100 * rate), rate >= float(threshold),
+                    "40 格时间轴见 timeline.csv")
+        rep.eq("overrun 标志", w[7], 0 if rate >= 1.0 else 1)
+    elif budget:
+        rep.add("每时隙预算（单次到达，只报不判）", "≤ %d" % budget, cycles,
+                True, "%.3f ms，%s" % (slot_ms, "超 %.1f×" % (cycles / float(budget))
+                                     if cycles > budget else "在预算内"))
 
     # ---- 等价门：与手写 benchmark 逐值对账 ----
     ref_rows = []
@@ -299,18 +335,14 @@ def main(argv):
                   % (a.ref, getattr(model, "REF_GATE", "参照门")))
             return 1
         r = read_dump(a.ref)
-        ref_map = [("dci_tx", 4), ("dci_rx", 5), ("rnti", 6), ("rnti_match", 7),
-                   ("crc_ok", 8), ("llr_bad", 9), ("llr_amin", 10),
-                   ("llr_amax", 11), ("n_id", 12)]
-        for name, idx in ref_map:
-            ok = (r[idx] == got[name])
-            ref_rows.append((name, r[idx], got[name], "OK" if ok else "FAIL"))
-            rep.add("参照 %s" % name, r[idx], got[name], ok)
-        ok = (r[108] == got["max_sym"])
-        ref_rows.append(("max_sym", r[108], got["max_sym"], "OK" if ok else "FAIL"))
-        rep.add("参照 max_sym", r[108], got["max_sym"], ok)
-        for name, r0, g0 in (("DCI 比特", r[16:16 + nb_dci], w[o_dci:o_dci + nb_dci]),
-                             ("e_sc 比特", r[112:112 + nb_esc], w[o_esc:o_esc + nb_esc])):
+        for name, idx in spec["ref_scalars"]:
+            g = anchors[name]
+            ok = (r[idx] == g)
+            ref_rows.append((name, r[idx], g, "OK" if ok else "FAIL"))
+            rep.add("参照 %s" % name, r[idx], g, ok)
+        for name, off, key in spec["ref_bits"]:
+            r0 = r[off:off + len(gold["bits"][key])]
+            g0 = bits_seen[key]
             bad = sum(1 for x, y in zip(r0, g0) if x != y) + abs(len(r0) - len(g0))
             ref_rows.append((name, "%d bit" % len(r0), "%d/%d 不同" % (bad, len(r0)),
                              "OK" if bad == 0 else "FAIL"))
@@ -328,7 +360,7 @@ def main(argv):
     plan = dict(plan)
     plan["params_hash"] = gold.get("params_hash", "?")
     write_report(report, a.scenario, plan, ir, rep, stages, ref_rows, cycles, budget,
-                 w[4])
+                 w[4], timeline)
 
     print("阶段占比：")
     for s in stages:

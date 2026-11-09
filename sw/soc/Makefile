@@ -209,12 +209,17 @@ $(PROTO_DIR)/plan.h: ../../proto/emit.py ../../proto/models/$(PROTO).py \
 	python3 ../../proto/emit.py --scenario $(PROTO)
 
 $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
-		$(PROTO_DIR)/plan.h pdcch_luts.h polar_node_prog.h \
+		$(PROTO_DIR)/plan.h $(PROTO)_ops.inc \
+		pdcch_luts.h polar_node_prog.h \
 		polar_inword_s0_prog.h polar_inword_s1_prog.h polar_inword_s2_prog.h \
 		polar_inword_s3_prog.h polar_inword_s4_prog.h \
 		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
-		polar_word_d8_prog.h fft_stage_prog.h fft_block_prog.h | $(BUILD)
-	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) $(LDFLAGS) \
+		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
+		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h \
+		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc ssb_fft.inc \
+		fft_stage_prog.h fft_block_prog.h | $(BUILD)
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) \
+		-DPROTO_OPS_INC='"$(PROTO)_ops.inc"' $(LDFLAGS) \
 		start.S proto_runner.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/proto_runner_$(PROTO).dis
 

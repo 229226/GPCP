@@ -103,11 +103,18 @@ def lower(ir, target):
             st["notes"].append("9 级变换，512 点由 16 PE 并行")
 
         elif op in ("encode", "decode") and nd["params"].get("scheme") == "ldpc":
-            bits = nd.get("length") or d.get("e_bits") or 0
-            zc, over = _pick(max(1, bits // 52 + 1), LDPC_ZC)
+            # 38.212：BG2 的码字长 N = 52*Zc，信息位 K = Kb*Zc（K<=640 时 Kb=6）。
+            # encode 节点带的是编码后比特数，decode 节点带的是 TB 比特数，两条路
+            # 都推回同一个 Zc 需求，而不是拿"比特数 / 52 + 1"去猜。
+            if op == "encode":
+                zc_need = max(1, (nd.get("length") or 0) // 52)
+            else:
+                k_info = (d.get("a_bits") or 0) + 24        # TB + CRC24
+                zc_need = max(1, -(-k_info // 6))
+            zc, over = _pick(zc_need, LDPC_ZC)
             if zc is None:
                 plan["ok"] = False
-                plan["needs"].append("LDPC 提升长度 >= %d 的实现" % (bits // 52 + 1))
+                plan["needs"].append("LDPC 提升长度 >= %d 的实现" % zc_need)
             else:
                 st["where"] = "control-core" if op == "encode" else "array"
                 st["impl"] = "ldpc_bg2_zc%d" % zc

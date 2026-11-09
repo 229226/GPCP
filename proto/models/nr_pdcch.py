@@ -22,6 +22,38 @@ import nr_pdcch_tx as TX                                 # noqa: E402
 REF_GATE = "run-pdcch-loop"
 REF_DUMP = "sim/soc/build/pdcch_loop_dump.txt"
 
+# 锚点块布局（与 sw/soc/nr_pdcch_ops.inc 的 write_anchors 一一对应）
+SPEC = {
+    "scalars": [
+        ("dci_tx", 0, "hex"),
+        ("dci_rx", 1, "hex"),
+        ("rnti", 2, "d"),
+        ("rnti_match", 3, "d"),
+        ("crc_ok", 4, "d"),
+        ("llr_bad", 5, "d"),
+        ("llr_amin", 6, "window"),
+        ("llr_amax", 7, "window"),
+        ("n_id", 8, "d"),
+        ("max_sym", 9, "d"),
+    ],
+    "bits": [
+        ("DCI 比特（发射）", 10, "dci_tx", ""),
+        ("DCI 比特（译码）", 42, "dci_tx", ""),
+        ("CRC24C 比特（去掩码）", 74, "crc", ""),
+        ("e_sc（加扰码字）", 98, "e_sc", "与 tools/nr_pdcch_tx.py 逐位"),
+    ],
+    # 手写基准 dump 里的对应下标（run-pdcch-loop 的结果区布局）
+    "ref_scalars": [
+        ("dci_tx", 4), ("dci_rx", 5), ("rnti", 6), ("rnti_match", 7),
+        ("crc_ok", 8), ("llr_bad", 9), ("llr_amin", 10), ("llr_amax", 11),
+        ("n_id", 12), ("max_sym", 108),
+    ],
+    "ref_bits": [
+        ("DCI 比特", 16, "dci_tx"),
+        ("e_sc 比特", 112, "e_sc"),
+    ],
+}
+
 
 def stimulus_bytes():
     """协议输入，字节等同于 tools/nr_pdcch_tx.py dump-td 的输出。"""
