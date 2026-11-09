@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-proto-nr_pdcch
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -781,6 +781,26 @@ run-pdsch-loop: all
 		--dump $(ROOT)/$(OBJ)/pdsch_loop_dump.txt \
 		--max-cycles 40000000
 	python3 $(ROOT)/tools/check_pdsch_loop.py $(ROOT)/$(OBJ)/pdsch_loop_dump.txt $(DL_MOD_TD)
+
+# ---- docs/20：协议基准（场景 -> plan.h -> 通用运行器）------------------------
+# 阶段 0 的等价门由顶层 `make proto PROTO=nr_pdcch` 编排：
+#   本目标只跑协议运行器并做"模型判据 + 按时率 + 阶段占比"（自己写自己的 dump，
+#   不与 run-pdcch-loop 争文件）；与手写基准的逐值对账在 proto_eval --ref 里。
+PROTO ?= nr_pdcch
+PROTO_DIR := $(ROOT)/build/proto/$(PROTO)
+
+run-proto-$(PROTO): all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc proto PROTO=$(PROTO)
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/proto_runner_$(PROTO).bin@0x80000000 \
+		--load $(PROTO_DIR)/stimulus.bin@0x80600000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80070000 --nwords 576 \
+		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_dump.txt \
+		--max-cycles 40000000
+	python3 $(ROOT)/proto/proto_eval.py --scenario $(PROTO) \
+		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_dump.txt
 
 run-dl-mod: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc

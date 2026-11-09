@@ -34,6 +34,7 @@ def read_target(path):
         "words_per_bank": grab("words_per_bank", 32),
         "imem_cycles": grab("max_cycles", 512),
         "pe_regs": grab("regs", 8),
+        "clock_hz": grab("clock_hz", 100000000),
     }
 
 

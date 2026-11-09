@@ -7,6 +7,10 @@
 
 name: gpcp-cgra-4x4-v1
 
+# SoC 时钟：周期 <-> 毫秒换算的唯一依据（docs/20 的"按时率"判据用它，
+# proto/emit.py 只从 plan 的 target 字段读，不自己写死）。
+clock_hz: 100000000
+
 array:
   rows: 4
   cols: 4                        # npes = rows * cols

@@ -1,23 +1,36 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check yaml-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam kernels
+.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check yaml-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam soc-run-proto-nr_pdcch kernels
 
 all: test
 
 # One-command acceptance: kernels + a quick SoC subset
 # ---- 协议描述层（docs/20）----------------------------------------------------
-# make proto-check : 静态检查（硬件无关 + 换厨房 + 落点），秒级
-# make proto PROTO=<name> : 完整流水（当前只到"生成 IR + 落点"，阶段 0 后半接运行器）
+# make proto-check : 静态检查（硬件无关 + 换厨房 + 落点 + 生成物），秒级
+# make proto PROTO=<name> : 完整流水（生成 -> 编译 -> 运行 -> 评估 -> 报告）
 proto-check:
 	python3 proto/check_hll.py proto/scenarios/*.py
 	python3 proto/compile.py --all
+	python3 proto/emit.py --all
 
 PROTO ?= nr_pdcch
 proto:
+	python3 proto/check_hll.py proto/scenarios/$(PROTO).py
 	python3 proto/compile.py --scenario $(PROTO)
+	python3 proto/emit.py --scenario $(PROTO)
+	@ref=$$(python3 proto/proto_eval.py --scenario $(PROTO) --ref-gate); \
+	if [ -n "$$ref" ]; then $(MAKE) -C sim/soc $$ref; fi
+	$(MAKE) -C sim/soc run-proto-$(PROTO)
+	@ref=$$(python3 proto/proto_eval.py --scenario $(PROTO) --ref-gate); \
+	if [ -n "$$ref" ]; then \
+	  python3 proto/proto_eval.py --scenario $(PROTO) \
+	    --dump sim/soc/build/proto_$(PROTO)_dump.txt --ref auto; \
+	fi
 
 proto-all:
+	python3 proto/check_hll.py proto/scenarios/*.py
 	python3 proto/compile.py --all
+	python3 proto/emit.py --all
 
 .PHONY: proto-check proto proto-all
 
@@ -124,6 +137,8 @@ soc-run-rach: ; $(MAKE) -C sim/soc run-rach
 soc-run-pucch: ; $(MAKE) -C sim/soc run-pucch
 # P4 MCS-driven downlink: 16QAM PDSCH
 soc-run-pdsch-16qam: ; $(MAKE) -C sim/soc run-pdsch-16qam
+# docs/20 阶段 0：协议运行器（场景 -> plan.h -> 运行 -> 评估）
+soc-run-proto-nr_pdcch: ; $(MAKE) -C sim/soc run-proto-nr_pdcch
 
 # B3: OpenSBI + Linux on the SoC
 linux:

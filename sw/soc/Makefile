@@ -177,6 +177,7 @@ $(BUILD)/pdcch_loop_bm.elf: pdcch_luts.h polar_node_prog.h \
 
 # link-e2e: PDCCH (polar) + PDSCH (LDPC) fused in one run -- needs both LUT sets
 $(BUILD)/link_e2e_bm.elf: pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h
+
 # SIB1: same verified PDCCH+PDSCH source, compiled for the SI-RNTI case
 $(BUILD)/sib1_bm.elf: link_e2e_bm.c start.S link.ld pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DSIB1 $(LDFLAGS) start.S link_e2e_bm.c -o $@
@@ -192,3 +193,29 @@ fft_butterfly_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_
 	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/fft_butterfly.yaml
 
 $(BUILD)/mimo_bm.elf: mmse_2x1_prog.h
+
+# ---- docs/20：协议基准（场景 -> plan.h -> 通用运行器）------------------------
+# plan.h / stimulus.bin / golden.json 全部由 proto/emit.py 生成；-I 指向场景目录，
+# 所以换场景只改 PROTO，不会把上一个场景的计划混进来。
+PROTO     ?= nr_pdcch
+PROTO_DIR := ../../build/proto/$(PROTO)
+
+proto: $(BUILD)/proto_runner_$(PROTO).bin
+
+$(PROTO_DIR)/plan.h: ../../proto/emit.py ../../proto/models/$(PROTO).py \
+		../../proto/compile.py ../../proto/lower.py ../../proto/hll.py \
+		../../proto/scenarios/$(PROTO).py
+	python3 ../../proto/compile.py --scenario $(PROTO)
+	python3 ../../proto/emit.py --scenario $(PROTO)
+
+$(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
+		$(PROTO_DIR)/plan.h pdcch_luts.h polar_node_prog.h \
+		polar_inword_s0_prog.h polar_inword_s1_prog.h polar_inword_s2_prog.h \
+		polar_inword_s3_prog.h polar_inword_s4_prog.h \
+		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
+		polar_word_d8_prog.h fft_stage_prog.h fft_block_prog.h | $(BUILD)
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) $(LDFLAGS) \
+		start.S proto_runner.c -o $@
+	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/proto_runner_$(PROTO).dis
+
+.PHONY: proto

@@ -43,12 +43,21 @@ GLOBAL_GLOBS = [
     "rtl/**/*.v", "rtl/**/*.sv", "rtl/**/*.vh",
     "sim/**/*.v", "rtl/**/*.svh", "sim/**/*.cpp", "sim/**/*.cc", "sim/**/*.h",
     "sim/**/*.py", "cgra/**/*.py", "cgra/**/*.v", "cgra/**/*.sv",
+    "cgra/target.yaml",          # 硬件真相：改它等于换芯片，全部失效
     "sw/soc/Makefile", "sw/soc/link.ld", "sw/soc/start.S",
     "sw/include/*.h", "sw/soc/*_prog.h", "sw/soc/pdcch_luts.h",
     "sim/soc/Makefile", "Makefile",
     "tools/cgra.py", "tools/verify.sh", "tools/verify_cache.py",
     "build/fft/twiddle.bin", "sim/soc/build/Vgpcp_soc",
 ]
+
+# Targets whose name is parameterized (`run-proto-$(PROTO)`) cannot be found by
+# the recipe parser above, so their inputs are listed explicitly. Keep this in
+# sync when a scenario gains a new model module.
+GATE_EXTRA = {
+    "run-proto-nr_pdcch": ["proto/**/*.py", "sw/soc/proto_runner.c",
+                           "sw/soc/pdcch_stages.inc"],
+}
 
 # Binary -> C source for the few targets whose binary is not named after its
 # source (they are compiled from a shared .c with -D switches).
@@ -103,7 +112,7 @@ def local_import_closure(scripts):
 
 def soc_gate_inputs(gate):
     """Parse that target's recipe out of sim/soc/Makefile."""
-    files = set()
+    files = set(expand(GATE_EXTRA.get(gate, [])))
     recipe = []
     inside = False
     for line in (ROOT / "sim/soc/Makefile").read_text().splitlines():

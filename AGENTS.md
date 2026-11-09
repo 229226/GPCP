@@ -68,7 +68,9 @@ python3 tools/sym_pc.py build/linux_boot.log                   # 用 vmlinux 给
 
 # 2) 协议描述层（docs/20）：静态检查 + 落点 + 换厨房测试（秒级，verify 的前置门）
 make proto-check                     # 期望：[ OK ] … 硬件无关检查通过 + 换厨房 IR 摘要一致
-make proto PROTO=nr_pdcch            # 单场景：IR + 每个 target 的 plan
+make proto PROTO=nr_pdcch            # 全流水：生成 -> 编译 -> 运行器 -> 评估 -> 报告
+                                     # 期望：[ OK ] 协议基准 nr_pdcch：判据全过，与手写基准等价
+                                     #       报告 build/proto/nr_pdcch/report.md
 
 # 3) 只跑某个基准
 env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
@@ -102,7 +104,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-pdsch-iter` | **P1 整链**：BG2(Zc=20) 一个码块 **8 次迭代全在硬件上**（42 CN + 52 BN/迭代），`check_pdsch_iter.py` **1040/1040 硬判决**与纯 min-sum 一致；**752 次阵列运行 / 1556 次 DMA / 内核 1,525,033 周期**（≈191k/迭代），仿真总周期 1,981,113（约 3 分钟，只在 `verify.sh full` 里）。三步优化 2.04×（`docs/09` §5.3），含 CPU 成本模型（写 4 拍/字、20 字 DMA 74 拍/次、IMEM 装载 1,825 拍）；旋转为什么挪不进硬件、以及 RTL 方案估算 2.6× 见 §5.4/§5.5 |
 | `run-pdsch-full` | **PDSCH 整链（样本进 → TB 出）**：`tools/pdsch_full_plan.py` 生成 2 符号 CP+4096 IFFT 的时域样本（平坦增益 + AWGN），SoC 自己做 FFT → RE 提取 → **38.211 7.4.1.1 Gold DMRS 逐符号 LS 估计**（`c_init`=0x120002/0x180002）→ 均衡 → 720 个 QPSK 软 LLR → **38.212 5.4.2.2 反交织** → 38.211 Gold 解扰（`c_init` = n_RNTI<<15）→ 解速率匹配（720→1040，跳过 16 filler + 40 打孔）→ `>>8` 定标 → 复用 `run-pdsch-iter` 的 8 次纯 min-sum 迭代 → CRC24A → 80 bit TB。`check_pdsch_full.py` 硬门 = **DMRS `c_init` + LLR 符号逐位 + 高 SNR 幅值容差 + 1040/1040 硬判决 + CRC + 80/80 TB**；20 dB/seed 1 与 0 dB/seed 3 均通过，0 errors、**3,064,784 / 3,067,508 周期（20 / 0 dB）、976 次阵列运行、1556 次 DMA**。20 dB 下 `chan est` 硬件 `[32,16,31,15]` 与模型逐值相同、bin0 `yw=(2304,6320)` vs 模型 `(2305,6325)`。`make -C sim/soc run-pdsch-full SNR=<db> SEED=<n>` 可换 SNR 与种子；只在 `verify.sh full` 里 |
 | `run-pdcch` | **PDCCH/DCI 盲检（硬件）**：1 符号 TD → 4096 FFT → 216 RE / 432 LLR → 38.211 Gold 解扰（`c_init`=N_ID=200）→ **E=432 逆速率匹配 LUT**（`pdcch_luts.h`）→ **CGRA Polar SC（K=56，复用 22 拍 f/g 节点微码）** → 5 个 RNTI 候选 CRC24C 去掩码盲检 → 32 bit DCI（MCS/RV/NDI/HARQ PID/RB/TPC）。12 dB 与 8 dB 两点均 `[OK]`，0 errors、**1,327,171 周期 / 1232 次阵列运行**，LLR 与浮点模型误差 <1%、56/56 信息位、32/32 DCI。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
-| `run-pdcch-loop` | **G2/B4 PDCCH 自环（单程序，无宿主中转）**：B3 发射链（polar 9 级阵列）→ 216 QPSK 频域格点 → **CGRA IFFT（共轭技巧）+ CP** → TD 落 RAM → **A4 接收链**（FFT → 432 LLR → 逆 REG/CCE → 解扰 → 逆速率匹配 → polar SC 阵列 → RNTI 盲检）。判据：e_sc 432/432 与 `nr_pdcch_tx` 逐位、**DCI 32/32**、RNTI 0x1234 从 5 候选盲检出、CRC24C 通过、**432/432 LLR 符号正确（\|abs\| 1904~2064）**；**1353 次阵列运行 / 1,897,468 周期**。踩坑记录：`dma_tgt` 曾跨传输粘滞（RTL 已修）、WR 写缓冲排空、收发两侧 REG 交织配对 |
+| `run-pdcch-loop` | **G2/B4 PDCCH 自环（单程序，无宿主中转）**：B3 发射链（polar 9 级阵列）→ 216 QPSK 频域格点 → **CGRA IFFT（共轭技巧）+ CP** → TD 落 RAM → **A4 接收链**（FFT → 432 LLR → 逆 REG/CCE → 解扰 → 逆速率匹配 → polar SC 阵列 → RNTI 盲检）。判据：e_sc 432/432 与 `nr_pdcch_tx` 逐位、**DCI 32/32**、RNTI 0x1234 从 5 候选盲检出、CRC24C 通过、**432/432 LLR 符号正确（\|abs\| 1904~2064）**；**1353 次阵列运行 / 1,905,137 周期**（2026-11-09 把阶段实现抽到 `pdcch_stages.inc` 与协议运行器共用，+0.4%）。踩坑记录：`dma_tgt` 曾跨传输粘滞（RTL 已修）、WR 写缓冲排空、收发两侧 REG 交织配对 |
+| `run-proto-nr_pdcch` | **协议基准阶段 0（docs/20）**：`make proto PROTO=nr_pdcch` 一键 —— 场景 → IR/落点 → `plan.h` + `stimulus.bin` + `golden.json` → **通用运行器按阶段表跑**（与 `run-pdcch-loop` **共用同一份** `pdcch_stages.inc`）→ 判据/按时率/阶段占比/差距表。**1,905,916 周期 / 1353 阵列 / 5600 DMA**，与手写基准差 **0.04%**（±1% 门），e_sc 432/432、DCI 32/32、RNTI+CRC 全对；报告 `build/proto/nr_pdcch/report.md`。差距表暴露 3 处落点估算偏差（FFT 4→112、SC 128→1120、`estimate` 里 112 次阵列），留给阶段 4 自动搜索；单次到达的预算只报不判（1.9 M 周期 = 1 ms 预算的 19×） |
 | `run-pdsch-loop` | **G2/B5 PDSCH 自环（单程序，G2 验收的后半）**：TB → CRC24A → **LDPC BG2/Zc20 编码**（CVA6）→ 速率匹配 → 加扰 → 交织 → QPSK → **38.211 Gold DMRS + 240 RE/符号** → **CGRA IFFT + CP** → 2 符号 TD → 接收链（FFT → 逐符号 LS → 均衡 → 720 LLR → 解交织 → 解扰 → 解速率匹配 → **8 次 min-sum LDPC 阵列迭代**）→ CRC24A → TB。判据：**1040/1040 硬判决 == 发射码字**、**TB 80/80 + CRC ok**、**720/720 LLR 符号（\|LLR\| 31232~33024 ≈ 16×2000）**、LS 估计 `(16,0)/(15,0)` = H_SCALE、DMRS `c_init` 0x120002/0x180002；**1200 次阵列运行 / 4,021,975 周期 / 1556 DMA**。判据坑：LLR 符号 anchor 必须放在**解扰之前**（解扰后对应的是 `e_bits`，拿它比 `e_sc` 会假报 ~50%） |
 | `run-pdsch-harq` | **HARQ 两次传输**：同一 `pdsch_full_bm.c` 用 `-DHARQ_TX=2` 编译，rv=0/2 对应 k0=0/492；两传输各自 FFT→LS→LLR→反交织→解扰后按循环缓冲坐标 **Chase 合并**，再喂 LDPC。20 dB 下 0 errors、**4,187,691 周期 / 1200 次阵列运行 / 1556 DMA**，解速率匹配 LLR 从单次的 ±612 变 ±1229，1040/1040 硬判决、80/80 TB；单传输 `run-pdsch-full` 回归不变。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-pusch` | **PUSCH 整链（上行，样本进 → TB 出）**：`tools/nr_pusch.py` 生成 2 符号 CP+4096 IFFT 时域样本（38.211 6.4.1.1 PUSCH Gold DMRS，`c_init`=`0x48d22468`/`0x11a42468`，`n_ID`=n_RNTI），SoC 自己做 FFT → RE → DMRS LS → 均衡 → 720 QPSK LLR → 反交织 → 解扰 → 解速率匹配 → 8 次 min-sum LDPC → CRC24A → 80 bit TB。20 dB/seed 1：0 errors、**3,070,613 周期 / 976 次阵列运行 / 1556 DMA**、1040/1040 硬判决、CRC ok、TB 80/80、DMRS `c_init` 与模型逐值一致。默认无变换预编码（CP-OFDM），TD 布局与 `run-pdsch-full` 同构；结果区在 `0x80070000`（`.bss` 尾部到 0x8001_1638，沿用 0x8001_0000 会压到 FFT 程序尾，属侥幸可用，故主动上移）；`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
@@ -150,12 +153,13 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sim/cgra/` | 纯 CGRA 台架（AXI 从机模型） | `tb_cgra.cpp`：`--prog/--dma-mem/--dma-ops/--ring-desc/--spad-dump` |
 | `sim/soc/` | SoC 台架 + 所有 `run-*` 目标 | `Makefile`（每个目标 = 一条 load + dump + check） |
 | `sw/include/` | `gpcp_layout.h`（**编译器生成的布局契约**：几何/位宽/命名区域）、`ldpc_enc_tables.h`（**B1**：4 个 (BG,i_LS) 编码表 + A_V/B_V/RB）、裸机 ABI `gpcp_cgra.h`（spad 算术引用契约）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
-| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c`、`pbch_pack_bm.c`（**A2**：纯 CVA6 载荷装配）、`ifft_bm.c`（**A3**：共轭 IFFT + CP）、`ssb_tx_bm.c`（**A4**：4 符号 SSB 发射）、`overhead_bm.c`（**T0**：阵列 run 开销台架）、`ldpc_enc_bm.c`（**B1**：CVA6 LDPC 编码器）、`dl_mod_bm.c`（**B2**：下行调制链）、`pdcch_tx_bm.c`（**B3**：PDCCH 发射链） |
+| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c`、`pbch_pack_bm.c`（**A2**：纯 CVA6 载荷装配）、`ifft_bm.c`（**A3**：共轭 IFFT + CP）、`ssb_tx_bm.c`（**A4**：4 符号 SSB 发射）、`overhead_bm.c`（**T0**：阵列 run 开销台架）、`ldpc_enc_bm.c`（**B1**：CVA6 LDPC 编码器）、`dl_mod_bm.c`（**B2**：下行调制链）、`pdcch_tx_bm.c`（**B3**：PDCCH 发射链）、`proto_runner.c`（**docs/20**：按 plan.h 阶段表执行的通用运行器） |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
 | `sw/soc/ldpc_enc.inc` | 38.212 LDPC 编码核心（B1 抽出，B2 复用） | `acc_info()`、`ldpc_encode()`、`ldpc_syndrome()` |
 | `sw/soc/gold_seq.inc` | 38.211 5.2.1 Gold 序列（A2 抽出，B2 复用） | `gold_seq(c_init, len, out)` |
+| `sw/soc/pdcch_stages.inc` | **PDCCH 十个阶段实现**（docs/20 §2 的动词顺序），被手写基准 `pdcch_loop_bm.c` 与协议运行器 `proto_runner.c` **共用**；`PS_TRACK_STATS` 打开才统计 busy/DMA（参照基准的周期保持逐值不变） | `ps_setup()` / `ps_transport_block()` … `ps_decode()` |
 | `tools/` | 模型与检查 | `cgra.py`（ISA 编码与阵列几何**由 `cgra/target.yaml` 派生**，对外提供 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配 + **A2 发射装配黄金模型** `pbch_pack()` / `dump-pack`，`selftest-pack` 与 `ssb_plan`/`nr_pdcch` 交叉对账）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_pbch_pack.py`（A2 逐段对账）、`nr_ofdm_tx.py`（**A3/A4** 发射波形黄金模型：单/4 符号共轭 TD、`selftest-ssb-tx`）、`check_ifft.py`（A3 逐值对账）、`check_ssb_tx.py`（A4 逐值对账 + 导出自环 TD）、`check_overhead.py`（T0 线性回归）、`gen_ldpc_enc_tables.py`（B1 表生成）、`check_ldpc_enc.py`（B1 逐位对账）、`nr_dl_mod.py`（**B2** 下行调制黄金模型 + 输入 TD）、`check_dl_mod.py`（B2 逐段对账）、`nr_pdcch_tx.py`（**B3** PDCCH 发射黄金模型 + 输入 TD）、`check_pdcch_tx.py`（B3 逐段对账）、`check_yaml_coupling.py`（**YAML/C 解耦门禁**）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
-| `proto/` | **协议描述层（docs/20）**：`hll.py` 的 15 个协议动词、`check_hll.py` 的硬件无关检查、`lower.py` 的落点与可行性、`scenarios/` 的场景文件、`targets/whatif-8x8.yaml` 换厨房配置 | `scenario()` / `make proto-check` |
+| `proto/` | **协议描述层（docs/20）**：`hll.py` 的 15 个协议动词、`check_hll.py` 的硬件无关检查、`lower.py` 的落点与可行性、`emit.py`（`plan.h` + `stimulus.bin` + `golden.json`）、`proto_eval.py`（判据/按时率/阶段占比/差距表/等价对账）、`models/` 每个场景的激励与黄金、`scenarios/` 的场景文件、`targets/whatif-8x8.yaml` 换厨房配置 | `scenario()` / `make proto-check` / `make proto PROTO=nr_pdcch` |
 | `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_{bn,cn}_prog.py`（生成 `sw/soc/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py`；`target.yaml`（硬件真相：几何/ISA/命名区域）与 `tools/target.py`（逻辑地址 → flat 的唯一换算层）、`tools/image_spec.py`、`tools/fft_image.py` |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
@@ -505,9 +509,19 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 27. **协议描述层：新 benchmark 必须走 `proto/`（2026-11-09 立规，docs/20）**：
     场景文件里**只准**出现 docs/20 §2 的 15 个动词与协议量；出现 `spad/bank/page/pe/imem/cycles/
     dma/tile` 等词、`while`、自定义函数、第三方 import，`make proto-check` 直接失败（已进
-    verify 前置门）。硬件决定权只在 `proto/lower.py` + `cgra/target.yaml`：**不要用改检查器
-    的方式绕过禁令**，只能改 lowering 让它自动决定。新动词必须先提案（docs/20 §8），
-    一次提交只加一个，并附该动词的 golden 对拍。
+    verify 前置门，且前置门现在还会跑 `emit --all`）。硬件决定权只在 `proto/lower.py` +
+    `cgra/target.yaml`：**不要用改检查器的方式绕过禁令**，只能改 lowering 让它自动决定。
+    新动词必须先提案（docs/20 §8），一次提交只加一个，并附该动词的 golden 对拍。
+    * **阶段 0 已闭环（同日）**：`proto/emit.py`（plan.h/stimulus.bin/golden.json）、
+      `sw/soc/proto_runner.c`（按阶段表执行，CPU 段与手写基准共用
+      `sw/soc/pdcch_stages.inc`）、`proto/proto_eval.py`（判据 + 按时率 + 阶段占比 +
+      差距表 + 与 `run-pdcch-loop` 的等价对账）。`make proto PROTO=nr_pdcch`：
+      **1,905,916 周期 vs 手写 1,905,137（Δ0.04%）**、e_sc 432/432、DCI 32/32、RNTI+CRC；
+      报告 `build/proto/nr_pdcch/report.md`。真实时钟 100 MHz 已写进 `cgra/target.yaml`
+      的 `clock_hz`（周期↔毫秒的唯一来源），预算换算只在 `proto/emit.py` 读它。
+    * **差距表是资产不是缺陷**：FFT 计划 4 次实测 112 次、polar SC 计划 128 次实测 1120 次、
+      `estimate` 被判成纯标量却含 112 次阵列工作 —— 这些留给 docs/20 §7 的阶段 4
+      （tiling/落点自动搜索），**不要手改 plan 去凑**。
 
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。

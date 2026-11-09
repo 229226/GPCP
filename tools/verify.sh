@@ -91,7 +91,7 @@ declare -A MODEL_CMD=(
 SOCCORE_QUICK="run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
 # run-rach is the single longest gate (~9 min, 11.8 M cycles); it lives in the
 # `slow` tier so the default full run stays ~10-12 min.
-SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot"
+SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot run-proto-nr_pdcch"
 SLOW_EXTRA="run-rach"
 
 MODEL_SET=()
@@ -145,6 +145,11 @@ compute_changed() {
             tools/nr_pdcch_reg.py)  add_model model-reg; add_soc run-pdcch-tx ;;
             sw/soc/ldpc_enc.inc|sw/soc/gold_seq.inc)
                 add_soc run-ldpc-enc run-pbch-pack run-dl-mod ;;
+            sw/soc/pdcch_stages.inc)
+                add_soc run-pdcch-loop run-proto-nr_pdcch ;;
+            sw/soc/proto_runner.c)
+                add_soc run-proto-nr_pdcch ;;
+            proto/*)                add_soc run-proto-nr_pdcch ;;
             tools/nr_mimo.py)       add_model model-mimo ;;
             tools/nr_mac.py)        add_model model-mac model-link model-rach model-conn ;;
             tools/pdsch_full_plan.py) add_model model-harq; add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam ;;
@@ -235,8 +240,14 @@ if ! PROTO_C_OUT=$(cd "$ROOT" && python3 proto/compile.py --all 2>&1); then
     echo "verify aborted: 协议场景无法落点（docs/20 §6）" >&2
     exit 1
 fi
+if ! PROTO_E_OUT=$(cd "$ROOT" && python3 proto/emit.py --all 2>&1); then
+    printf '%s\n' "$PROTO_E_OUT" | tail -20
+    echo "verify aborted: 协议场景生成不了 plan.h / 激励（docs/20 §6 第 4 步）" >&2
+    exit 1
+fi
 printf '%s\n' "$PROTO_OUT" | sed -n '1p;$p'
 printf '%s\n' "$PROTO_C_OUT" | grep -E "换厨房|FAIL" | tail -2
+printf '%s\n' "$PROTO_E_OUT" | grep -E "params hash|plan.h" | tail -2
 echo
 
 if [ "$MODE" = changed ] && [ ${#MODEL_SET[@]} -eq 0 ] &&
