@@ -129,7 +129,7 @@ def lower(ir, target):
                     iters = nd["params"].get("max_iter", 8)
                     st["array_runs"] = iters * 94
 
-        elif op in ("channel", "estimate", "equalise_demap", "extract"):
+        elif op in ("channel", "estimate", "equalise_demap", "extract", "received"):
             st["where"] = "control-core"
 
         plan["stages"].append(st)

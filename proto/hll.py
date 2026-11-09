@@ -100,6 +100,11 @@ class Scenario:
     def transport_block(self, bits, rnti=None):
         return self._node("transport_block", [], "tb", length=bits, rnti=rnti)
 
+    def received(self, kind="td", length=0, **attrs):
+        """接收波形来自激励（外部设备已经发过），不是本程序算出来的。
+        CSI/PRACH/PUCCH/PUSCH/SSB/MIMO 这些接收类基准都从这里开始。"""
+        return self._node("received", [], "wave", kind=kind, length=length, **attrs)
+
     def encode(self, x, scheme, **kw):
         return self._node("encode", [x], "cw", scheme=scheme,
                           length=kw.pop("bits", self.derived.get("e_bits", 0)), **kw)

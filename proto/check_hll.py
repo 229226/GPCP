@@ -20,7 +20,7 @@ BANNED_IDENTS = (
 
 # docs/20 §2 的动词（方法名）
 VERBS = {
-    "cfg", "traffic", "transport_block", "encode", "modulate", "dmrs",
+    "cfg", "traffic", "transport_block", "received", "encode", "modulate", "dmrs",
     "map_to_grid", "extract", "ofdm_modulate", "ofdm_demodulate", "channel",
     "estimate", "equalise_demap", "decode", "expect", "budget",
 }
