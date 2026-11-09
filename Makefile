@@ -1,6 +1,6 @@
 # GPCP top-level convenience targets
 
-.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check yaml-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam soc-run-proto-nr_pdcch soc-run-proto-nr_pdsch soc-run-proto-nr_csi kernels
+.PHONY: all test build clean verify verify-smart verify-full verify-slow verify-changed devcheck devreport handprog-check yaml-check snr-sweep snr-sweep-hw sw-check soc soc-run soc-run-dma soc-run-irq soc-run-ring soc-run-rxchain soc-run-fft soc-run-sync soc-run-sss soc-run-polar soc-run-ssb soc-run-ssbfft soc-run-fftprobe soc-run-slot soc-run-ssb-slot linux soc-run-prach soc-run-rach soc-run-pucch soc-run-pdsch-16qam soc-run-proto-nr_pdcch soc-run-proto-nr_pdsch soc-run-proto-nr_csi soc-run-proto-nr_prach soc-run-proto-nr_pucch kernels
 
 all: test
 
@@ -141,6 +141,8 @@ soc-run-pdsch-16qam: ; $(MAKE) -C sim/soc run-pdsch-16qam
 soc-run-proto-nr_pdcch: ; $(MAKE) -C sim/soc run-proto-nr_pdcch
 soc-run-proto-nr_pdsch: ; $(MAKE) -C sim/soc run-proto-nr_pdsch
 soc-run-proto-nr_csi: ; $(MAKE) -C sim/soc run-proto-nr_csi
+soc-run-proto-nr_prach: ; $(MAKE) -C sim/soc run-proto-nr_prach
+soc-run-proto-nr_pucch: ; $(MAKE) -C sim/soc run-proto-nr_pucch
 
 # B3: OpenSBI + Linux on the SoC
 linux:

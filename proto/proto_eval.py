@@ -246,8 +246,11 @@ def main(argv):
     need = 0
     for _, off, _k in spec["scalars"]:
         need = max(need, off + 1)
-    for _, off, key, _note in spec["bits"]:
-        need = max(need, off + len(gold["bits"][key]))
+    bits_len = {}
+    for name, off, key, _note, *rest in spec["bits"]:
+        n = len(gold["bits"][key]) if key else int(rest[0])
+        bits_len[key or name] = (off, n)
+        need = max(need, off + n)
     w = read_dump(a.dump)
     if len(w) < base + need:
         print("  dump too short: %d words（至少要 %d）" % (len(w), base + need))
@@ -301,11 +304,15 @@ def main(argv):
         rep.add(name, want_s, got_s, ok, ("±%d" % tol) if tol else "")
 
     bits_seen = {}
-    for name, off, key, note in spec["bits"]:
-        want = gold["bits"][key]
-        got_b = w[base + off:base + off + len(want)]
-        bits_seen[key] = got_b
-        rep.bits(name, got_b, want, note)
+    for name, off, key, note, *rest in spec["bits"]:
+        n = len(gold["bits"][key]) if key else int(rest[0])
+        got_b = w[base + off:base + off + n]
+        if key:
+            bits_seen[key] = got_b
+            rep.bits(name, got_b, gold["bits"][key], note)
+        else:
+            # 模型不给这一组（例如 PE 分部），只与手写基准逐值对账
+            bits_seen[name] = got_b
 
     # ---- 平台锚点：阵列运行 / DMA / 忙拍 ----
     # 纯接收场景的 FFT 描述符不走 DMA API（ssb_fft.inc 自己编排），模型的
@@ -362,22 +369,33 @@ def main(argv):
             ok = (r[idx] == g)
             ref_rows.append((name, r[idx], g, "OK" if ok else "FAIL"))
             rep.add("参照 %s" % name, r[idx], g, ok)
-        for name, off, key in spec["ref_bits"]:
-            r0 = r[off:off + len(gold["bits"][key])]
-            g0 = bits_seen[key]
+        for ent in spec["ref_bits"]:
+            name, off, key = ent[0], ent[1], ent[2]
+            nbits = ent[3] if len(ent) > 3 else None
+            n = nbits or bits_len[key][1]
+            r0 = r[off:off + n]
+            g0 = bits_seen[key or name]
             bad = sum(1 for x, y in zip(r0, g0) if x != y) + abs(len(r0) - len(g0))
             ref_rows.append((name, "%d bit" % len(r0), "%d/%d 不同" % (bad, len(r0)),
                              "OK" if bad == 0 else "FAIL"))
             rep.add("参照 %s" % name, "逐位一致", "%d/%d 不同" % (bad, len(r0)),
                     bad == 0)
-        d = abs(cycles - r[2]) / float(r[2] or 1)
-        tol = float(getattr(model, "CYCLES_TOL", CYCLES_TOL))
-        ok = d <= tol
-        ref_rows.append(("周期", r[2], cycles, "OK（Δ %.2f%%）" % (100 * d) if ok
-                         else "FAIL（Δ %.2f%%）" % (100 * d)))
-        rep.add("参照周期（±%.0f%%）" % (tol * 100), "±%.0f%%" % (tol * 100),
-                "Δ %.2f%%" % (100 * d), ok)
-        rep.eq("参照阵列运行数", r[3], w[3])
+        # 有些基准的结果区没有周期/运行数字段（PRACH/PUCCH 只报 runs/DMA），
+        # 由模型的 ref_stats 声明对应下标；None 表示不比。
+        rs = spec.get("ref_stats", {"cycles": 2, "runs": 3})
+        if rs.get("cycles") is not None:
+            d = abs(cycles - r[rs["cycles"]]) / float(r[rs["cycles"]] or 1)
+            tol = float(getattr(model, "CYCLES_TOL", CYCLES_TOL))
+            ok = d <= tol
+            ref_rows.append(("周期", r[rs["cycles"]], cycles,
+                             "OK（Δ %.2f%%）" % (100 * d) if ok
+                             else "FAIL（Δ %.2f%%）" % (100 * d)))
+            rep.add("参照周期（±%.0f%%）" % (tol * 100), "±%.0f%%" % (tol * 100),
+                    "Δ %.2f%%" % (100 * d), ok)
+        else:
+            ref_rows.append(("周期", "该基准不统计", cycles, "—"))
+        if rs.get("runs") is not None:
+            rep.eq("参照阵列运行数", r[rs["runs"]], w[3])
 
     report = os.path.join(pdir, "report.md")
     plan = dict(plan)
@@ -394,8 +412,14 @@ def main(argv):
           % (cycles, budget, "，按时" if (not budget or cycles <= budget) else "，超时",
              w[3], w[4], w[5]))
     if a.ref:
-        print("与参照基准：周期差 %.2f%%，锚点逐值对账见报告"
-              % (100.0 * abs(cycles - read_dump(a.ref)[2]) / (read_dump(a.ref)[2] or 1)))
+        rs = spec.get("ref_stats", {"cycles": 2, "runs": 3})
+        if rs.get("cycles") is not None:
+            rref = read_dump(a.ref)
+            print("与参照基准：周期差 %.2f%%，锚点逐值对账见报告"
+                  % (100.0 * abs(cycles - rref[rs["cycles"]])
+                     / (rref[rs["cycles"]] or 1)))
+        else:
+            print("与参照基准：该基准不统计周期，锚点逐值对账见报告")
     print("报告：%s" % os.path.relpath(report, _ROOT))
 
     if not rep.ok:

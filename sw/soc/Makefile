@@ -46,7 +46,7 @@ $(BUILD)/pdsch_bg1_bm.elf: pdsch_cn20_prog.h ../include/ldpc_bg1.h
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/pdsch_bg1_bm.dis
 
 # PRACH 相关微码由编译器生成（cgra/kernels/prach_corr.yaml）
-$(BUILD)/prach_bm.elf: prach_corr_prog.h
+$(BUILD)/prach_bm.elf: prach_corr_prog.h zc_corr.inc
 
 # 编译器生成的 PRACH 相关微码（cgra/kernels/prach_corr.yaml）
 prach_corr_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/kernel_spec.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/prach_corr.yaml
@@ -182,7 +182,7 @@ $(BUILD)/link_e2e_bm.elf: pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h
 $(BUILD)/sib1_bm.elf: link_e2e_bm.c start.S link.ld pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DSIB1 $(LDFLAGS) start.S link_e2e_bm.c -o $@
 # PUCCH format 0: reuses the PRACH correlation microcode header
-$(BUILD)/pucch_bm.elf: pucch_bm.c start.S link.ld prach_corr_prog.h | $(BUILD)
+$(BUILD)/pucch_bm.elf: pucch_bm.c start.S link.ld prach_corr_prog.h zc_corr.inc | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S pucch_bm.c -o $@
 
 # 真实 kernel tile：由 L1/L2 编译器生成（mmse_2x1 供 run-mimo 的 b = H^H y）
@@ -216,7 +216,8 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
 		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
 		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h csi_cqi_tab.h \
-		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc ssb_fft.inc \
+		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc zc_corr.inc \
+		prach_corr_prog.h prach_corr_layout.h ssb_fft.inc \
 		fft_stage_prog.h fft_block_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) \
 		-DPROTO_OPS_INC='"$(PROTO)_ops.inc"' $(LDFLAGS) \
