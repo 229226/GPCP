@@ -139,6 +139,20 @@ def lower(ir, target):
             st["array_runs"] = int(nd["params"].get("hypotheses", 1))
             st["notes"].append("%d 个候选假设，每个一次阵列运行" % st["array_runs"])
 
+        elif op == "mimo_equalise":
+            # 每层每 RE 出 qm 个硬判比特；mmse_2x1 tile 一次算 n_pes 个 RE、
+            # 一次运行只做一个层，所以运行数 = ceil(RE/n_pes) * 层数。
+            qm = int(nd["params"].get("qm") or 2)
+            layers = int(nd["params"].get("layers", 2))
+            nbits = nd.get("length") or 0
+            nre = max(1, nbits // max(1, qm * layers))
+            tiles = (nre + target["n_pes"] - 1) // target["n_pes"]
+            st["where"] = "array"
+            st["impl"] = "mmse_2x1"
+            st["array_runs"] = tiles * layers
+            st["notes"].append("%d 个数据 RE / %d 层，tile 每次 %d 个 RE"
+                               % (nre, layers, target["n_pes"]))
+
         elif op in ("channel", "estimate", "equalise_demap", "extract", "received",
                     "measure"):
             st["where"] = "control-core"

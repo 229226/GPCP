@@ -22,8 +22,8 @@ BANNED_IDENTS = (
 VERBS = {
     "cfg", "traffic", "transport_block", "received", "encode", "modulate", "dmrs",
     "correlate", "map_to_grid", "extract", "measure", "ofdm_modulate",
-    "ofdm_demodulate", "channel", "estimate", "equalise_demap", "decode",
-    "expect", "budget",
+    "ofdm_demodulate", "channel", "estimate", "equalise_demap", "mimo_equalise",
+    "decode", "expect", "budget",
 }
 ALLOWED_CALLS = {"scenario"} | VERBS
 ALLOWED_BUILTINS = {"len", "min", "max", "range", "int", "bool", "float", "str"}
