@@ -124,10 +124,10 @@ $(BUILD)/pdsch_full_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h
 # G2/B5 PDSCH self-loop: 收发两侧都在一个程序里（编码表 + CN/BN 微码 + FFT 镜像）
 $(BUILD)/pdsch_loop_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h ../include/ldpc_enc_tables.h \
 		fft_stage_prog.h fft_block_prog.h
-$(BUILD)/pusch_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h
+$(BUILD)/pusch_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h pusch_stages.inc
 
 # DFT-s-OFDM variant: 360-point IDFT deprecoding, integer Q20 table.
-$(BUILD)/pusch_tp_bm.elf: pusch_bm.c start.S link.ld pusch_idft_tab.h pdsch_cn_prog.h pdsch_bn_prog.h | $(BUILD)
+$(BUILD)/pusch_tp_bm.elf: pusch_bm.c start.S link.ld pusch_idft_tab.h pusch_stages.inc pdsch_cn_prog.h pdsch_bn_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -DTP $(LDFLAGS) start.S pusch_bm.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/pusch_tp_bm.dis
 
@@ -217,6 +217,7 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
 		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h csi_cqi_tab.h \
 		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc zc_corr.inc mimo_stages.inc \
+		pusch_stages.inc \
 		prach_corr_prog.h prach_corr_layout.h mmse_2x1_prog.h ssb_fft.inc \
 		fft_stage_prog.h fft_block_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) \
