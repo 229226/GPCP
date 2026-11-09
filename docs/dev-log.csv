@@ -54,3 +54,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-09,,,30,microcode,infra,布局契约：layout_contract.py 生成 1 全局 + 33 kernel 契约，C 侧 spad 地址全部改引用宏,8978198,measured,34 个 prog.h 逐字不变；全量重编 39 bin；C 侧 0 裸坐标/232 契约引用；注入违例 exit=1；换 target W32→64 契约自动重算；verify-full 58/0；minutes 实测墙钟，人做估约 120 min
 2026-11-09,,,40,sw,infra,A3 OFDM IFFT+CP 落地（共轭技巧零新 kernel）：run-ifft 单符号逐值 0 差,65f594a,measured,8192 raw+8768 TX 字 0 差；selftest-ifft 回环 239 RE 0 符号错；217098 周期/112 runs；verify-full 59/0；minutes 实测墙钟，人做估约 120 min
 2026-11-09,,,55,sw,infra,T0 阵列 run 开销台架 + A4 四符号 SSB 硬件自环（G1 收口）,34023a7,measured,T(c)=32.0+1.0045c R²=0.99966；4 符号 35072 字 0 差 → MIB 32/32；verify-full 61/0/522s；minutes 实测墙钟，人做估约 180 min
+2026-11-09,,,40,sw,infra,B1 38.212 LDPC 编码器落 CVA6（BG1/BG2 × Zc=20/64 逐位 + syndrome 0）,5fda5fd,measured,四组合全绿；实测 BG1/Zc64 427k 周期（4.27 ms，比 50 µs 估大 8 倍）；verify-full 62/0/526s；minutes 实测墙钟，人做估约 120 min
