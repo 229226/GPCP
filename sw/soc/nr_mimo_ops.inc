@@ -11,11 +11,11 @@
 #include "mimo_stages.inc"
 
 static const proto_op_t proto_ops[] = {
-    { "received",        ms_received        },
-    { "dmrs",            ms_dmrs            },
-    { "ofdm_demodulate", ms_ofdm_demodulate },
-    { "estimate",        ms_estimate        },
-    { "mimo_equalise",   ms_mimo_equalise   },
+    { "received", 0, ms_received },
+    { "dmrs", 0, ms_dmrs },
+    { "ofdm_demodulate", 0, ms_ofdm_demodulate },
+    { "estimate", 0, ms_estimate },
+    { "mimo_equalise", 0, ms_mimo_equalise },
 };
 
 #define N_OPS (sizeof(proto_ops) / sizeof(proto_ops[0]))

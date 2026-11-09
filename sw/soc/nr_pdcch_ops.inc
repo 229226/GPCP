@@ -25,16 +25,16 @@
 #include "pdcch_stages.inc"
 
 static const proto_op_t proto_ops[] = {
-    { "transport_block",  ps_transport_block  },
-    { "encode",           ps_encode           },
-    { "modulate",         ps_modulate         },
-    { "dmrs",             ps_dmrs             },
-    { "map_to_grid",      ps_map_to_grid      },
-    { "ofdm_modulate",    ps_ofdm_modulate    },
-    { "channel",          ps_channel          },
-    { "estimate",         ps_estimate         },
-    { "equalise_demap",   ps_equalise_demap   },
-    { "decode",           ps_decode           },
+    { "transport_block", 0, ps_transport_block },
+    { "encode", 0, ps_encode },
+    { "modulate", 0, ps_modulate },
+    { "dmrs", 0, ps_dmrs },
+    { "map_to_grid", 0, ps_map_to_grid },
+    { "ofdm_modulate", 0, ps_ofdm_modulate },
+    { "channel", 0, ps_channel },
+    { "estimate", 0, ps_estimate },
+    { "equalise_demap", 0, ps_equalise_demap },
+    { "decode", 0, ps_decode },
 };
 
 #define N_OPS (sizeof(proto_ops) / sizeof(proto_ops[0]))

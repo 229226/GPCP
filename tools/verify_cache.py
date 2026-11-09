@@ -71,6 +71,9 @@ GATE_EXTRA = {
     "run-proto-nr_pusch": ["proto/**/*.py", "sw/soc/proto_runner.c",
                            "sw/soc/pusch_stages.inc", "sw/soc/nr_pusch_ops.inc",
                            "sw/soc/ldpc_enc.inc"],
+    "run-proto-nr_ssb": ["proto/**/*.py", "sw/soc/proto_runner.c",
+                         "sw/soc/ssb_stages.inc", "sw/soc/nr_ssb_ops.inc",
+                         "sw/soc/ssb_fft.inc", "tools/ssb_fid_luts.h"],
 }
 
 # Binary -> C source for the few targets whose binary is not named after its

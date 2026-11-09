@@ -10,10 +10,10 @@
 #include "csi_stages.inc"
 
 static const proto_op_t proto_ops[] = {
-    { "received",        cs_received        },
-    { "dmrs",            cs_dmrs            },
-    { "ofdm_demodulate", cs_ofdm_demodulate },
-    { "measure",         cs_measure         },
+    { "received", 0, cs_received },
+    { "dmrs", 0, cs_dmrs },
+    { "ofdm_demodulate", 0, cs_ofdm_demodulate },
+    { "measure", 0, cs_measure },
 };
 
 #define N_OPS (sizeof(proto_ops) / sizeof(proto_ops[0]))

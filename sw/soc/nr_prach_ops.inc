@@ -20,9 +20,9 @@ static int zc_correlate_all(void)
 }
 
 static const proto_op_t proto_ops[] = {
-    { "received",  zc_received  },
-    { "dmrs",      zc_dmrs      },
-    { "correlate", zc_correlate_all },
+    { "received", 0, zc_received },
+    { "dmrs", 0, zc_dmrs },
+    { "correlate", 0, zc_correlate_all },
 };
 
 #define N_OPS (sizeof(proto_ops) / sizeof(proto_ops[0]))

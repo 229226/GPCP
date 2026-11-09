@@ -19,16 +19,16 @@
 #include "pdsch_stages.inc"
 
 static const proto_op_t proto_ops[] = {
-    { "transport_block",  qs_transport_block  },
-    { "encode",           qs_encode           },
-    { "modulate",         qs_modulate         },
-    { "dmrs",             qs_dmrs             },
-    { "map_to_grid",      qs_map_to_grid      },
-    { "ofdm_modulate",    qs_ofdm_modulate    },
-    { "channel",          qs_channel          },
-    { "estimate",         qs_estimate         },
-    { "equalise_demap",   qs_equalise_demap   },
-    { "decode",           qs_decode           },
+    { "transport_block", 0, qs_transport_block },
+    { "encode", 0, qs_encode },
+    { "modulate", 0, qs_modulate },
+    { "dmrs", 0, qs_dmrs },
+    { "map_to_grid", 0, qs_map_to_grid },
+    { "ofdm_modulate", 0, qs_ofdm_modulate },
+    { "channel", 0, qs_channel },
+    { "estimate", 0, qs_estimate },
+    { "equalise_demap", 0, qs_equalise_demap },
+    { "decode", 0, qs_decode },
 };
 
 #define N_OPS (sizeof(proto_ops) / sizeof(proto_ops[0]))

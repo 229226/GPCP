@@ -13,12 +13,12 @@
 #include "pusch_stages.inc"
 
 static const proto_op_t proto_ops[] = {
-    { "received",        us_received        },
-    { "dmrs",            us_dmrs            },
-    { "ofdm_demodulate", us_ofdm_demodulate },
-    { "estimate",        us_estimate        },
-    { "equalise_demap",  us_equalise_demap  },
-    { "decode",          us_decode          },
+    { "received", 0, us_received },
+    { "dmrs", 0, us_dmrs },
+    { "ofdm_demodulate", 0, us_ofdm_demodulate },
+    { "estimate", 0, us_estimate },
+    { "equalise_demap", 0, us_equalise_demap },
+    { "decode", 0, us_decode },
 };
 
 #define N_OPS (sizeof(proto_ops) / sizeof(proto_ops[0]))

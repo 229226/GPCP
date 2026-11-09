@@ -153,6 +153,12 @@ def lower(ir, target):
             st["notes"].append("%d 个数据 RE / %d 层，tile 每次 %d 个 RE"
                                % (nre, layers, target["n_pes"]))
 
+        elif op == "dmrs":
+            # 参考序列的种类决定实现（SSB 里 PSS/SSS/PBCH 三种参考同时存在，
+            # 只有 PBCH 那种在建 Gold 序列；另外两种由相关搜索自己生成）。
+            st["where"] = "control-core"
+            st["impl"] = "ref_%s" % (nd["params"].get("type") or "generic")
+
         elif op in ("channel", "estimate", "equalise_demap", "extract", "received",
                     "measure"):
             st["where"] = "control-core"

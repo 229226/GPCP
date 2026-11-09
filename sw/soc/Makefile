@@ -114,7 +114,7 @@ $(BUILD)/ssb_slot_bm.elf: ssb_slot_bm.c start_irq.S link.ld | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start_irq.S $< -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/ssb_slot_bm.dis
 # P1 real-mapping SSB benchmark: needs the inverse rate-match LUT header
-$(BUILD)/ssb_fid_bm.elf: ssb_fid_bm.c start.S link.ld | $(BUILD)
+$(BUILD)/ssb_fid_bm.elf: ssb_fid_bm.c start.S link.ld ssb_stages.inc | $(BUILD)
 	@mkdir -p $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I../../tools $(LDFLAGS) start.S $< -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/ssb_fid_bm.dis
@@ -217,10 +217,12 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
 		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h csi_cqi_tab.h \
 		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc zc_corr.inc mimo_stages.inc \
+		ssb_stages.inc \
 		pusch_stages.inc \
 		prach_corr_prog.h prach_corr_layout.h mmse_2x1_prog.h ssb_fft.inc \
+		pss_corr_prog.h pss_corr_layout.h ../../tools/ssb_fid_luts.h \
 		fft_stage_prog.h fft_block_prog.h | $(BUILD)
-	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) \
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) -I../../tools \
 		-DPROTO_OPS_INC='"$(PROTO)_ops.inc"' $(LDFLAGS) \
 		start.S proto_runner.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/proto_runner_$(PROTO).dis

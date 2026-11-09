@@ -28,6 +28,7 @@
 typedef int (*proto_op_fn)(void);
 typedef struct {
     const char *op;
+    const char *impl;      /* NULL = 该动词只有一种实现 */
     proto_op_fn fn;
 } proto_op_t;
 
@@ -61,7 +62,8 @@ int main(void)
         uint32_t c0, r0, k;
 
         for (k = 0; k < N_OPS; k++)
-            if (same(proto_ops[k].op, st->op)) {
+            if (same(proto_ops[k].op, st->op)
+                && (!proto_ops[k].impl || same(proto_ops[k].impl, st->impl))) {
                 fn = proto_ops[k].fn;
                 break;
             }
