@@ -144,9 +144,9 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sim/cgra/` | 纯 CGRA 台架（AXI 从机模型） | `tb_cgra.cpp`：`--prog/--dma-mem/--dma-ops/--ring-desc/--spad-dump` |
 | `sim/soc/` | SoC 台架 + 所有 `run-*` 目标 | `Makefile`（每个目标 = 一条 load + dump + check） |
 | `sw/include/` | `gpcp_layout.h`（**编译器生成的布局契约**：几何/位宽/命名区域）、裸机 ABI `gpcp_cgra.h`（spad 算术引用契约）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
-| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c`、`pbch_pack_bm.c`（**A2**：纯 CVA6 载荷装配） |
+| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c`、`pbch_pack_bm.c`（**A2**：纯 CVA6 载荷装配）、`ifft_bm.c`（**A3**：复用 `ssb_fft.inc` 的共轭 IFFT + CP） |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
-| `tools/` | 模型与检查 | `cgra.py`（ISA 编码与阵列几何**由 `cgra/target.yaml` 派生**，对外提供 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配 + **A2 发射装配黄金模型** `pbch_pack()` / `dump-pack`，`selftest-pack` 与 `ssb_plan`/`nr_pdcch` 交叉对账）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_pbch_pack.py`（A2 逐段对账）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
+| `tools/` | 模型与检查 | `cgra.py`（ISA 编码与阵列几何**由 `cgra/target.yaml` 派生**，对外提供 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配 + **A2 发射装配黄金模型** `pbch_pack()` / `dump-pack`，`selftest-pack` 与 `ssb_plan`/`nr_pdcch` 交叉对账）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_pbch_pack.py`（A2 逐段对账）、`nr_ofdm_tx.py`（**A3** 发射波形黄金模型：`dump-ifft` / `selftest-ifft`）、`check_ifft.py`（A3 逐值对账）、`check_yaml_coupling.py`（**YAML/C 解耦门禁**）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
 | `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_{bn,cn}_prog.py`（生成 `sw/soc/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py`；`target.yaml`（硬件真相：几何/ISA/命名区域）与 `tools/target.py`（逻辑地址 → flat 的唯一换算层）、`tools/image_spec.py`、`tools/fft_image.py` |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
@@ -268,7 +268,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 >
 > **当前主线是 `docs/19` 的 G1 发射侧**（本节 P0–P2 是 P1–P4 时代遗留清单）：
 > A1 `run-pbch-tx`（polar 变换落 CGRA）✅、A2 `run-pbch-pack`（MIB→[CRC24C]→frozen→polar→速率匹配 E=720→加扰→360 QPSK，纯 CVA6，双模式逐值对账）✅；
-> **下一步 A3** IFFT+CP（复用 FFT 镜像的共轭技巧）、A4 SSB 自环，之后才到 G2/G3。
+> A3 `run-ifft`（IFFT + CP，共轭技巧复用 FFT 镜像，零新 kernel）✅；**下一步 A4** 四符号 SSB 自环，之后才到 G2/G3。
 
 **P0（最近）**
 1. **B3 Linux — 已冻结（时间盒到期）**：`tools/check_linux.py`（stage 0..8 + 16 个累加器）、
@@ -391,6 +391,20 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
       `gpcp_layout.h` + 33 份 `<name>_layout.h`；ABI 宏、22 处裸 spad 坐标、
       83 处 DMA `bank*32` 基址与本地布局宏全部改引用契约。全量重编 39 个
       `.bin`、`verify-full` 58 门 0 failed，程序行为不变。
+
+21. **G1/A3 OFDM 发射波形 IFFT + CP（2026-11-09）**：`run-ifft` 落地，
+    **零新 kernel / 零 RTL / 零编译器改动**。硬件 FFT 是 Q15、每级 `>>2`、
+    N=4096 六级 → 输出 `DFT/4096` 且 base-4 位反序，因此
+    `IDFT(X)[n] = conj(FFT_hw(conj(X))[rev4(n)])`；共轭只是 CVA6 的数据准备层。
+    * `tools/nr_ofdm_tx.py`：真实 SSB 频域网格 → 共轭 TD → 定点 `planned_fft`
+      → rev4 / ×`TD_SCALE` / CP；`selftest-ifft` 把 TX 样本送回接收 FFT 并 `<<4`，
+      239 个有效 RE 的 QPSK 符号 **0 错**（幅度 rms 误差 32.9 / 2000）。
+    * `sw/soc/ifft_bm.c` 复用 `ssb_fft.inc` 的 `fft4096()`；`check_ifft.py` 对
+      **8192 raw 频谱字 + 8768 TX 样本字逐值 0 差**，217098 周期 / 112 次阵列运行。
+    * 电平口径：`TD_SCALE=256`，接收侧 `<<4`；定点 IFFT 相对浮点参考 SNR 20.9 dB。
+      1938 周期/run 减去 448/336 拍微码本体 ≈ **1.5k 周期/run 固定开销**，
+      与 §判断 3 的估计吻合（T0 想量的数，本门顺带实测）。
+    * **仍未做**：A4 四符号 SSB 自环（本门只做单符号）、T0 独立开销台架。
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。
 

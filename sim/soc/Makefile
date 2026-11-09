@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -668,3 +668,21 @@ run-rach: all
 		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
 		--occ $(if $(OCC),$(OCC),1) --seed $(if $(SEED),$(SEED),1) \
 		$(if $(MSG4_RV),--msg4-rv $(MSG4_RV))
+
+# ---- G1/A3: OFDM IFFT + CP, zero new microcode (conjugate FFT trick) ------
+IFFT_TD = $(ROOT)/build/ofdm/ifft.td
+
+run-ifft: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(IFFT_TD))
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	python3 $(ROOT)/tools/nr_ofdm_tx.py selftest-ifft
+	python3 $(ROOT)/tools/nr_ofdm_tx.py dump-ifft --out $(IFFT_TD)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/ifft_bm.bin@0x80000000 \
+		--load $(IFFT_TD)@0x80400000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80010000 --nwords 16976 \
+		--dump $(ROOT)/$(OBJ)/ifft_dump.txt \
+		--max-cycles 40000000
+	python3 $(ROOT)/tools/check_ifft.py $(ROOT)/$(OBJ)/ifft_dump.txt $(IFFT_TD)
