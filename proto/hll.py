@@ -129,6 +129,11 @@ class Scenario:
     def extract(self, src, **kw):
         return self._node("extract", [src], "re", **kw)
 
+    def measure(self, grid, ref, report="cqi", **kw):
+        """用参考信号做信道/干扰测量并给出上报量（CSI 的宽带 CQI）。"""
+        return self._node("measure", [grid, ref], "report", report=report,
+                          length=1, **kw)
+
     def ofdm_modulate(self, grid):
         return self._node("ofdm_modulate", [grid], "wave",
                           length=2 * (self.derived.get("cp_len", 0)

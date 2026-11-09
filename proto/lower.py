@@ -139,7 +139,8 @@ def lower(ir, target):
             st["array_runs"] = int(nd["params"].get("hypotheses", 1))
             st["notes"].append("%d 个候选假设，每个一次阵列运行" % st["array_runs"])
 
-        elif op in ("channel", "estimate", "equalise_demap", "extract", "received"):
+        elif op in ("channel", "estimate", "equalise_demap", "extract", "received",
+                    "measure"):
             st["where"] = "control-core"
 
         plan["stages"].append(st)
