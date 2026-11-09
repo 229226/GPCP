@@ -144,11 +144,11 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `sim/cgra/` | 纯 CGRA 台架（AXI 从机模型） | `tb_cgra.cpp`：`--prog/--dma-mem/--dma-ops/--ring-desc/--spad-dump` |
 | `sim/soc/` | SoC 台架 + 所有 `run-*` 目标 | `Makefile`（每个目标 = 一条 load + dump + check） |
 | `sw/include/` | `gpcp_layout.h`（**编译器生成的布局契约**：几何/位宽/命名区域）、`ldpc_enc_tables.h`（**B1**：4 个 (BG,i_LS) 编码表 + A_V/B_V/RB）、裸机 ABI `gpcp_cgra.h`（spad 算术引用契约）+ **M1 运行时** `gpcp_cgra_rt.h`（双页 ping-pong、`rt_array_run`、`rt_dma_begin/wait`） | `gpcp_cgra_array_start` / `gpcp_cgra_dma_start` / `gpcp_cgra_imem_load` / `rt_*` / `ring_*` |
-| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c`、`pbch_pack_bm.c`（**A2**：纯 CVA6 载荷装配）、`ifft_bm.c`（**A3**：共轭 IFFT + CP）、`ssb_tx_bm.c`（**A4**：4 符号 SSB 发射）、`overhead_bm.c`（**T0**：阵列 run 开销台架）、`ldpc_enc_bm.c`（**B1**：CVA6 LDPC 编码器）、`dl_mod_bm.c`（**B2**：下行调制链） |
+| `sw/soc/` | 所有 SoC benchmark（每个 = 一个 C 程序） | `ssb_fft_bm.c`（完整采样级链）、`ssb_fid_bm.c`（P1 真映射：CP/DC 空/速率匹配）、`prach_bm.c`（Msg1 ZC 相关）、`rach_bm.c`（**P2：4 步全过程一次运行**，头注释是结果区布局表）、`fft_bm.c`、`ring_bm.c`、`slot_rtos.c`、`pbch_pack_bm.c`（**A2**：纯 CVA6 载荷装配）、`ifft_bm.c`（**A3**：共轭 IFFT + CP）、`ssb_tx_bm.c`（**A4**：4 符号 SSB 发射）、`overhead_bm.c`（**T0**：阵列 run 开销台架）、`ldpc_enc_bm.c`（**B1**：CVA6 LDPC 编码器）、`dl_mod_bm.c`（**B2**：下行调制链）、`pdcch_tx_bm.c`（**B3**：PDCCH 发射链） |
 | `sw/soc/ssb_fft.inc` | 4096 点 FFT 引擎（微码 + 描述符编排） | `fft4096()`、`rev4()` |
 | `sw/soc/ldpc_enc.inc` | 38.212 LDPC 编码核心（B1 抽出，B2 复用） | `acc_info()`、`ldpc_encode()`、`ldpc_syndrome()` |
 | `sw/soc/gold_seq.inc` | 38.211 5.2.1 Gold 序列（A2 抽出，B2 复用） | `gold_seq(c_init, len, out)` |
-| `tools/` | 模型与检查 | `cgra.py`（ISA 编码与阵列几何**由 `cgra/target.yaml` 派生**，对外提供 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配 + **A2 发射装配黄金模型** `pbch_pack()` / `dump-pack`，`selftest-pack` 与 `ssb_plan`/`nr_pdcch` 交叉对账）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_pbch_pack.py`（A2 逐段对账）、`nr_ofdm_tx.py`（**A3/A4** 发射波形黄金模型：单/4 符号共轭 TD、`selftest-ssb-tx`）、`check_ifft.py`（A3 逐值对账）、`check_ssb_tx.py`（A4 逐值对账 + 导出自环 TD）、`check_overhead.py`（T0 线性回归）、`gen_ldpc_enc_tables.py`（B1 表生成）、`check_ldpc_enc.py`（B1 逐位对账）、`nr_dl_mod.py`（**B2** 下行调制黄金模型 + 输入 TD）、`check_dl_mod.py`（B2 逐段对账）、`check_yaml_coupling.py`（**YAML/C 解耦门禁**）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
+| `tools/` | 模型与检查 | `cgra.py`（ISA 编码与阵列几何**由 `cgra/target.yaml` 派生**，对外提供 `enc()`/`OPS`/`SRC` + **15 个手写 kernel（旧路径，按 §6.19 冻结）** + 自检）、`fft_plan.py`（FFT 规划/黄金/LUT）、`ssb_plan.py`（SSB 黄金模型 + 时域样本）、`ssb_plan_p1.py`（P1 真映射模型：CP/DC/速率匹配）、`nr_pbch.py`（38.211/38.212 PBCH 序列与速率匹配 + **A2 发射装配黄金模型** `pbch_pack()` / `dump-pack`，`selftest-pack` 与 `ssb_plan`/`nr_pdcch` 交叉对账）、`gen_luts.py`（生成 `ssb_fid_luts.h`）、`nr_rach.py`（**4-step 随机接入过程模型** + `dump` 产出 `run-prach`/`run-rach` 时域镜像）、`check_*.py`（每个基准的验收器）、`check_pbch_pack.py`（A2 逐段对账）、`nr_ofdm_tx.py`（**A3/A4** 发射波形黄金模型：单/4 符号共轭 TD、`selftest-ssb-tx`）、`check_ifft.py`（A3 逐值对账）、`check_ssb_tx.py`（A4 逐值对账 + 导出自环 TD）、`check_overhead.py`（T0 线性回归）、`gen_ldpc_enc_tables.py`（B1 表生成）、`check_ldpc_enc.py`（B1 逐位对账）、`nr_dl_mod.py`（**B2** 下行调制黄金模型 + 输入 TD）、`check_dl_mod.py`（B2 逐段对账）、`nr_pdcch_tx.py`（**B3** PDCCH 发射黄金模型 + 输入 TD）、`check_pdcch_tx.py`（B3 逐段对账）、`check_yaml_coupling.py`（**YAML/C 解耦门禁**）、`check_handprog.py`（**微码来源门禁**：禁手写微码）、`cgra/tools/image_spec.py`（kind: image 多子图串接）、`cgra/tools/fft_image.py`（kind: fft_image 蝶形专用调度器）、`verify.sh` |
 | `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_{bn,cn}_prog.py`（生成 `sw/soc/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py`；`target.yaml`（硬件真相：几何/ISA/命名区域）与 `tools/target.py`（逻辑地址 → flat 的唯一换算层）、`tools/image_spec.py`、`tools/fft_image.py` |
 | `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/08-ppa.md` |
 | `docs/` | 01 架构选型 / 02 CGRA ISA / 03 路线图 / 04 环境 / 05 SoC-B2 / 06 Linux-B3 / 07 L1 数据面（**缺陷史在 07 的 4.7/4.15**）/ 08 PPA 综合结果与局限 | — |
@@ -273,7 +273,8 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 > A3 `run-ifft` ✅、A4 `run-ssb-tx`（4 符号硬件发射 → P1 接收链自环，MIB 32/32）✅、
 > T0 `run-overhead` ✅（G1 收口）；B1 `run-ldpc-enc`（BG1/BG2 × Zc=20/64 逐位 + syndrome 0）✅。
 > B2 `run-dl-mod`（TB→CRC24A→LDPC→速率匹配 rv k0→加扰→交织→QPSK/16/64QAM，4 变体 1020 符号逐值）✅。
-> **下一步 G2/B3**：PDCCH 的 REG/CCE 交织（复用 `nr_pdcch_reg.py`）与 `run-dl-tx` 端到端自环。
+> B3 `run-pdcch-tx`（DCI→CRC24C→RNTI→frozen→polar 9 级阵列→E=432 速率匹配→加扰→QPSK→REG/CCE，2 RNTI 变体逐值）✅。
+> **下一步 G2/B4**：`run-dl-tx` 端到端自环（自发的 DCI 被自己盲检、自发的 TB 被自己 PDSCH 链解出）。
 
 **P0（最近）**
 1. **B3 Linux — 已冻结（时间盒到期）**：`tools/check_linux.py`（stage 0..8 + 16 个累加器）、
@@ -458,6 +459,22 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
       真实 gNB 会缓存序列，属 C1 预算门的事，不是本轮目标。
     * 注入一次 16QAM 电平交换（`b1?1:3` → `b1?3:1`）：门禁只报 v1 的 180 个
       符号错并打印首 4 个，其余变体不受影响 → exit 2。
+
+25. **G2/B3 PDCCH 发射链（2026-11-09）**：`run-pdcch-tx` 跑通
+    DCI → CRC24C → RNTI 掩码 → frozen → **polar 变换（A1 的 9 级阵列微码，原样复用）**
+    → 速率匹配 E=432 → 加扰 → QPSK → REG/CCE 交织，2 个 RNTI 变体共 432 个符号
+    **逐值 0 差异**，18 次阵列运行 / 398k 周期（3.98 ms）。
+    * 只有 polar 变换在阵列上；CRC/冻结位/速率匹配/REG 映射都是标量位操作，
+      落阵列不划算（同 B1/B2 的理由，T0 实测一次 run 编排 ≈1456 周期）。
+    * 加扰 `c_init = n_ID = 200`，**RNTI 只掩 CRC**——这正是盲检"一次译码 +
+      每个候选一次 CRC"的前提，B4 的自环会直接验证这一点。
+    * 速率匹配走 `nr_pbch.rate_match_pbch` 的三段（子块交织 32 列 →
+      圆缓冲选 432 → 三角交织 T=29），C 侧按 `cell(i,j) 存在 iff
+      i(i+1)/2+j < E` 复刻，不必为截断的三角表建索引。
+    * REG/CCE 用 38.211 7.3.2.3 交织形式（N_REG=216, L=6 → 36 bundle,
+      R=2 → C=18），实测 157/216 个符号位置移动——恒等映射会被门禁抓出。
+    * 注入恒等 REG 映射：门禁只报两个变体的 REG 段（157/152 个差异），
+      符号段不误报 → 逐段门禁的粒度有效。
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。
 

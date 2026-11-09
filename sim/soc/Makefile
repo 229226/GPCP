@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -732,6 +732,21 @@ run-ssb-tx: all
 LDPC_ENC_TD = $(ROOT)/build/ldpc/enc.td
 
 DL_MOD_TD = $(ROOT)/build/dl/mod.td
+
+PDCCH_TX_TD = $(ROOT)/build/pdcch/tx.td
+
+run-pdcch-tx: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PDCCH_TX_TD))
+	python3 $(ROOT)/tools/nr_pdcch_tx.py selftest
+	python3 $(ROOT)/tools/nr_pdcch_tx.py dump-td --out $(PDCCH_TX_TD)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pdcch_tx_bm.bin@0x80000000 \
+		--load $(PDCCH_TX_TD)@0x80400000 \
+		--results 0x80010000 --nwords 1890 \
+		--dump $(ROOT)/$(OBJ)/pdcch_tx_dump.txt \
+		--max-cycles 20000000
+	python3 $(ROOT)/tools/check_pdcch_tx.py $(ROOT)/$(OBJ)/pdcch_tx_dump.txt $(PDCCH_TX_TD)
 
 run-dl-mod: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
