@@ -60,3 +60,7 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-09,,,35,sw,infra,B3 PDCCH 发射链（DCI→CRC24C→RNTI→frozen→polar 9 级阵列→E=432→加扰→QPSK→REG/CCE）,59bd422,measured,2 RNTI 变体 432 符号逐值 0 差；18 次阵列运行 398k 周期；注入恒等 REG 映射 exit=2 仅 REG 段报错；verify-full 64/0/526s；minutes 实测墙钟，人做估约 120 min
 2026-11-09,,,90,sw,feature,G2/B4 PDCCH 自环（单程序：发射链->IFFT+CP->接收链，无宿主中转） + 修 cgra_top.sv dma_tgt 跨传输粘滞（描述符发起时清零）,,measured,DCI 32/32、RNTI 0x1234 盲检出（5 候选）、CRC24C ok、432/432 LLR 符号、|abs| 1904~2064；1353 阵列/1
 2026-11-09,,,60,sw,feature,G2/B5 PDSCH 自环（单程序：TB->LDPC 编码->DMRS+RE->IFFT/CP->接收链->LDPC 译码->TB）,,measured,1040/1040 硬判==发射码字；TB 80/80 + CRC24A ok；720/720 LLR 符号(|LLR| 31232~33024)；LS (16
+2026-11-09,,,26,sw,feature,docs/20 阶段1：pdsch_stages.inc 抽取（手写基准与运行器共用）+ nr_pdsch 场景/模型迁入 + 运行器泛化（PROTO_OPS_INC）+ proto/load.py 40 格时间轴,f59ba4a,measured,"4,075,348 周期 vs run-pdsch-loop 4,054,949（Δ0.50%）；TB 80/80、码字 1040/1040、720/720 LLR、LS [16,0,15,0]；40 格按时率 0%、单格 40.8×、积压 1590 格"
+2026-11-09,,,11,verif,feature,proto_eval 改成模型 SPEC 驱动（锚点/对账零协议常量）+ 时间轴/差距表进报告 + verify.sh 门与 verify_cache 输入接线,f59ba4a,measured,verify smart 69 passed / 0 failed / 1007 s（run-proto-nr_pdcch + run-proto-nr_pdsch 均 PASS，0 skipped）
+2026-11-09,,,3,infra,fix,lower.py LDPC 提升长度推导：bits//52+1 把 Zc=20 的块误判成 Zc=64（要 1664 字 spad > 1024）,f59ba4a,measured,nr_pdsch 两个 target 落点均 OK，encode/decode 都选 ldpc_bg2_zc20（520 字）；换厨房 IR 摘要一致
+2026-11-09,,,4,doc,doc,docs/20 §9 阶段1 + AGENTS §2/§3/§6 同步（时间轴、ops 契约、Zc 推导）,f59ba4a,measured,docs/20 §9 阶段1 勾选；AGENTS §2 新增 run-proto-nr_pdsch 行
