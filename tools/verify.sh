@@ -224,6 +224,21 @@ fi
 printf '%s\n' "$COUPLING_OUT" | sed -n '1p;$p'
 echo
 
+# ---- 协议描述层（docs/20）：硬件无关检查 + 换厨房测试（纯静态，秒级） ------
+if ! PROTO_OUT=$(cd "$ROOT" && python3 proto/check_hll.py proto/scenarios/*.py 2>&1); then
+    printf '%s\n' "$PROTO_OUT"
+    echo "verify aborted: 协议场景里出现了硬件概念（docs/20 §3）" >&2
+    exit 1
+fi
+if ! PROTO_C_OUT=$(cd "$ROOT" && python3 proto/compile.py --all 2>&1); then
+    printf '%s\n' "$PROTO_C_OUT" | tail -20
+    echo "verify aborted: 协议场景无法落点（docs/20 §6）" >&2
+    exit 1
+fi
+printf '%s\n' "$PROTO_OUT" | sed -n '1p;$p'
+printf '%s\n' "$PROTO_C_OUT" | grep -E "换厨房|FAIL" | tail -2
+echo
+
 if [ "$MODE" = changed ] && [ ${#MODEL_SET[@]} -eq 0 ] &&
    [ ${#SOC_SET[@]} -eq 0 ] && [ "$WANT_KERNELS" = 0 ]; then
     echo "changed: no test-affecting changes, nothing to run."

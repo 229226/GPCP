@@ -5,6 +5,22 @@
 all: test
 
 # One-command acceptance: kernels + a quick SoC subset
+# ---- 协议描述层（docs/20）----------------------------------------------------
+# make proto-check : 静态检查（硬件无关 + 换厨房 + 落点），秒级
+# make proto PROTO=<name> : 完整流水（当前只到"生成 IR + 落点"，阶段 0 后半接运行器）
+proto-check:
+	python3 proto/check_hll.py proto/scenarios/*.py
+	python3 proto/compile.py --all
+
+PROTO ?= nr_pdcch
+proto:
+	python3 proto/compile.py --scenario $(PROTO)
+
+proto-all:
+	python3 proto/compile.py --all
+
+.PHONY: proto-check proto proto-all
+
 verify:
 	bash tools/verify.sh quick
 
