@@ -102,6 +102,12 @@ def lower(ir, target):
             st["array_runs"] = 9
             st["notes"].append("9 级变换，512 点由 16 PE 并行")
 
+        elif op in ("encode", "decode") and nd["params"].get("scheme") == "turbo":
+            # 36.212 Turbo（1/3、QPP）：标量实现，跑在控制核上；不占阵列。
+            st["where"] = "control-core"
+            st["impl"] = "turbo_k104"
+            st["notes"].append("36.212 Turbo 1/3 + 速率匹配（K=104）")
+
         elif op in ("encode", "decode") and nd["params"].get("scheme") == "ldpc":
             # 38.212：BG2 的码字长 N = 52*Zc，信息位 K = Kb*Zc（K<=640 时 Kb=6）。
             # encode 节点带的是编码后比特数，decode 节点带的是 TB 比特数，两条路

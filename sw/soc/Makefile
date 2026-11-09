@@ -217,7 +217,7 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
 		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h csi_cqi_tab.h \
 		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc zc_corr.inc mimo_stages.inc \
-		ssb_stages.inc \
+		ssb_stages.inc lte_stages.inc \
 		pusch_stages.inc \
 		prach_corr_prog.h prach_corr_layout.h mmse_2x1_prog.h ssb_fft.inc \
 		pss_corr_prog.h pss_corr_layout.h ../../tools/ssb_fid_luts.h \
