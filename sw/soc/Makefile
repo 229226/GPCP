@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm pbch_pack_bm ifft_bm overhead_bm ssb_tx_bm ldpc_enc_bm dl_mod_bm pdcch_tx_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm pdcch_loop_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm pbch_pack_bm ifft_bm overhead_bm ssb_tx_bm ldpc_enc_bm dl_mod_bm pdcch_tx_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -164,6 +164,13 @@ pdcch_luts.h: ../../tools/gen_pdcch_luts.py ../../tools/gen_luts.py ../../tools/
 	python3 ../../tools/gen_pdcch_luts.py pdcch_luts.h
 
 $(BUILD)/pdcch_bm.elf: pdcch_luts.h
+
+# G2/B4 PDCCH 自环：发射链（polar 9 级）+ fft4096 IFFT + 接收链（polar SC）
+$(BUILD)/pdcch_loop_bm.elf: pdcch_luts.h polar_node_prog.h \
+		polar_inword_s0_prog.h polar_inword_s1_prog.h polar_inword_s2_prog.h \
+		polar_inword_s3_prog.h polar_inword_s4_prog.h \
+		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
+		polar_word_d8_prog.h fft_stage_prog.h fft_block_prog.h
 
 # link-e2e: PDCCH (polar) + PDSCH (LDPC) fused in one run -- needs both LUT sets
 $(BUILD)/link_e2e_bm.elf: pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h

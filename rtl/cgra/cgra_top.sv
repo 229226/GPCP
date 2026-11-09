@@ -396,6 +396,10 @@ module cgra_top #(
           dma_page       <= desc_buf[0][48];
           dma_dir        <= desc_buf[0][49];
           desc_irq       <= desc_buf[0][50];
+          /* 描述符发起的传输一律写 scratchpad：dma_tgt 只由寄存器 START 的
+           * CTRL[3] 置位，若不清，前面跑过 gpcp_cgra_imem_load（IMEM 目标）的
+           * 程序会把之后所有 DMA 静默改道去写 IMEM，阵列只看到旧 spad 数据。 */
+          dma_tgt        <= 1'b0;
           desc_addr      <= ring_base + {ring_head, 5'b0};
           dma_idx        <= 16'd0;
           dma_row_cnt    <= 16'd0;

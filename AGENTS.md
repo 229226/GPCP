@@ -98,6 +98,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `run-pdsch-iter` | **P1 整链**：BG2(Zc=20) 一个码块 **8 次迭代全在硬件上**（42 CN + 52 BN/迭代），`check_pdsch_iter.py` **1040/1040 硬判决**与纯 min-sum 一致；**752 次阵列运行 / 1556 次 DMA / 内核 1,525,033 周期**（≈191k/迭代），仿真总周期 1,981,113（约 3 分钟，只在 `verify.sh full` 里）。三步优化 2.04×（`docs/09` §5.3），含 CPU 成本模型（写 4 拍/字、20 字 DMA 74 拍/次、IMEM 装载 1,825 拍）；旋转为什么挪不进硬件、以及 RTL 方案估算 2.6× 见 §5.4/§5.5 |
 | `run-pdsch-full` | **PDSCH 整链（样本进 → TB 出）**：`tools/pdsch_full_plan.py` 生成 2 符号 CP+4096 IFFT 的时域样本（平坦增益 + AWGN），SoC 自己做 FFT → RE 提取 → **38.211 7.4.1.1 Gold DMRS 逐符号 LS 估计**（`c_init`=0x120002/0x180002）→ 均衡 → 720 个 QPSK 软 LLR → **38.212 5.4.2.2 反交织** → 38.211 Gold 解扰（`c_init` = n_RNTI<<15）→ 解速率匹配（720→1040，跳过 16 filler + 40 打孔）→ `>>8` 定标 → 复用 `run-pdsch-iter` 的 8 次纯 min-sum 迭代 → CRC24A → 80 bit TB。`check_pdsch_full.py` 硬门 = **DMRS `c_init` + LLR 符号逐位 + 高 SNR 幅值容差 + 1040/1040 硬判决 + CRC + 80/80 TB**；20 dB/seed 1 与 0 dB/seed 3 均通过，0 errors、**3,064,784 / 3,067,508 周期（20 / 0 dB）、976 次阵列运行、1556 次 DMA**。20 dB 下 `chan est` 硬件 `[32,16,31,15]` 与模型逐值相同、bin0 `yw=(2304,6320)` vs 模型 `(2305,6325)`。`make -C sim/soc run-pdsch-full SNR=<db> SEED=<n>` 可换 SNR 与种子；只在 `verify.sh full` 里 |
 | `run-pdcch` | **PDCCH/DCI 盲检（硬件）**：1 符号 TD → 4096 FFT → 216 RE / 432 LLR → 38.211 Gold 解扰（`c_init`=N_ID=200）→ **E=432 逆速率匹配 LUT**（`pdcch_luts.h`）→ **CGRA Polar SC（K=56，复用 22 拍 f/g 节点微码）** → 5 个 RNTI 候选 CRC24C 去掩码盲检 → 32 bit DCI（MCS/RV/NDI/HARQ PID/RB/TPC）。12 dB 与 8 dB 两点均 `[OK]`，0 errors、**1,327,171 周期 / 1232 次阵列运行**，LLR 与浮点模型误差 <1%、56/56 信息位、32/32 DCI。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
+| `run-pdcch-loop` | **G2/B4 PDCCH 自环（单程序，无宿主中转）**：B3 发射链（polar 9 级阵列）→ 216 QPSK 频域格点 → **CGRA IFFT（共轭技巧）+ CP** → TD 落 RAM → **A4 接收链**（FFT → 432 LLR → 逆 REG/CCE → 解扰 → 逆速率匹配 → polar SC 阵列 → RNTI 盲检）。判据：e_sc 432/432 与 `nr_pdcch_tx` 逐位、**DCI 32/32**、RNTI 0x1234 从 5 候选盲检出、CRC24C 通过、**432/432 LLR 符号正确（\|abs\| 1904~2064）**；**1353 次阵列运行 / 1,897,468 周期**。踩坑记录：`dma_tgt` 曾跨传输粘滞（RTL 已修）、WR 写缓冲排空、收发两侧 REG 交织配对 |
 | `run-pdsch-harq` | **HARQ 两次传输**：同一 `pdsch_full_bm.c` 用 `-DHARQ_TX=2` 编译，rv=0/2 对应 k0=0/492；两传输各自 FFT→LS→LLR→反交织→解扰后按循环缓冲坐标 **Chase 合并**，再喂 LDPC。20 dB 下 0 errors、**4,187,691 周期 / 1200 次阵列运行 / 1556 DMA**，解速率匹配 LLR 从单次的 ±612 变 ±1229，1040/1040 硬判决、80/80 TB；单传输 `run-pdsch-full` 回归不变。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-pusch` | **PUSCH 整链（上行，样本进 → TB 出）**：`tools/nr_pusch.py` 生成 2 符号 CP+4096 IFFT 时域样本（38.211 6.4.1.1 PUSCH Gold DMRS，`c_init`=`0x48d22468`/`0x11a42468`，`n_ID`=n_RNTI），SoC 自己做 FFT → RE → DMRS LS → 均衡 → 720 QPSK LLR → 反交织 → 解扰 → 解速率匹配 → 8 次 min-sum LDPC → CRC24A → 80 bit TB。20 dB/seed 1：0 errors、**3,070,613 周期 / 976 次阵列运行 / 1556 DMA**、1040/1040 硬判决、CRC ok、TB 80/80、DMRS `c_init` 与模型逐值一致。默认无变换预编码（CP-OFDM），TD 布局与 `run-pdsch-full` 同构；结果区在 `0x80070000`（`.bss` 尾部到 0x8001_1638，沿用 0x8001_0000 会压到 FFT 程序尾，属侥幸可用，故主动上移）；`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
 | `run-pusch-tp` | **PUSCH DFT-s-OFDM 落硬件**：`nr_pusch.py dump --tp`（发射端 360 点 DFT 扩展 + 1/√M 功率归一化）→ SoC 用 `-DTP` 编 `pusch_bm.c`：每数据 RE 匹配滤波得 360 点平坦向量 → **Q20 定点 360 点 IDFT**（`pusch_idft_tab.h`，`sin=cos(x−90°)`，int64 累加，误差 <0.2 LSB）→ QPSK LLR → 反交织 / 解扰 / 解速率匹配 / 8 次 LDPC / CRC24A。默认 20 dB / seed 1：**0 errors、7,995,677 周期 / 976 阵列 / 1556 DMA**、1040/1040 硬判、CRC ok、TB 80/80、`out[7]=1` 标志 TP 构建；定点 FFT 无 AGC 使信道估计比模型低 ~10%（幅值门改为 0.6–1.6 比例，符号 / 硬判 / CRC 才是硬门）。**支持 `RV=`**（TD 尾部字驱动 `k0 = rv×(USABLE/4)`：rv=0/2 均 `[OK]`，k0=0/492；`-DHARQ_TX=2` 变体仍走 `rv_k0[tx]`）。只在 `verify.sh full` 里 |
@@ -475,6 +476,26 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
       R=2 → C=18），实测 157/216 个符号位置移动——恒等映射会被门禁抓出。
     * 注入恒等 REG 映射：门禁只报两个变体的 REG 段（157/152 个差异），
       符号段不误报 → 逐段门禁的粒度有效。
+
+26. **G2/B4 PDCCH 自环（2026-11-09，G2 验收的第一半）**：`run-pdcch-loop` 在
+    **一个 SoC 程序里**完成 发射链 → 216 QPSK 频域格点 → CGRA IFFT+CP → TD →
+    接收链（FFT/LLR/逆交织/解扰/逆速率匹配/polar SC 阵列/RNTI 盲检），
+    中间不落文件、不注入黄金符号。判据：e_sc 432/432 逐位、**DCI 32/32**、
+    RNTI 从 5 候选盲检出、CRC24C 通过、**432/432 LLR 符号 + |abs| 1904~2064**；
+    **1353 次阵列运行 / 1,897,468 周期**。
+    * **RTL 缺陷（本次修）**：`dma_tgt`（CTRL[3]，目标=IMEM）只在复位清零，
+      寄存器发起的传输会按位设置，但**描述符发起的传输从不清它**。于是任何先调
+      `gpcp_cgra_imem_load`（DMA 装程序）再走描述符环的程序，后续所有 DMA 都被
+      静默改道去写 IMEM，阵列只看到旧 spad —— 症状是"FFT 输出量级像 twiddle
+      （~1e6）、第二次跑变成全 0"。修法：`cgra_top.sv` 的 `D_DESC_SET` 里
+      `dma_tgt <= 1'b0`。**凡是"先装 IMEM 再 DMA"的数据全错，先查这一条。**
+    * 另外两个坑：① CPU 写完一大片 RAM 就交给引擎读，必须 fence + 读回最后一个字
+      排空 WT 写缓冲（`drain_stores`）；② B3 的发射链按 38.211 7.3.2.3 做了 REG/CCE
+      交织，而 `run-pdcch` 的激励本来没交织、接收链也就没解——自环的接收侧必须补
+      **逆交织**，否则 LLR 约一半符号相反（实测 204/432）。
+    * `.bss` 到 `0x8001_0740`（FFT 两张 ~50 KB 生成镜像 + polar SC 节点），
+      结果区按 `run-pusch` 的先例主动上移到 `0x8007_0000`。
+
 
 **后续（`docs/11` P5–P8）**：上行精化、L2 用户面、QEMU 设备模型、free5GC 联调。
 

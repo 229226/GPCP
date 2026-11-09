@@ -748,6 +748,23 @@ run-pdcch-tx: all
 		--max-cycles 20000000
 	python3 $(ROOT)/tools/check_pdcch_tx.py $(ROOT)/$(OBJ)/pdcch_tx_dump.txt $(PDCCH_TX_TD)
 
+# G2/B4: PDCCH self-loopback -- the transmit chain builds the waveform in RAM and
+# the receive chain decodes it in the same program (no host round trip).
+run-pdcch-loop: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(PDCCH_TX_TD))
+	python3 $(ROOT)/tools/nr_pdcch_tx.py selftest
+	python3 $(ROOT)/tools/nr_pdcch_tx.py dump-td --out $(PDCCH_TX_TD)
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/pdcch_loop_bm.bin@0x80000000 \
+		--load $(PDCCH_TX_TD)@0x80600000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80070000 --nwords 544 \
+		--dump $(ROOT)/$(OBJ)/pdcch_loop_dump.txt \
+		--max-cycles 40000000
+	python3 $(ROOT)/tools/check_pdcch_loop.py $(ROOT)/$(OBJ)/pdcch_loop_dump.txt $(PDCCH_TX_TD)
+
 run-dl-mod: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(DL_MOD_TD))
