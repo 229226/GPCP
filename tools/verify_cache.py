@@ -66,6 +66,8 @@ GATE_EXTRA = {
                            "sw/soc/zc_corr.inc", "sw/soc/nr_prach_ops.inc"],
     "run-proto-nr_pucch": ["proto/**/*.py", "sw/soc/proto_runner.c",
                            "sw/soc/zc_corr.inc", "sw/soc/nr_pucch_ops.inc"],
+    "run-proto-nr_mimo": ["proto/**/*.py", "sw/soc/proto_runner.c",
+                          "sw/soc/mimo_stages.inc", "sw/soc/nr_mimo_ops.inc"],
 }
 
 # Binary -> C source for the few targets whose binary is not named after its

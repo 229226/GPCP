@@ -291,6 +291,8 @@ def main(argv):
         if kind == "nonzero":
             rep.add(name, "非零", got, got != 0)
             continue
+        if kind == "raw":
+            continue                 # 只记录，供与手写基准逐值对账
         want = gold["anchors"][name]
         if kind == "sign":
             got_s = _sx(got)

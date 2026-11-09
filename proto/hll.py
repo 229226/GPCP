@@ -152,10 +152,11 @@ class Scenario:
         return self._node("equalise_demap", [y, h], "llr",
                           qm=qm, length=self.derived.get("e_bits", 0))
 
-    def mimo_equalise(self, y, h, qm=None, layers=2, rx=2):
+    def mimo_equalise(self, y, h, qm=None, layers=2, rx=2, bits=None):
         """多天线均衡（MMSE）后硬判：每层每 RE 出 Qm 个比特。"""
+        n = bits if bits is not None else self.derived.get("e_bits", 0)
         return self._node("mimo_equalise", [y, h], "hard", qm=qm, layers=layers,
-                          rx=rx, length=self.derived.get("e_bits", 0))
+                          rx=rx, length=n)
 
     def decode(self, llr, scheme, max_iter=8):
         return self._node("decode", [llr], "hard", scheme=scheme,

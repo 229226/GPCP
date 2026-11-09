@@ -142,7 +142,7 @@ $(BUILD)/mimo_ce_bm.elf: mimo_ce_bm.c start.S link.ld | $(BUILD)
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/mimo_ce_bm.dis
 
 # 2x2 MMSE receiver (channel estimate + per-RE solve + hard bits)
-$(BUILD)/mimo_bm.elf: mimo_bm.c start.S link.ld | $(BUILD)
+$(BUILD)/mimo_bm.elf: mimo_bm.c start.S link.ld mmse_2x1_prog.h mimo_stages.inc | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S mimo_bm.c -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/mimo_bm.dis
 
@@ -192,7 +192,7 @@ mmse_2x1_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.p
 fft_butterfly_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/fft_butterfly.yaml
 	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/fft_butterfly.yaml
 
-$(BUILD)/mimo_bm.elf: mmse_2x1_prog.h
+$(BUILD)/mimo_bm.elf: mmse_2x1_prog.h mimo_stages.inc
 
 # ---- docs/20：协议基准（场景 -> plan.h -> 通用运行器）------------------------
 # plan.h / stimulus.bin / golden.json 全部由 proto/emit.py 生成；-I 指向场景目录，
@@ -216,8 +216,8 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
 		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
 		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h csi_cqi_tab.h \
-		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc zc_corr.inc \
-		prach_corr_prog.h prach_corr_layout.h ssb_fft.inc \
+		ldpc_enc.inc pdsch_stages.inc pdcch_stages.inc csi_stages.inc zc_corr.inc mimo_stages.inc \
+		prach_corr_prog.h prach_corr_layout.h mmse_2x1_prog.h ssb_fft.inc \
 		fft_stage_prog.h fft_block_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) \
 		-DPROTO_OPS_INC='"$(PROTO)_ops.inc"' $(LDFLAGS) \
