@@ -116,6 +116,12 @@ class Scenario:
     def dmrs(self, type="type1", n_id=None, l=None):
         return self._node("dmrs", [], "ref", type=type, n_id=n_id, l=l)
 
+    def correlate(self, src, ref, hypotheses=1, seq="zc", metric="energy"):
+        """在 src 上与参考序列做相关搜索，输出每个候选假设的能量。
+        用于 PRACH 的 139 个循环移位、PUCCH 的 2 个 m_CS、SSB 的 PSS/SSS 假设。"""
+        return self._node("correlate", [src, ref], "corr", hypotheses=hypotheses,
+                          seq=seq, metric=metric, length=hypotheses)
+
     def map_to_grid(self, sym, dmrs=None):
         return self._node("map_to_grid", [sym] + ([dmrs] if dmrs else []), "grid",
                           length=self.derived.get("n_subcarriers", 0))

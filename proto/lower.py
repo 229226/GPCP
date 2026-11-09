@@ -129,6 +129,16 @@ def lower(ir, target):
                     iters = nd["params"].get("max_iter", 8)
                     st["array_runs"] = iters * 94
 
+        elif op == "correlate":
+            # 相关搜索：一个候选假设 = 一次阵列运行（prach_corr / pss_corr /
+            # sss_corr 都是 16 PE 的部分和 + 阵列内归约）。
+            seq = nd["params"].get("seq", "zc")
+            st["where"] = "array"
+            st["impl"] = {"zc": "prach_corr", "pss": "pss_corr",
+                          "sss": "sss_corr"}.get(seq, "prach_corr")
+            st["array_runs"] = int(nd["params"].get("hypotheses", 1))
+            st["notes"].append("%d 个候选假设，每个一次阵列运行" % st["array_runs"])
+
         elif op in ("channel", "estimate", "equalise_demap", "extract", "received"):
             st["where"] = "control-core"
 
