@@ -26,6 +26,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "../include/ldpc_enc_tables.h"
+#include "ldpc_enc.inc"        /* acc_info / ldpc_encode / ldpc_syndrome */
 
 #define CGRA_BASE    0x50000000ul
 #define EXIT_ADDR    0x40010000ul
@@ -39,7 +40,6 @@
 
 static uint8_t cw[MAX_COLS * MAX_ZC];
 static uint8_t info[MAX_ROWS * MAX_ZC];
-static uint8_t acc[MAX_ZC];
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
@@ -58,112 +58,6 @@ static void unpack_bits(const uint32_t *in, uint32_t n, uint8_t *bits)
     uint32_t i;
     for (i = 0; i < n; i++)
         bits[i] = (uint8_t)((in[i / 32u] >> (i % 32u)) & 1u);
-}
-
-/* acc = XOR of c[col] rotated by sh, over every edge with col < upto. */
-static void acc_info(const ldpc_bg_t *g, const uint8_t *c, uint32_t zc,
-                     uint32_t r, uint32_t upto, uint8_t *out)
-{
-    uint32_t k, i, col, sh;
-    for (i = 0; i < zc; i++)
-        out[i] = 0;
-    for (k = 0; k < g->deg[r]; k++) {
-        col = g->col[r * g->maxd + k];
-        if (col >= upto)
-            continue;
-        sh = g->sh[r * g->maxd + k] % zc;
-        for (i = 0; i < zc; i++)
-            out[i] ^= c[col * zc + (i + sh) % zc];
-    }
-}
-
-static uint32_t ldpc_encode(const ldpc_bg_t *g, const uint8_t *info_bits,
-                            uint32_t kb_used, uint32_t zc, uint8_t *c)
-{
-    static uint8_t t0[MAX_ZC], t1[MAX_ZC], t2[MAX_ZC], t3[MAX_ZC];
-    static uint8_t u[MAX_ZC], p0[MAX_ZC], p1[MAX_ZC], p2[MAX_ZC], p3[MAX_ZC];
-    uint32_t rows = g->rows, cols = g->cols, kb = g->kb;
-    uint32_t i, r, k, col, sh, unknown;
-    uint32_t a, b;
-    int shv;
-
-    for (i = 0; i < cols * zc; i++)
-        c[i] = 0;
-    for (i = 0; i < kb_used * zc; i++)
-        c[i] = info_bits[i];
-
-    a = g->a_v % zc;
-    b = g->b_v % zc;
-    acc_info(g, c, zc, 0, kb, t0);
-    acc_info(g, c, zc, 1, kb, t1);
-    acc_info(g, c, zc, 2, kb, t2);
-    acc_info(g, c, zc, 3, kb, t3);
-    for (i = 0; i < zc; i++)
-        u[i] = t0[i] ^ t1[i] ^ t2[i] ^ t3[i];
-    for (i = 0; i < zc; i++)
-        p0[i] = u[(i + zc - b) % zc];
-    for (i = 0; i < zc; i++) {
-        p1[i] = t0[i] ^ p0[(i + a) % zc];
-        p3[i] = t3[i] ^ p0[(i + a) % zc];
-    }
-    if (g->rb == 1)
-        for (i = 0; i < zc; i++)
-            p2[i] = t1[i] ^ p1[i] ^ p0[(i + b) % zc];
-    else
-        for (i = 0; i < zc; i++)
-            p2[i] = t1[i] ^ p1[i];
-
-    for (k = 0; k < zc; k++) {
-        c[(kb + 0) * zc + k] = p0[k];
-        c[(kb + 1) * zc + k] = p1[k];
-        c[(kb + 2) * zc + k] = p2[k];
-        c[(kb + 3) * zc + k] = p3[k];
-    }
-
-    for (r = 4; r < rows; r++) {
-        unknown = kb + r;
-        shv = -1;
-        for (k = 0; k < g->deg[r]; k++)
-            if (g->col[r * g->maxd + k] == unknown)
-                shv = g->sh[r * g->maxd + k];
-        if (shv < 0)
-            return 1;                       /* no diagonal parity block */
-
-        acc_info(g, c, zc, r, kb, acc);
-        for (k = 0; k < g->deg[r]; k++) {
-            col = g->col[r * g->maxd + k];
-            if (col == unknown || col < kb)
-                continue;
-            if (col > unknown)
-                return 2;                   /* later parity block needed */
-            sh = g->sh[r * g->maxd + k] % zc;
-            for (i = 0; i < zc; i++)
-                acc[i] ^= c[col * zc + (i + sh) % zc];
-        }
-        sh = (uint32_t)shv % zc;
-        for (i = 0; i < zc; i++)
-            c[unknown * zc + i] = acc[(i + zc - sh) % zc];
-    }
-    return 0;
-}
-
-static uint32_t ldpc_syndrome(const ldpc_bg_t *g, const uint8_t *c, uint32_t zc)
-{
-    uint32_t r, k, i, col, sh, bad = 0;
-    for (r = 0; r < g->rows; r++) {
-        for (i = 0; i < zc; i++)
-            acc[i] = 0;
-        for (k = 0; k < g->deg[r]; k++) {
-            col = g->col[r * g->maxd + k];
-            sh = g->sh[r * g->maxd + k] % zc;
-            for (i = 0; i < zc; i++)
-                acc[i] ^= c[col * zc + (i + sh) % zc];
-        }
-        for (i = 0; i < zc; i++)
-            if (acc[i])
-                bad++;
-    }
-    return bad;
 }
 
 int main(void)

@@ -39,7 +39,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -730,6 +730,21 @@ run-ssb-tx: all
 
 # ---- G2/B1: 38.212 LDPC encoder on CVA6 (BG1/BG2 x Zc=20/64) --------------
 LDPC_ENC_TD = $(ROOT)/build/ldpc/enc.td
+
+DL_MOD_TD = $(ROOT)/build/dl/mod.td
+
+run-dl-mod: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	@mkdir -p $(dir $(DL_MOD_TD))
+	python3 $(ROOT)/tools/nr_dl_mod.py selftest
+	python3 $(ROOT)/tools/nr_dl_mod.py dump-td --out $(DL_MOD_TD)
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/dl_mod_bm.bin@0x80000000 \
+		--load $(DL_MOD_TD)@0x80400000 \
+		--results 0x80010000 --nwords 3460 \
+		--dump $(ROOT)/$(OBJ)/dl_mod_dump.txt \
+		--max-cycles 20000000
+	python3 $(ROOT)/tools/check_dl_mod.py $(ROOT)/$(OBJ)/dl_mod_dump.txt $(DL_MOD_TD)
 
 run-ldpc-enc: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc

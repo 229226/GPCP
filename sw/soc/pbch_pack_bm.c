@@ -47,14 +47,13 @@
 #define CRC_POLY         0xB2B117u
 #define NC               1600
 #define DEPTH            9
+#include "gold_seq.inc"      /* 38.211 5.2.1 Gold sequence */
 
 static const uint8_t SUBBLK_PERM[32] = {
     0, 1, 2, 4, 3, 5, 6, 7, 8, 9, 10, 12, 11, 13, 14, 15,
     16, 17, 18, 20, 19, 21, 22, 23, 24, 25, 26, 28, 27, 29, 30, 31
 };
 
-static uint8_t gseq1[NC + E_MAX + 64];
-static uint8_t gseq2[NC + E_MAX + 64];
 static uint8_t info[64], u_bits[NPOL], d_bits[NPOL];
 static uint8_t e_bits[E_MAX], e_sc[E_MAX];
 static uint8_t y_bits[NPOL];
@@ -85,26 +84,6 @@ static uint32_t crc24c(const uint8_t *bits, uint32_t n)
                   : (reg << 1) & mask;
     }
     return reg & mask;
-}
-
-/* 38.211 5.2.1 Gold c(n) = x1(n+Nc) ^ x2(n+Nc). */
-static void gold(uint32_t c_init, uint32_t length)
-{
-    uint32_t n = length + NC, i;
-    for (i = 0; i < n + 31u; i++) {
-        gseq1[i] = 0;
-        gseq2[i] = 0;
-    }
-    gseq1[0] = 1;
-    for (i = 0; i < 31u; i++)
-        gseq2[i] = (uint8_t)((c_init >> i) & 1u);
-    for (i = 0; i < n; i++) {
-        gseq1[i + 31u] = (uint8_t)((gseq1[i + 3u] + gseq1[i]) & 1u);
-        gseq2[i + 31u] = (uint8_t)((gseq2[i + 3u] + gseq2[i + 2u] +
-                                    gseq2[i + 1u] + gseq2[i]) & 1u);
-    }
-    for (i = 0; i < length; i++)
-        scr[i] = (uint8_t)(gseq1[NC + i] ^ gseq2[NC + i]);
 }
 
 static void pack_out(uint32_t *dst, const uint8_t *bits, uint32_t n)
@@ -199,7 +178,7 @@ int main(void)
         errs++;
 
     /* ---- Gold scrambling (c_init = N_ID^cell) ---- */
-    gold(nid, E);
+    gold_seq(nid, E, scr);
     for (i = 0; i < E; i++)
         e_sc[i] = (uint8_t)(e_bits[i] ^ scr[i]);
 
