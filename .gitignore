@@ -18,3 +18,7 @@ third_party/*
 # CVA6 instruction tracer output
 trace_hart_*.dasm
 trace_hart_*.log
+
+# generated performance report (tools/perf_report.py)
+perf-report.html
+perf-summary.csv
