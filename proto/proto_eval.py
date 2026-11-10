@@ -56,6 +56,30 @@ def read_dump(path):
     return words
 
 
+PERF_STAGE_WORD = 1200
+PERF_FULL_WORD = 1320
+PERF_MAGIC = 0x50455246
+
+
+def parse_perf(w):
+    """解析 proto_runner 写在结果区 1200/1320 的 CGRA 性能计数块。"""
+    if len(w) < PERF_STAGE_WORD + 3 or w[PERF_STAGE_WORD] != PERF_MAGIC:
+        return None
+    nst = w[PERF_STAGE_WORD + 1]
+    nk = w[PERF_STAGE_WORD + 2]
+    stages = []
+    for i in range(nst):
+        b = PERF_STAGE_WORD + 3 + i * 10
+        if b + 1 + nk > len(w):
+            break
+        stages.append({"id": w[b], "values": w[b + 1:b + 1 + nk]})
+    full = None
+    if len(w) >= PERF_FULL_WORD + 2 and w[PERF_FULL_WORD] == PERF_MAGIC:
+        n = w[PERF_FULL_WORD + 1]
+        full = w[PERF_FULL_WORD + 2:PERF_FULL_WORD + 2 + n]
+    return {"stages": stages, "full": full}
+
+
 class Report:
     def __init__(self):
         self.rows = []
@@ -79,7 +103,7 @@ class Report:
 
 
 def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget, dma,
-                 timeline=None):
+                 timeline=None, perf=None):
     tgt = plan["target"]
     arrival = (ir.get("traffic") or {}).get("arrival", "single")
     enforced = arrival not in ("single", "none", None, "")
@@ -218,6 +242,70 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
         for r in srows:
             lines.append("| %s | %s | %s | %s | %s |" % r)
 
+    if perf:
+        opmap = {s["id"]: s["op"] for s in stages}
+        cycmap = {s["id"]: max(1, s["cycles"]) for s in stages}
+        lines += ["", "## 硬件性能计数器（CGRA，阶段增量）", "",
+                  "| # | 阶段 | 阵列忙 | 阵列利用率 | 有效指令 | MAC | LD/ST | bank 冲突 | DMA beats | DMA wait |",
+                  "|---|---|---|---|---|---|---|---|---|---|"]
+        for r in perf.get("stages") or []:
+            v = r["values"]
+            cyc = cycmap.get(r["id"], 1)
+            issued = max(1, v[1])
+            util = 100.0 * v[0] / cyc
+            eff = 100.0 * (v[1] - v[2]) / issued
+            mac = 100.0 * v[3] / issued
+            conf = 100.0 * v[6] / max(1, v[0])
+            lines.append("| %d | %s | %d | %.1f%% | %.1f%% | %.1f%% | %d/%d | %.1f%% | %d | %d |"
+                         % (r["id"], opmap.get(r["id"], "?"),
+                            v[0], util, eff, mac, v[4], v[5], conf, v[7], v[8]))
+        full = perf.get("full") or []
+        if full:
+            def g(i):
+                return full[i] if i < len(full) else 0
+            cyc = g(0) or 1
+            issued = g(3) or 1
+            dma_wait = g(16) + g(17) + g(18) + g(19)
+            lines += ["", "### 整跑", "",
+                      "- 总周期 **%d**；阵列忙 **%d（%.1f%%）**"
+                      % (g(0), g(1), 100.0 * g(1) / cyc),
+                      "- 指令槽 **%d**：NOP **%.1f%%**、MAC **%.1f%%**、LD/ST **%d/%d**"
+                      % (g(3), 100.0 * g(4) / issued, 100.0 * g(5) / issued,
+                         g(7), g(8)),
+                      "- SPAD：读 **%d** / 写 **%d**；同拍同 bank 冲突 **%d** 周期、"
+                      "同 word 冲突 **%d** 周期" % (g(10), g(11), g(12), g(13)),
+                      "- DMA：busy **%d** 周期、beats **%d**、等待 **%d** 周期"
+                      "（AR %d / AW %d / B %d / data %d）"
+                      % (g(14), g(15), dma_wait, g(16), g(17), g(18), g(19)),
+                      "- 每 PE 活跃周期（0..15）：%s"
+                      % ", ".join(str(g(22 + p)) for p in range(16))]
+            if perf.get("stages"):
+                def worst(key):
+                    return max(perf["stages"],
+                               key=lambda r: r["values"][key])
+                wb = worst(6)
+                wd = worst(8)
+                wm = worst(3)
+                if max(r["values"][0] for r in perf["stages"]) == 0:
+                    lines += ["", "### 架构提示（自动）", "",
+                              "- 本场景无阵列工作（全部在 CVA6 标量执行）"]
+                else:
+                    lines += ["", "### 架构提示（自动）", "",
+                              "- 最大阵列利用率阶段：`%s`（%.1f%%）"
+                              % (opmap.get(max(perf["stages"],
+                                               key=lambda r: r["values"][0] / cycmap.get(r["id"], 1))["id"], "?"),
+                                 100.0 * max(r["values"][0] / cycmap.get(r["id"], 1)
+                                             for r in perf["stages"])),
+                              "- bank 冲突最多阶段：`%s`（%d 周期）"
+                              % (opmap.get(wb["id"], "?"), wb["values"][6]),
+                              "- DMA 等待最多阶段：`%s`（%d 周期）"
+                              % (opmap.get(wd["id"], "?"), wd["values"][8]),
+                              "- MAC 槽：%s"
+                              % (("所有阶段为 0（当前内核未用 MAC 指令）"
+                                  if wm["values"][3] == 0 else
+                                  "最多 `%s`（%d 槽）"
+                                  % (opmap.get(wm["id"], "?"), wm["values"][3])))]
+
     if ref_rows:
         lines += ["", "## 与手写基准的对账（等价门）", "",
                   "| 项 | 手写 | 协议运行器 | 结论 |", "|---|---|---|---|"]
@@ -289,7 +377,11 @@ def main(argv):
         print("  dump too short: %d words（至少要 %d）" % (len(w), base + need))
         return 1
 
+    perf = parse_perf(w)
     rep = Report()
+    rep.add("性能计数器块", "0x%08x" % PERF_MAGIC,
+            "0x%08x" % w[PERF_STAGE_WORD] if len(w) > PERF_STAGE_WORD else "缺失",
+            perf is not None)
     rep.add("marker", "0x%08x" % MARKER, "0x%08x" % w[0], w[0] == MARKER)
     rep.eq("errors", w[1], 0, "运行器自报的错误数")
     rep.add("完成标志", "0x600d", "0x%04x" % w[9], w[9] == 0x600D)
@@ -436,7 +528,7 @@ def main(argv):
     plan = dict(plan)
     plan["params_hash"] = gold.get("params_hash", "?")
     write_report(report, a.scenario, plan, ir, rep, stages, ref_rows, cycles, budget,
-                 w[4], timeline)
+                 w[4], timeline, perf)
 
     print("阶段占比：")
     for s in stages:

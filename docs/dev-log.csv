@@ -76,3 +76,6 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-10,,,90,sw,feature,阶段 4：lower.py tiling/缓冲自动搜索（FFT 真实跑数、隐藏 estimate FFT、polar SC 树、LDPC Zc）,,estimate,17 个场景差距表 0 项；nr_pdsch ofdm/estimate 224→224；lte_pusch 224/224；polar 1120；WiFi 自动选 radix-2
 2026-11-10,,,30,sw,feature,WiFi 256 点 DFT radix-2 实现（CVA6，Q15 twiddle）,,measured,"12,822,967 → 1,274,835 周期（10.1×），SIG 36/36、DATA 324/324、LDPC syndrome 0"
 2026-11-10,,,15,verif,feature,阶段 4 最终全量验证,,measured,verify full 83 passed / 0 failed / 954 s；17 个场景报告差距表 0 项
+2026-11-10,,,90,rtl,feature,CGRA 硬件性能计数器：PE 活跃/MAC、指令组合、SPAD 冲突、DMA 等待,,estimate,cgra_top/cgra_array 53 个 32 位计数器，0x5000_0068 清零、0x5000_0100+4*idx 读
+2026-11-10,,,45,sw,feature,proto_runner 每阶段性能快照 + proto_eval 报告/架构提示,,measured,结果区 1200/1320 性能块，nwords 1400；nr_pdsch 报告已输出阵列利用率/DMA 等待/bank 冲突
+2026-11-10,,,15,doc,doc,docs/20 §4/§10 性能计数块与 MMIO 映射,,estimate,53 个计数器索引、读法、开销 0.1%

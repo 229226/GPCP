@@ -799,7 +799,7 @@ run-proto-$(PROTO): all
 		--load $(PROTO_DIR)/stimulus.bin@0x80400000 \
 		--load $(PROTO_DIR)/stimulus.bin@0x80600000 \
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
-		--results 0x80070000 --nwords 1200 \
+		--results 0x80070000 --nwords 1400 \
 		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_dump.txt \
 		--max-cycles 40000000
 	python3 $(ROOT)/proto/proto_eval.py --scenario $(PROTO) \

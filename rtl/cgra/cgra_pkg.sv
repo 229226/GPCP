@@ -112,6 +112,14 @@ package cgra_pkg;
                                                     // R: [0] enabled [1] idle [2] busy
   localparam logic [15:0] REG_RING_DONE = 16'h005C; // R: descriptors completed so far
   localparam logic [15:0] REG_DBG_STATE = 16'h0060; // R: engine FSM state (debug)
+
+  // ---------------- performance counters (read-only, 32-bit each) ----------------
+  // W: REG_PERF_CTRL[0] = clear all counters (single-cycle pulse).
+  // R: REG_PERF_BASE + 4*index, index见 cgra_top 的 perf_counters 映射。
+  localparam logic [15:0] REG_PERF_CTRL = 16'h0068;
+  localparam logic [15:0] REG_PERF_BASE = 16'h0100;
+  localparam int          PERF_N       = 64;
+
   localparam logic [31:0] DESC_STATUS_MAGIC = 32'hC0DE_0000;
 
   // ---------------- scratchpad (distributed, banked) ----------------

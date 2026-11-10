@@ -43,7 +43,22 @@ module cgra_array (
     input  logic [9:0]                           dma_rd_addr0,
     output logic [31:0]                          dma_rd_data0,
     input  logic [9:0]                           dma_rd_addr1,
-    output logic [31:0]                          dma_rd_data1
+    output logic [31:0]                          dma_rd_data1,
+    // performance counters (clear is a single-cycle pulse from the host)
+    input  logic                                 perf_clear,
+    output logic [31:0]                          perf_inst_issued,
+    output logic [31:0]                          perf_inst_nop,
+    output logic [31:0]                          perf_inst_mac,
+    output logic [31:0]                          perf_inst_mul,
+    output logic [31:0]                          perf_inst_ld,
+    output logic [31:0]                          perf_inst_st,
+    output logic [31:0]                          perf_inst_alu,
+    output logic [31:0]                          perf_spad_read,
+    output logic [31:0]                          perf_spad_write,
+    output logic [31:0]                          perf_spad_bank_conflict,
+    output logic [31:0]                          perf_spad_word_conflict,
+    output logic [cgra_pkg::CGRA_NPES-1:0][31:0] perf_pe_active,
+    output logic [cgra_pkg::CGRA_NPES-1:0][31:0] perf_pe_mac
 );
 
   import cgra_pkg::*;
@@ -64,6 +79,100 @@ module cgra_array (
   logic        pe_we [0:NPES-1];
   logic [9:0]  pe_waddr [0:NPES-1];
   logic [31:0] pe_wdata [0:NPES-1];
+
+  // ---------------- performance counters ----------------
+  // 每个 array run 周期统计 PE 指令组合、显式 LD/ST 与同拍多写冲突。
+  logic [4:0]  n_nop, n_mac, n_mul, n_ld, n_st, n_alu;
+  logic        bank_conflict, word_conflict;
+  logic [3:0]  perf_op_c, perf_op_f;
+
+  always_comb begin
+    n_nop = 5'd0;
+    n_mac = 5'd0;
+    n_mul = 5'd0;
+    n_ld  = 5'd0;
+    n_st  = 5'd0;
+    n_alu = 5'd0;
+    for (int p = 0; p < NPES; p++) begin
+      perf_op_c = inst[p][INST_OP_LSB +: 4];
+      case (perf_op_c)
+        OP_NOP:            n_nop++;
+        OP_MAC, OP_MACL:   n_mac++;
+        OP_MUL:            n_mul++;
+        OP_LD:             n_ld++;
+        OP_ST:             n_st++;
+        default:           n_alu++;
+      endcase
+    end
+
+    bank_conflict = 1'b0;
+    word_conflict = 1'b0;
+    for (int p = 0; p < NPES; p++)
+      for (int q = p + 1; q < NPES; q++)
+        if (en && pe_we[p] && pe_we[q]) begin
+          if (pe_waddr[p][9:5] == pe_waddr[q][9:5])
+            bank_conflict = 1'b1;
+          if (pe_waddr[p] == pe_waddr[q])
+            word_conflict = 1'b1;
+        end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      perf_inst_issued <= 32'd0;
+      perf_inst_nop    <= 32'd0;
+      perf_inst_mac    <= 32'd0;
+      perf_inst_mul    <= 32'd0;
+      perf_inst_ld     <= 32'd0;
+      perf_inst_st     <= 32'd0;
+      perf_inst_alu    <= 32'd0;
+      perf_spad_read   <= 32'd0;
+      perf_spad_write  <= 32'd0;
+      perf_spad_bank_conflict <= 32'd0;
+      perf_spad_word_conflict <= 32'd0;
+      for (int p = 0; p < NPES; p++) begin
+        perf_pe_active[p] <= 32'd0;
+        perf_pe_mac[p]    <= 32'd0;
+      end
+    end else if (perf_clear) begin
+      perf_inst_issued <= 32'd0;
+      perf_inst_nop    <= 32'd0;
+      perf_inst_mac    <= 32'd0;
+      perf_inst_mul    <= 32'd0;
+      perf_inst_ld     <= 32'd0;
+      perf_inst_st     <= 32'd0;
+      perf_inst_alu    <= 32'd0;
+      perf_spad_read   <= 32'd0;
+      perf_spad_write  <= 32'd0;
+      perf_spad_bank_conflict <= 32'd0;
+      perf_spad_word_conflict <= 32'd0;
+      for (int p = 0; p < NPES; p++) begin
+        perf_pe_active[p] <= 32'd0;
+        perf_pe_mac[p]    <= 32'd0;
+      end
+    end else if (en) begin
+      perf_inst_issued <= perf_inst_issued + 32'(NPES);
+      perf_inst_nop    <= perf_inst_nop + {27'd0, n_nop};
+      perf_inst_mac    <= perf_inst_mac + {27'd0, n_mac};
+      perf_inst_mul    <= perf_inst_mul + {27'd0, n_mul};
+      perf_inst_ld     <= perf_inst_ld + {27'd0, n_ld};
+      perf_inst_st     <= perf_inst_st + {27'd0, n_st};
+      perf_inst_alu    <= perf_inst_alu + {27'd0, n_alu};
+      perf_spad_read   <= perf_spad_read + {27'd0, n_ld};
+      perf_spad_write  <= perf_spad_write + {27'd0, n_st};
+      if (bank_conflict)
+        perf_spad_bank_conflict <= perf_spad_bank_conflict + 32'd1;
+      if (word_conflict)
+        perf_spad_word_conflict <= perf_spad_word_conflict + 32'd1;
+      for (int p = 0; p < NPES; p++) begin
+        perf_op_f = inst[p][INST_OP_LSB +: 4];
+        if (perf_op_f != OP_NOP)
+          perf_pe_active[p] <= perf_pe_active[p] + 32'd1;
+        if (perf_op_f == OP_MAC || perf_op_f == OP_MACL)
+          perf_pe_mac[p] <= perf_pe_mac[p] + 32'd1;
+      end
+    end
+  end
 
   // host scratchpad access
   logic        host_sp_we;

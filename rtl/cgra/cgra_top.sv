@@ -120,6 +120,30 @@ module cgra_top #(
 
   assign cycle_o = cycle_cnt;
 
+  // ---------------- performance counters ----------------
+  // 软件写 REG_PERF_CTRL[0] 清一次；读 REG_PERF_BASE + 4*idx。
+  logic perf_clear;
+  assign perf_clear = wr_en && (wr_addr == REG_PERF_CTRL) && wr_data[0];
+
+  logic        busy_q, dma_busy_q;
+  logic [31:0] perf_cycles;
+  logic [31:0] perf_array_busy;
+  logic [31:0] perf_array_runs;
+  logic [31:0] perf_dma_busy;
+  logic [31:0] perf_dma_beats;
+  logic [31:0] perf_dma_ar_wait;
+  logic [31:0] perf_dma_aw_wait;
+  logic [31:0] perf_dma_b_wait;
+  logic [31:0] perf_dma_data_wait;
+  logic [31:0] perf_dma_starts;
+  logic [CGRA_NPES-1:0][31:0] perf_pe_active;
+  logic [CGRA_NPES-1:0][31:0] perf_pe_mac;
+  // array 侧计数器
+  logic [31:0] perf_inst_issued, perf_inst_nop, perf_inst_mac, perf_inst_mul;
+  logic [31:0] perf_inst_ld, perf_inst_st, perf_inst_alu;
+  logic [31:0] perf_spad_read, perf_spad_write;
+  logic [31:0] perf_spad_bank_conflict, perf_spad_word_conflict;
+
   // Synchronous SRAM read with a one-cycle lookahead: the row fetched during
   // cycle n-1 is the word executed in cycle n.  While idle the address stays
   // at row 0, so the edge that raises `busy` also pre-loads word 0 -- a run
@@ -624,14 +648,113 @@ module cgra_top #(
       .dma_rd_addr0(spad_rd_addr0),
       .dma_rd_data0(spad_rd_data0),
       .dma_rd_addr1(spad_rd_addr1),
-      .dma_rd_data1(spad_rd_data1)
+      .dma_rd_data1(spad_rd_data1),
+      .perf_clear(perf_clear),
+      .perf_inst_issued(perf_inst_issued),
+      .perf_inst_nop(perf_inst_nop),
+      .perf_inst_mac(perf_inst_mac),
+      .perf_inst_mul(perf_inst_mul),
+      .perf_inst_ld(perf_inst_ld),
+      .perf_inst_st(perf_inst_st),
+      .perf_inst_alu(perf_inst_alu),
+      .perf_spad_read(perf_spad_read),
+      .perf_spad_write(perf_spad_write),
+      .perf_spad_bank_conflict(perf_spad_bank_conflict),
+      .perf_spad_word_conflict(perf_spad_word_conflict),
+      .perf_pe_active(perf_pe_active),
+      .perf_pe_mac(perf_pe_mac)
   );
+
+  // ---------------- performance counter registers ----------------
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      perf_cycles <= 32'd0;
+      perf_array_busy <= 32'd0;
+      perf_array_runs <= 32'd0;
+      perf_dma_busy <= 32'd0;
+      perf_dma_beats <= 32'd0;
+      perf_dma_ar_wait <= 32'd0;
+      perf_dma_aw_wait <= 32'd0;
+      perf_dma_b_wait <= 32'd0;
+      perf_dma_data_wait <= 32'd0;
+      perf_dma_starts <= 32'd0;
+      busy_q <= 1'b0;
+      dma_busy_q <= 1'b0;
+    end else if (perf_clear) begin
+      perf_cycles <= 32'd0;
+      perf_array_busy <= 32'd0;
+      perf_array_runs <= 32'd0;
+      perf_dma_busy <= 32'd0;
+      perf_dma_beats <= 32'd0;
+      perf_dma_ar_wait <= 32'd0;
+      perf_dma_aw_wait <= 32'd0;
+      perf_dma_b_wait <= 32'd0;
+      perf_dma_data_wait <= 32'd0;
+      perf_dma_starts <= 32'd0;
+      busy_q <= busy;
+      dma_busy_q <= dma_busy;
+    end else begin
+      perf_cycles <= perf_cycles + 32'd1;
+      if (busy) perf_array_busy <= perf_array_busy + 32'd1;
+      if (busy && !busy_q) perf_array_runs <= perf_array_runs + 32'd1;
+      if (dma_busy) perf_dma_busy <= perf_dma_busy + 32'd1;
+      if (dma_busy && !dma_busy_q)
+        perf_dma_starts <= perf_dma_starts + 32'd1;
+      perf_dma_beats <= perf_dma_beats
+          + ((m_axi_rvalid && m_axi_rready) ? 32'd1 : 32'd0)
+          + ((m_axi_wvalid && m_axi_wready) ? 32'd1 : 32'd0);
+      if ((dstate == D_AR) && !m_axi_arready)
+        perf_dma_ar_wait <= perf_dma_ar_wait + 32'd1;
+      if ((dstate == D_AW) && !m_axi_awready)
+        perf_dma_aw_wait <= perf_dma_aw_wait + 32'd1;
+      if ((dstate == D_BRESP) && !m_axi_bvalid)
+        perf_dma_b_wait <= perf_dma_b_wait + 32'd1;
+      if (((dstate == D_SIN) && !m_axi_rvalid) ||
+          ((dstate == D_SOUT) && !m_axi_wready))
+        perf_dma_data_wait <= perf_dma_data_wait + 32'd1;
+      busy_q <= busy;
+      dma_busy_q <= dma_busy;
+    end
+  end
+
+  // 统一编址：0..21 为全局/array 计数，22..37 为每 PE 活跃周期，
+  // 38..53 为每 PE MAC 周期。
+  logic [31:0] perf_counters [0:PERF_N-1];
+  always_comb begin
+    for (int i = 0; i < PERF_N; i++) perf_counters[i] = 32'd0;
+    perf_counters[0]  = perf_cycles;
+    perf_counters[1]  = perf_array_busy;
+    perf_counters[2]  = perf_array_runs;
+    perf_counters[3]  = perf_inst_issued;
+    perf_counters[4]  = perf_inst_nop;
+    perf_counters[5]  = perf_inst_mac;
+    perf_counters[6]  = perf_inst_mul;
+    perf_counters[7]  = perf_inst_ld;
+    perf_counters[8]  = perf_inst_st;
+    perf_counters[9]  = perf_inst_alu;
+    perf_counters[10] = perf_spad_read;
+    perf_counters[11] = perf_spad_write;
+    perf_counters[12] = perf_spad_bank_conflict;
+    perf_counters[13] = perf_spad_word_conflict;
+    perf_counters[14] = perf_dma_busy;
+    perf_counters[15] = perf_dma_beats;
+    perf_counters[16] = perf_dma_ar_wait;
+    perf_counters[17] = perf_dma_aw_wait;
+    perf_counters[18] = perf_dma_b_wait;
+    perf_counters[19] = perf_dma_data_wait;
+    perf_counters[20] = perf_dma_starts;
+    perf_counters[21] = {16'b0, ring_done};
+    for (int p = 0; p < CGRA_NPES; p++) begin
+      perf_counters[22 + p] = perf_pe_active[p];
+      perf_counters[38 + p] = perf_pe_mac[p];
+    end
+  end
 
   // ---------------- host read mux ----------------
   always_comb begin
     rd_data = 32'b0;
-    if (rd_addr < 16'h0064) begin
-      case (rd_addr[6:0])
+    if (rd_addr < 16'h0100) begin
+      case (rd_addr[7:0])
         6'h00: rd_data = {cycle_cnt, 13'b0, 1'b0, done, busy};
         6'h04: rd_data = {16'b0, num_cycles};
         6'h08: rd_data = {16'b0, cycle_cnt};
@@ -658,8 +781,12 @@ module cgra_top #(
         7'h5C: rd_data = {16'b0, ring_done};
         7'h60: rd_data = {16'b0, dbg_soc_state, wr_status, rd_desc, 2'b0, 4'(dstate),
                           dma_bcnt[3:0]};
+        7'h68: rd_data = 32'b0;
         default: rd_data = 32'b0;
       endcase
+    end else if ((rd_addr >= REG_PERF_BASE) &&
+                 (rd_addr < (REG_PERF_BASE + PERF_N * 4))) begin
+      rd_data = perf_counters[(rd_addr - REG_PERF_BASE) >> 2];
     end else if (rd_addr >= REG_PE_BASE && rd_addr < (REG_PE_ACC + 16'h40)) begin
       rd_data = pe_rd;
     end else if ((rd_addr >= REG_SPAD_BASE) &&

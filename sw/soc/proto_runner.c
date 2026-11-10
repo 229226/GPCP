@@ -16,6 +16,7 @@
 #include "../include/gpcp_cgra.h"
 #include "../include/soc_io.h"
 #include "../include/gpcp_cgra_rt.h"      /* rt_array_run / rt_dcache_flush */
+#include "../include/perf.h"              /* CGRA 性能计数器 */
 
 #include "plan.h"                         /* 生成物：阶段表 + 预算 + 参数摘要 */
 
@@ -41,6 +42,36 @@ static int same(const char *a, const char *b)
     return *a == *b;
 }
 
+/* 性能计数块（结果区固定偏移，见 docs/20 §4）：
+ *   [1200] magic [1201] 阶段数 [1202] 每阶段键数
+ *   每阶段 10 字：id + 9 个增量
+ *   [1320] magic [1321] 计数器个数 [1322..] 整跑快照
+ */
+#define PERF_STAGE_WORD 1200u
+#define PERF_FULL_WORD  1320u
+#define PERF_MAGIC      0x50455246u      /* 'PERF' */
+#define PERF_KEYS       9u
+
+static const uint8_t perf_key[PERF_KEYS] = {
+    PERF_ARRAY_BUSY, PERF_INST_ISSUED, PERF_INST_NOP, PERF_INST_MAC,
+    PERF_SPAD_READ, PERF_SPAD_WRITE, PERF_SPAD_BANK_CONFLICT, PERF_DMA_BEATS,
+    0xFFu
+};
+
+static uint32_t perf_dma_wait(void)
+{
+    return perf_read(PERF_DMA_AR_WAIT) + perf_read(PERF_DMA_AW_WAIT)
+         + perf_read(PERF_DMA_B_WAIT) + perf_read(PERF_DMA_DATA_WAIT);
+}
+
+static void perf_snapshot(uint32_t *v)
+{
+    uint32_t k;
+    for (k = 0; k < PERF_KEYS - 1u; k++)
+        v[k] = perf_read(perf_key[k]);
+    v[PERF_KEYS - 1u] = perf_dma_wait();
+}
+
 int main(void)
 {
     uint32_t *out = RESULT_BASE;
@@ -55,11 +86,16 @@ int main(void)
         return 0;
     }
 
+    perf_clear();
+    out[PERF_STAGE_WORD + 0] = PERF_MAGIC;
+    out[PERF_STAGE_WORD + 1] = PROTO_N_STAGES;
+    out[PERF_STAGE_WORD + 2] = PERF_KEYS;
+
     t0 = mtime();
     for (i = 0; i < PROTO_N_STAGES; i++) {
         const proto_stage_t *st = &proto_stages[i];
         proto_op_fn fn = 0;
-        uint32_t c0, r0, k;
+        uint32_t c0, r0, k, p0[PERF_KEYS], p1[PERF_KEYS];
 
         for (k = 0; k < N_OPS; k++)
             if (same(proto_ops[k].op, st->op)
@@ -67,6 +103,7 @@ int main(void)
                 fn = proto_ops[k].fn;
                 break;
             }
+        perf_snapshot(p0);
         c0 = mtime();
         r0 = runs;
         if (!fn || fn() != 0)
@@ -74,9 +111,18 @@ int main(void)
         out[10 + 3 * i + 0] = st->id;
         out[10 + 3 * i + 1] = mtime() - c0;
         out[10 + 3 * i + 2] = runs - r0;
+        perf_snapshot(p1);
+        out[PERF_STAGE_WORD + 3 + i * 10] = st->id;
+        for (k = 0; k < PERF_KEYS; k++)
+            out[PERF_STAGE_WORD + 4 + i * 10 + k] = p1[k] - p0[k];
     }
 
     write_anchors(out + 10 + 3 * PROTO_N_STAGES);
+
+    out[PERF_FULL_WORD + 0] = PERF_MAGIC;
+    out[PERF_FULL_WORD + 1] = CGRA_PERF_N;
+    for (i = 0; i < CGRA_PERF_N; i++)
+        out[PERF_FULL_WORD + 2 + i] = perf_read(i);
 
     out[0] = 0x50524F54u;                   /* 'PROT' */
     out[1] = errs + bad;
