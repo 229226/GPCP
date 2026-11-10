@@ -7,14 +7,82 @@
   3. 判断可行性，不可行就说明"缺什么"，绝不回退成让用户手写坐标。
 """
 import json
+import math
 import re
 
 # 算子库当前能提供的实现（与 cgra/kernels/*.yaml 对应；换库时改这里）
-FFT_SIZES = (256, 1024, 4096)
+# 注意：仓库里只有 4096 点 FFT 镜像（sw/soc/ssb_fft.inc 的 FFT_N=4096），
+# 不要在计划里声称存在 256/1024 点镜像。
+FFT_SIZES = (4096,)
 LDPC_ZC = (20, 64)          # cn20/bn24 与 zc64 两套
 POLAR_N = 512               # polar 9 级镜像覆盖 512 点
+POLAR_PES = 16              # polar_node 微码固定 16 PE（与 target 的 what-if 无关）
 # 经验常数：一次阵列运行的编排开销（T0 台架实测 T(c)=32+1.0045c，取上限估计）
 T0_OVERHEAD = 32
+
+# 4096 点 FFT 镜像的 tiling（与 ssb_fft.inc 的 fe_desc_stages/fe_desc_tail 同源）：
+#   每 256 点一个 tile，radix-4 阶段数 = floor(log4(N/256)) + 1，最后 64 点一个 tail tile。
+FFT_TILE = 256
+FFT_TAIL = 64
+
+
+def fft_runs_per_symbol(size):
+    """一次 N 点 FFT 实际启动阵列的次数（不是 N/1024 这种粗估）。"""
+    tiles = max(1, size // FFT_TILE)
+    stages = 0
+    while (size >> (2 * stages)) >= FFT_TILE:
+        stages += 1
+    return stages * tiles + size // FFT_TAIL
+
+
+def fft_candidates(need, cp_len):
+    """枚举算子库能覆盖 need 的 FFT 实现；返回 (chosen, candidates)。"""
+    out = []
+    for size in FFT_SIZES:
+        if size >= need:
+            out.append({
+                "impl": "fft%d" % size,
+                "size": size,
+                "runs_per_symbol": fft_runs_per_symbol(size),
+                "over_provision": round(size / float(need), 3),
+                "buffer_words_per_symbol": 2 * (size + cp_len),
+            })
+    if not out:
+        return None, []
+    return min(out, key=lambda c: (c["runs_per_symbol"], c["size"])), out
+
+
+def infer_nsym(ir):
+    """符号数：cfg.nsym > received(tdN)/长度 > 自环默认 2。"""
+    cfg = ir.get("cfg", {})
+    if cfg.get("nsym"):
+        return int(cfg["nsym"])
+    d = ir.get("derived", {})
+    nfft = int(d.get("n_fft_min") or 0)
+    cp = int(d.get("cp_len") or 0)
+    for nd in ir["nodes"]:
+        if nd["op"] != "received":
+            continue
+        form = str(nd["params"].get("form") or "")
+        m = re.match(r"td(\d+)$", form)
+        if m:
+            return int(m.group(1))
+        length = int(nd.get("length") or 0)
+        if nfft and length and length % (2 * (nfft + cp)) == 0:
+            return length // (2 * (nfft + cp))
+    return 1
+
+
+def polar_decode_runs(npol=POLAR_N, npes=POLAR_PES):
+    """polar SC 树的真实阵列运行数：每个内部节点两次 node_run，按 npes 分块。"""
+    levels = int(round(math.log(npol, 2)))
+    total = 0
+    for lvl in range(levels):
+        nodes = 1 << lvl
+        half = npol >> (lvl + 1)
+        total += nodes * ((half + npes - 1) // npes)
+    return 2 * total
+
 
 
 def read_target(path):
@@ -57,8 +125,12 @@ def lower(ir, target):
     """返回 (plan, ok)。plan 里每个节点一行，附可行性与倍数诊断。"""
     n_spad_words = target["banks"] * target["words_per_bank"]
     plan = {"schema": "gpcp-proto-plan/1", "scenario": ir["scenario"],
-            "target": target, "stages": [], "ok": True, "needs": []}
+            "target": target, "stages": [], "ok": True, "needs": [],
+            "search": {"fft": [], "wifi_dft": [], "ldpc": []}}
     d = ir.get("derived", {})
+    need = d.get("n_fft_min")
+    nsym = infer_nsym(ir)
+    cp_len = int(d.get("cp_len", 0) or 0)
 
     for nd in ir["nodes"]:
         op = nd["op"]
@@ -66,41 +138,87 @@ def lower(ir, target):
               "impl": None, "notes": []}
 
         if op in ("ofdm_modulate", "ofdm_demodulate"):
-            need = d.get("n_fft_min")
             if ir.get("rat") == "wifi":
-                # WiFi 没有 256 点 FFT 微码：编译器把它落到控制核的标量 DFT。
+                # WiFi 没有阵列 FFT 镜像：在控制核上搜索标量 DFT 的 tiling。
+                n = need or 0
+                cands = [{
+                    "impl": "dft%d_scalar" % n if n else "dft_scalar",
+                    "kind": "direct-dft",
+                    "est_ops": n * n,
+                    "buffer_words": 2 * n,
+                    "tiling": {"form": "direct", "points": n},
+                }]
+                if n == 256:
+                    cands.append({
+                        "impl": "dft256_radix2",
+                        "kind": "radix-2-fft",
+                        "est_ops": 5 * n * 8,       # 8 级 × 128 蝶形 × ~5 op
+                        "buffer_words": 2 * n,
+                        "tiling": {"form": "radix-2", "stages": 8,
+                                   "butterflies": n // 2 * 8},
+                    })
+                best = min(cands, key=lambda c: (c["est_ops"], c["buffer_words"]))
                 st["where"] = "control-core"
-                st["impl"] = "dft%d_scalar" % need if need else "dft_scalar"
+                st["impl"] = best["impl"]
                 st["array_runs"] = 0
-                st["notes"].append("802.11be 256 点 DFT 由 CVA6 标量执行")
+                st["tiling"] = best["tiling"]
+                st["buffer_words"] = best["buffer_words"]
+                st["search"] = {
+                    "candidates": [c["impl"] for c in cands],
+                    "chosen": best["impl"],
+                    "rule": "min est_ops; tie min buffer_words",
+                }
+                st["notes"].append(
+                    "802.11be %d 点 DFT 由 CVA6 标量执行；搜索选择 %s"
+                    % (n, best["impl"]))
+                plan["search"]["wifi_dft"].append(
+                    {"stage": nd["id"], "need": n, "candidates": cands,
+                     "chosen": best["impl"]})
             elif need is None:
                 st["notes"].append("cfg 未给出带宽/子空间隔，无法推导 FFT 点数")
                 plan["ok"] = False
                 plan["needs"].append("cfg(bw_mhz, scs_khz)")
             else:
-                size, over = _pick(need, FFT_SIZES)
-                if size is None:
+                cand, cands = fft_candidates(need, cp_len)
+                if cand is None:
                     plan["ok"] = False
                     plan["needs"].append("FFT >= %d 的算子实现" % need)
                 else:
+                    runs = cand["runs_per_symbol"] * nsym
                     st["where"] = "array"
-                    st["impl"] = "fft%d" % size
-                    st["over_provision"] = round(over, 3)
-                    if over > 1.0:
+                    st["impl"] = cand["impl"]
+                    st["over_provision"] = cand["over_provision"]
+                    st["array_runs"] = runs
+                    st["tiling"] = {
+                        "size": cand["size"],
+                        "symbols": nsym,
+                        "tiles_per_symbol": cand["runs_per_symbol"],
+                        "tiles_total": runs,
+                    }
+                    st["buffer_words"] = cand["buffer_words_per_symbol"] * min(nsym, 2)
+                    st["search"] = {
+                        "candidates": [c["impl"] for c in cands],
+                        "chosen": cand["impl"],
+                        "rule": "min runs; tie min size",
+                    }
+                    if cand["over_provision"] > 1.0:
                         st["notes"].append(
                             "最小需要 %d 点，算子库只有 %d 点 → 空转 %.2fx"
-                            % (need, size, over))
-                    tiles = max(1, size // 1024)
-                    st["array_runs"] = tiles
+                            % (need, cand["size"], cand["over_provision"]))
                     if 448 + T0_OVERHEAD > target["imem_cycles"]:
                         plan["ok"] = False
                         plan["needs"].append("IMEM >= 512 拍（FFT 镜像 448 拍）")
+                    plan["search"]["fft"].append(
+                        {"stage": nd["id"], "op": op, "need": need,
+                         "nsym": nsym, "candidates": cands,
+                         "chosen": cand["impl"], "runs": runs})
 
         elif op == "decode" and nd["params"].get("scheme") == "polar":
             st["where"] = "array"
             st["impl"] = "polar_node@%d" % POLAR_N
-            st["array_runs"] = 128
-            st["notes"].append("SC 树 127 个内部节点，每节点一次阵列运行")
+            st["array_runs"] = polar_decode_runs()
+            st["notes"].append("SC 树每内部节点两次 node_run，按 %d PE 分块 → %d 次阵列运行"
+                               % (POLAR_PES, st["array_runs"]))
 
         elif op == "encode" and nd["params"].get("scheme") == "polar":
             st["where"] = "array"
@@ -135,23 +253,40 @@ def lower(ir, target):
             else:
                 k_info = (d.get("a_bits") or 0) + 24        # TB + CRC24
                 zc_need = max(1, -(-k_info // 6))
-            zc, over = _pick(zc_need, LDPC_ZC)
-            if zc is None:
+            iters = int(nd["params"].get("max_iter", 8))
+            cands = []
+            for z in LDPC_ZC:
+                words = 26 * z
+                if words <= n_spad_words:
+                    cands.append({
+                        "impl": "ldpc_bg2_zc%d" % z,
+                        "zc": z,
+                        "spad_words": words,
+                        "iters": iters,
+                        "array_runs": iters * 94 if op == "decode" else 0,
+                    })
+            if not cands:
                 plan["ok"] = False
                 plan["needs"].append("LDPC 提升长度 >= %d 的实现" % zc_need)
             else:
+                best = min(cands, key=lambda c: (c["spad_words"], c["array_runs"]))
                 st["where"] = "control-core" if op == "encode" else "array"
-                st["impl"] = "ldpc_bg2_zc%d" % zc
-                words = 26 * zc
-                st["spad_words"] = words
-                st["notes"].append("每块 %d 字（26 槽 x zc）" % words)
-                if words > n_spad_words:
-                    plan["ok"] = False
-                    plan["needs"].append("spad >= %d 字（当前 %d）"
-                                         % (words, n_spad_words))
+                st["impl"] = best["impl"]
+                st["spad_words"] = best["spad_words"]
+                st["buffer_words"] = best["spad_words"]
+                st["search"] = {
+                    "need_zc": zc_need,
+                    "candidates": [c["impl"] for c in cands],
+                    "chosen": best["impl"],
+                    "rule": "min spad_words; tie min runs",
+                }
+                st["notes"].append("每块 %d 字（26 槽 x zc）" % best["spad_words"])
                 if op == "decode":
-                    iters = nd["params"].get("max_iter", 8)
-                    st["array_runs"] = iters * 94
+                    st["array_runs"] = best["array_runs"]
+                plan["search"]["ldpc"].append({
+                    "stage": nd["id"], "op": op, "need_zc": zc_need,
+                    "candidates": cands, "chosen": best["impl"],
+                })
 
         elif op == "correlate":
             # 相关搜索：一个候选假设 = 一次阵列运行（prach_corr / pss_corr /
@@ -191,8 +326,47 @@ def lower(ir, target):
             st["where"] = "control-core"
             st["impl"] = "ref_%s" % (nd["params"].get("type") or "generic")
 
-        elif op in ("channel", "estimate", "equalise_demap", "extract", "received",
-                    "measure"):
+        elif op == "estimate":
+            # 自环发射（有 ofdm_modulate、但没有 ofdm_demodulate）时，阶段实现
+            # 在 estimate 内部做接收 FFT；计划必须把这份阵列工作算进去。
+            has_demod = any(n["op"] == "ofdm_demodulate" and n["id"] < nd["id"]
+                            for n in ir["nodes"])
+            has_mod = any(n["op"] == "ofdm_modulate" and n["id"] < nd["id"]
+                          for n in ir["nodes"])
+            has_td = any(n["op"] == "received"
+                         and str(n["params"].get("form") or "") in ("td", "td2", "td4")
+                         and n["id"] < nd["id"] for n in ir["nodes"])
+            if (not has_demod) and (has_mod or has_td) and need is not None:
+                cand, cands = fft_candidates(need, cp_len)
+                if cand is None:
+                    st["where"] = "control-core"
+                else:
+                    runs = cand["runs_per_symbol"] * nsym
+                    st["where"] = "array"
+                    st["impl"] = cand["impl"]
+                    st["array_runs"] = runs
+                    st["tiling"] = {
+                        "size": cand["size"],
+                        "symbols": nsym,
+                        "tiles_per_symbol": cand["runs_per_symbol"],
+                        "tiles_total": runs,
+                    }
+                    st["buffer_words"] = cand["buffer_words_per_symbol"] * min(nsym, 2)
+                    st["search"] = {
+                        "candidates": [c["impl"] for c in cands],
+                        "chosen": cand["impl"],
+                        "rule": "min runs; tie min size",
+                    }
+                    st["notes"].append(
+                        "实现库在 estimate 内做 FFT（自环接收，与 ofdm_modulate 同口径）")
+                    plan["search"]["fft"].append(
+                        {"stage": nd["id"], "op": op, "need": need,
+                         "nsym": nsym, "candidates": cands,
+                         "chosen": cand["impl"], "runs": runs, "hidden": True})
+            else:
+                st["where"] = "control-core"
+
+        elif op in ("channel", "equalise_demap", "extract", "received", "measure"):
             st["where"] = "control-core"
 
         plan["stages"].append(st)

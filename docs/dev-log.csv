@@ -73,3 +73,6 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-10,,,210,sw,feature,多制式批次 8 场景：5G QAM/HARQ/TP + LTE PUSCH/PRACH/cell search + WiFi 11be,,estimate,"16QAM 2,914,888 / 976；64QAM 3,026,735 / 976；HARQ 3,548,800 / 1200；PUSCH-TP 7,719,998 / 976；LTE PUSCH 10,730,753 / 448；LTE PRACH 104,341 / 139；cell search 443,279 / 0；WiFi 11be 12,822,967 / 0"
 2026-11-10,,,15,verif,feature,8 个 run-proto 门接入 verify.sh full / verify_cache,,measured,verify full 83 passed / 0 failed / 1126 s；8 个新 proto 门全部 PASS
 2026-11-10,,,10,doc,doc,docs/20 §9 + AGENTS 多制式批次（Rel-19 / Rel-18 / 802.11be-2024）,,estimate,8 场景周期/阵列数字与版本基线已记录
+2026-11-10,,,90,sw,feature,阶段 4：lower.py tiling/缓冲自动搜索（FFT 真实跑数、隐藏 estimate FFT、polar SC 树、LDPC Zc）,,estimate,17 个场景差距表 0 项；nr_pdsch ofdm/estimate 224→224；lte_pusch 224/224；polar 1120；WiFi 自动选 radix-2
+2026-11-10,,,30,sw,feature,WiFi 256 点 DFT radix-2 实现（CVA6，Q15 twiddle）,,measured,"12,822,967 → 1,274,835 周期（10.1×），SIG 36/36、DATA 324/324、LDPC syndrome 0"
+2026-11-10,,,15,verif,feature,阶段 4 最终全量验证,,measured,verify full 83 passed / 0 failed / 954 s；17 个场景报告差距表 0 项

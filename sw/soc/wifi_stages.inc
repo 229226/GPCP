@@ -134,7 +134,50 @@ static int wifi_dmrs(void)
     return 0;
 }
 
-static int wifi_ofdm_demodulate(void)
+static uint32_t wifi_rev8(uint32_t x)
+{
+    x = ((x & 0x55u) << 1) | ((x & 0xAAu) >> 1);
+    x = ((x & 0x33u) << 2) | ((x & 0xCCu) >> 2);
+    x = ((x & 0x0Fu) << 4) | ((x & 0xF0u) >> 4);
+    return x & 0xFFu;
+}
+
+/* 256 点 radix-2 DIT FFT（Q15 twiddle），就地运算；输出与直接 DFT 同序。 */
+static void wifi_fft256(int32_t *ar, int32_t *ai)
+{
+    for (int i = 0; i < WIFI_NFFT; i++) {
+        int j = (int)wifi_rev8((uint32_t)i);
+        if (i < j) {
+            int32_t t = ar[i]; ar[i] = ar[j]; ar[j] = t;
+            t = ai[i]; ai[i] = ai[j]; ai[j] = t;
+        }
+    }
+    for (int len = 2; len <= WIFI_NFFT; len <<= 1) {
+        int half = len >> 1;
+        int step = WIFI_NFFT / len;
+        for (int i = 0; i < WIFI_NFFT; i += len) {
+            for (int j = 0; j < half; j++) {
+                int idx = j * step;
+                int64_t c = wifi_cos256[idx];
+                int64_t s = wifi_cos256[(idx + 192) & (WIFI_NFFT - 1)];
+                int64_t br = ar[i + j + half], bi = ai[i + j + half];
+                int64_t tr = (br * c + bi * s) / WIFI_COS_SCALE;
+                int64_t ti = (bi * c - br * s) / WIFI_COS_SCALE;
+                int64_t ur = ar[i + j], ui = ai[i + j];
+                ar[i + j] = (int32_t)(ur + tr);
+                ai[i + j] = (int32_t)(ui + ti);
+                ar[i + j + half] = (int32_t)(ur - tr);
+                ai[i + j + half] = (int32_t)(ui - ti);
+            }
+        }
+    }
+    for (int i = 0; i < WIFI_NFFT; i++) {
+        ar[i] /= WIFI_NFFT;
+        ai[i] /= WIFI_NFFT;
+    }
+}
+
+static int wifi_ofdm_demodulate_impl(int use_fft)
 {
     static int32_t ar[WIFI_NFFT], ai[WIFI_NFFT], dft[2 * WIFI_NFFT];
     const int32_t *td = (const int32_t *)WIFI_TD;
@@ -144,7 +187,15 @@ static int wifi_ofdm_demodulate(void)
             ar[n] = sp[2 * n];
             ai[n] = sp[2 * n + 1];
         }
-        wifi_dft256(ar, ai, dft);
+        if (use_fft) {
+            wifi_fft256(ar, ai);
+            for (int n = 0; n < WIFI_NFFT; n++) {
+                dft[2 * n] = ar[n];
+                dft[2 * n + 1] = ai[n];
+            }
+        } else {
+            wifi_dft256(ar, ai, dft);
+        }
         {
             int idx = 0;
             for (int k = -117; k <= 117; k++) {
@@ -160,6 +211,9 @@ static int wifi_ofdm_demodulate(void)
     }
     return 0;
 }
+
+static int wifi_ofdm_demodulate(void) { return wifi_ofdm_demodulate_impl(0); }
+static int wifi_ofdm_demodulate_fft(void) { return wifi_ofdm_demodulate_impl(1); }
 
 static int wifi_estimate(void)
 {

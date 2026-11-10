@@ -185,6 +185,39 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
     else:
         lines.append("（无差异：每个阶段的计划运行数与实测一致，且没有"
                      "「标量落点里跑阵列」的情况。）")
+
+    # 阶段 4：把 lower.py 的 tiling / 缓冲搜索摊开，便于审阅“为什么选它”。
+    srch = plan.get("search") or {}
+    srows = []
+    for item in srch.get("wifi_dft") or []:
+        cands = ["%s(est_ops=%s)" % (c["impl"], c.get("est_ops"))
+                 for c in item.get("candidates") or []]
+        srows.append(("WiFi DFT", item.get("stage"),
+                      " / ".join(cands), item.get("chosen"),
+                      "min est_ops；buffer=%s 字"
+                      % ((item.get("candidates") or [{}])[0].get("buffer_words"))))
+    for item in srch.get("fft") or []:
+        cands = ["%s(x%.2f, runs/sym=%d)" % (c["impl"], c["over_provision"],
+                                            c["runs_per_symbol"])
+                 for c in item.get("candidates") or []]
+        srows.append(("FFT", item.get("stage"), " / ".join(cands),
+                      item.get("chosen"),
+                      "%s跑数=%d（%d 符号）"
+                      % ("隐藏 " if item.get("hidden") else "",
+                         item.get("runs", 0), item.get("nsym", 1))))
+    for item in srch.get("ldpc") or []:
+        cands = ["%s(spad=%d, runs=%d)" % (c["impl"], c["spad_words"], c["array_runs"])
+                 for c in item.get("candidates") or []]
+        srows.append(("LDPC", item.get("stage"), " / ".join(cands),
+                      item.get("chosen"),
+                      "need_zc=%d；min spad" % item.get("need_zc", 0)))
+    if srows:
+        lines += ["", "## 自动搜索（tiling / 缓冲）", "",
+                  "| 类别 | 阶段 | 候选 | 选中 | 依据 |",
+                  "|---|---|---|---|---|"]
+        for r in srows:
+            lines.append("| %s | %s | %s | %s | %s |" % r)
+
     if ref_rows:
         lines += ["", "## 与手写基准的对账（等价门）", "",
                   "| 项 | 手写 | 协议运行器 | 结论 |", "|---|---|---|---|"]
