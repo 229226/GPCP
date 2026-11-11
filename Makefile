@@ -65,6 +65,7 @@ new-kernels-check:
 # 铁律：kernel YAML 不直接描述硬件（AGENTS.md 4.19）。每次 verify 也会自动跑。
 yaml-check:
 	python3 tools/check_yaml_coupling.py
+	python3 tools/check_contract.py
 
 # 开发工时台账：校验（每个功能/修复提交都要有记录）与汇总
 devcheck:

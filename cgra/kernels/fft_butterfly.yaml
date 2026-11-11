@@ -5,6 +5,13 @@ desc: "Radix-2 DIT FFT 蝶形（单蝶）tile：全并行实例各算一只蝶�
       复数乘 t = W*B：tr=(Wr*Br - Wi*Bi)>>15, ti=(Wr*Bi + Wi*Br)>>15（Q30->Q15 缩放）。
       输出 A'=(A+t)>>1, B'=(A-t)>>1（每级 1/2 缩放，保持 Q15）。
       自检：随机复数输入，与黄金模型逐值对账（同有限精度语义）。"
+# 机器可读数值契约：Q15 满量程下 2 项 Q30 求和
+# 2 * 32767^2 = 2,147,352,578，仅比 INT32_MAX 小 131,069 —— 编译器静态证明它不回绕。
+contract:
+  q_format: Q15
+  leaf_max_abs: 32767
+  max_intermediate: int32
+  sink_max_abs: 50000
 leaves:
   Ar: {}
   Ai: {}

@@ -35,7 +35,7 @@ BANNED_CODE = {
 }
 
 bad = []
-n_yaml = n_at = n_parallel = 0
+n_yaml = n_at = n_parallel = n_spec_contract = 0
 
 for p in sorted(glob.glob(os.path.join(ROOT, "cgra", "kernels", "*.yaml"))):
     rel = os.path.relpath(p, ROOT).replace("\\", "/")
@@ -43,6 +43,7 @@ for p in sorted(glob.glob(os.path.join(ROOT, "cgra", "kernels", "*.yaml"))):
     n_yaml += 1
     n_at += len(re.findall(r"\bat:\s*\{", s))
     n_parallel += len(re.findall(r"(?m)^\s*parallelism:", s))
+    n_spec_contract += len(re.findall(r"(?m)^\s*contract:", s))
     for pat, msg in FORBIDDEN:
         for m in re.finditer(pat, s):
             line = s.count("\n", 0, m.start()) + 1
@@ -120,6 +121,6 @@ if bad:
     sys.exit(1)
 
 print(f"[ OK ] YAML 与硬件解耦：{n_yaml} 份 spec / {n_at} 处逻辑地址 / "
-      f"{n_parallel} 处 parallelism / 0 处物理坐标；"
+      f"{n_parallel} 处 parallelism / {n_spec_contract} 份数值契约 / 0 处物理坐标；"
       f"C 侧 {len(c_files)} 个文件 / {n_contract} 处契约引用 / 0 处裸坐标 / "
       f"{len(layout_hdrs)} 份布局契约；target={T.name}")

@@ -4,9 +4,17 @@ desc: "2-Rx / 1-Tx MMSE 合并 tile 的**向量相关部分**：num = conj(h1)*y
       16 个 PE 各做 1 个 RE/层的相关累加；h1/h2/y1/y2 均为 Q15 int16 叶子。
       边界说明：ISA 的 mul 是 16x16->32，32 位 Q30 结果不能再做 mul，故标量
       1/(|h1|^2+|h2|^2+sigma2) 归 CVA6 标量侧（与 SoC 的 CVA6+CGRA 分工一致），
-      本 tile 只落 CGRA 上真正吃算力的复数相关。输入契约 |leaf| <= 20000 以免
-      4 项 Q30 求和在 int32 溢出。
+      本 tile 只落 CGRA 上真正吃算力的复数相关。数值范围由 contract 字段声明，
+      编译器静态证明不截断、不回绕，不再靠注释约定。
       自检：随机复数输入，与黄金模型逐值对账（同有限精度语义）。"
+# 机器可读数值契约：编译器沿 DFG 静态证明不截断、不回绕（见 kernel_spec.check_contract）。
+# desc 里的「|leaf| <= 20000」由此字段取代，两处必须一致。
+# 4 项 Q30 求和：4 * 20000^2 = 1,600,000,000 < INT32_MAX(2,147,483,647)。
+contract:
+  q_format: Q15
+  leaf_max_abs: 20000
+  max_intermediate: int32
+  sink_max_abs: 1600000000
 leaves:
   h1r: {}
   h1i: {}

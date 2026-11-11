@@ -161,6 +161,109 @@ def expand_addr_mapping(mapping, offset=0, shift=0):
 IMM_OPS = {"shr", "shl", "ld", "st"}
 
 
+# ---------------------------------------------------- 机器可读数值契约
+INT32_MAX = (1 << 31) - 1
+INT16_MAX = (1 << 15) - 1
+
+# 硬件不会替你检查的两件事（RTL 见 rtl/cgra/cgra_pe.sv）：
+#   OP_MUL 用 sx16(val_a) * sx16(val_b)，输入超过 16 位会被静默截断；
+#   OP_ADD/SUB 直接 32 位回绕，没有 overflow 标志，也不饱和。
+# 因此「不溢出」必须由算法设计期保证。下面把这份保证写成 spec 字段，
+# 由编译器沿 DFG 做一次静态范围传播，编译期就拒绝不安全的组合。
+#
+# YAML 顶层可选 contract:
+#   q_format: Q15                 叶子定点格式（文档性）
+#   leaf_max_abs: 20000           所有叶子 |值| 上界；也可写 {叶子名: 上界}
+#   max_intermediate: int32       中间值允许的 |max|，默认 int32
+#   sink_max_abs: 1600000000      汇的 |值| 上界，编译器校验推导值不超过它
+
+
+def check_contract(spec):
+    """从声明的叶子上界出发做静态范围传播，返回错误列表（空 = 契约成立）。"""
+    c = spec.get("contract")
+    if c is None:
+        return []                      # 可选字段，向后兼容全部既有 spec
+    if not isinstance(c, dict):
+        return ["contract 必须是映射"]
+    if spec.get("kind", "dfg") != "dfg":
+        return ["contract 目前只支持 kind: dfg"]
+    errs = []
+    leaves = set(expand_mapping(spec.get("leaves", {})).keys())
+    lm = c.get("leaf_max_abs")
+    if lm is None:
+        return ["contract 缺 leaf_max_abs（叶子 |值| 上界）"]
+    if isinstance(lm, dict):
+        extra = set(lm) - leaves
+        if extra:
+            errs.append("contract.leaf_max_abs 含未知叶子 %s" % sorted(extra))
+        missing = leaves - set(lm)
+        if missing:
+            errs.append("contract.leaf_max_abs 缺叶子 %s" % sorted(missing))
+        rng = {k: int(lm.get(k, 0)) for k in leaves}
+    else:
+        rng = {k: int(lm) for k in leaves}
+    if any(v < 0 for v in rng.values()):
+        errs.append("contract.leaf_max_abs 不能为负")
+
+    w = c.get("max_intermediate", "int32")
+    limit = INT32_MAX if w in ("int32", 32, "32") else int(w)
+
+    try:
+        dfg = build_dfg(spec)
+    except Exception as e:                                # noqa: BLE001
+        return errs + ["contract 无法构图：%s" % e]
+
+    vals = dict(rng)
+    for n in dfg.topo():
+        preds = dfg.preds(n)
+        if not preds:                                  # 叶子：用契约上界
+            continue
+        srcs = [vals.get(s) for s, _ in sorted(preds, key=lambda t: t[1])]
+        if any(v is None for v in srcs):
+            errs.append("节点 %r 的输入范围未知（契约不完整）" % n)
+            continue
+        a = srcs[0]
+        b = srcs[1] if len(srcs) > 1 else 0
+        op = dfg.opcode[n]
+        imm = int(dfg.imm.get(n, 0))
+        if op in ("mov", "neg", "ld"):
+            v = a
+        elif op in ("add", "sub"):
+            v = a + b
+        elif op == "mul":
+            if max(a, b) > INT16_MAX:
+                errs.append("op %r(mul) 输入 |max|=%s > 32767，硬件 sx16 会静默截断高位"
+                            % (n, format(max(a, b), ",")))
+            v = a * b
+        elif op == "shr":
+            v = (a >> imm) + 1 if imm else a          # +1: 算术右移的保守上界
+        elif op == "shl":
+            v = a << imm
+        elif op in ("max", "min"):
+            v = max(a, b)
+        elif op in ("and", "xor"):
+            v = min(limit, max(a, b) * 2)             # 位运算保守上界
+        else:
+            v = limit                                 # 未知算子：不再推导
+        if v > limit:
+            errs.append("op %r(%s) 推导 |max|=%s > %s，会静默回绕"
+                        % (n, op, format(v, ","), format(limit, ",")))
+        vals[n] = min(v, limit)
+
+    sm = c.get("sink_max_abs")
+    if sm is not None:
+        sinks = set(expand_mapping(spec.get("sinks", {})).keys())
+        for name in sorted(sinks):
+            got = vals.get(name)
+            if got is None:
+                continue
+            cap = sm.get(name) if isinstance(sm, dict) else sm
+            if cap is not None and got > int(cap):
+                errs.append("汇 %r 推导 |max|=%s > 契约声明 %s"
+                            % (name, format(got, ","), format(int(cap), ",")))
+    return errs
+
+
 def validate(spec):
     """返回错误字符串列表，空表示合法。"""
     errs = []
@@ -233,6 +336,7 @@ def validate(spec):
         declared = set(expand_mapping(spec.get("sinks", {})).keys())
         for name in sorted(declared - actual_sinks):
             errs.append(f"sinks 里的 {name!r} 不是 DFG 的汇（它还有后继 / 不是算子名）")
+    errs.extend(check_contract(spec))
     return errs
 
 
