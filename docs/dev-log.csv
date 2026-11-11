@@ -82,3 +82,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-11,,,60,sw,feature,补齐 docs/22 四项无 CGRA 实现的 kernel：qam_map 三变体 / ldpc_enc_acc / turbo_acs / wifi_vn / wifi_cn24,9a5388f,measured,gen_kernel_prog.py --all 7 张镜像自检 0 差异；check_new_kernels.py 独立黄金 7/7；SoC run-new-kernels 732 汇值逐值一致；yaml-check 36 spec/0 物理坐标；handprog-check 0 新增
 2026-11-11,,,25,verif,feature,新增 kernel 三层验收门禁：独立黄金 ISA 对账 + SoC 自检门 + verify 静态段,9a5388f,measured,make new-kernels-check 与 make -C sim/soc run-new-kernels 均 PASS；verify.sh full 84 passed / 0 failed（exit 0）
 2026-11-11,,,20,doc,doc,docs/23 新增 CGRA kernel 实现说明 + docs/22 §2.3 状态更新,9a5388f,measured,docs/23 含设计取舍/三层验收/边界；docs/22 待补表改为已有实现并注明有实现≠已下沉
+2026-11-11,,,45,sw,feature,kernel YAML 数值契约机器可读化：contract 字段 + 编译器静态范围传播 + 契约门禁,bf401f2,measured,36 份 spec 全量重编 rc=0 且生成物逐字节零变化；5 项反例全部拒绝且 CLI 越界 spec 拒绝生成；yaml-check/handprog-check 0 违规；verify quick 19 passed / 0 failed / 395 s
