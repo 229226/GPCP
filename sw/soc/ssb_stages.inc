@@ -111,6 +111,9 @@ static void wait_desc(uint32_t want)
 }
 
 #include "ssb_fft.inc"          /* 4096-point FFT engine (verified in run-fft) */
+#ifdef PROTO_CPU_ONLY
+#include "fft_cpu.inc"
+#endif
 
 /* --------------------------------------------------------------- microcode */
 
@@ -177,6 +180,26 @@ static void dsc(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
  * scratchpad between candidates, so only the first one reloads it. */
 static void corr_one(uint32_t ref_ram, int32_t *fb, int with_rx, int cap)
 {
+#ifdef PROTO_CPU_ONLY
+    /* CPU 对照路径：与 pss_corr 微码同口径（sext16 乘、32-bit 回卷、16 PE×8 tap） */
+    const int32_t *rxw = (const int32_t *)RX_BASE;
+    const int32_t *rf = (const int32_t *)ref_ram;
+    (void)with_rx; (void)cap;
+    for (uint32_t p = 0; p < NPES; p++) {
+        int32_t re = 0, im = 0;
+        for (uint32_t k = 0; k < 8; k++) {
+            uint32_t t = 8u * p + k;
+            int32_t rr = (t < NREP) ? rf[t] : 0;
+            int32_t vr = rxw[2u * t], vi = rxw[2u * t + 1u];
+            vr = (int16_t)vr; vi = (int16_t)vi; rr = (int16_t)rr;
+            re = (int32_t)((uint32_t)re + (uint32_t)(vr * rr));
+            im = (int32_t)((uint32_t)im + (uint32_t)(vi * rr));
+        }
+        fb[2u * p] = re;
+        fb[2u * p + 1u] = im;
+    }
+    return;
+#endif
     n_desc = 0;
     uint32_t n_in;
     if (with_rx) dsc(RX_BASE, 0, 2 * NREP, 0, 0, 0, 0);    /* rx: linear 254 words */
@@ -277,6 +300,24 @@ static void array_run(uint32_t cycles)
  * scratchpad, the 16 per-PE results are streamed back (16 words each) */
 static void node_run(uint32_t d, uint32_t o, uint32_t half, const uint8_t *bp, uint32_t cnt)
 {
+#ifdef PROTO_CPU_ONLY
+    for (uint32_t chunk = 0; chunk < cnt; chunk += NPES) {
+        uint32_t n = cnt - chunk < NPES ? cnt - chunk : NPES;
+        for (uint32_t k = 0; k < n; k++) {
+            int32_t a = lbuf[d][o + chunk + k];
+            int32_t b = lbuf[d][o + half + chunk + k];
+            int32_t bt = bp ? bp[chunk + k] : 0;
+            int32_t sa = a >> 31, sb = b >> 31;
+            int32_t aa = (a ^ sa) - sa, ab = (b ^ sb) - sb;
+            int32_t m = aa < ab ? aa : ab;
+            int32_t s = sa ^ sb;
+            lbuf[d + 1][o + chunk + k] = (m ^ s) - s;
+            lbuf[d + 1][o + half + chunk + k] =
+                a + b - ((a & (-bt)) << 1);
+        }
+    }
+    return;
+#endif
     for (uint32_t chunk = 0; chunk < cnt; chunk += NPES) {
         uint32_t n = cnt - chunk < NPES ? cnt - chunk : NPES;
         for (uint32_t k = 0; k < n; k++) {
@@ -398,7 +439,11 @@ static int ss_ofdm_demodulate(void)
 {
     int32_t *td = (int32_t *)TD_RAM;
     for (int s = 0; s < NSYM; s++)
+#ifdef PROTO_CPU_ONLY
+        fft4096_cpu(td + (size_t)s * SYM_WORDS + 2 * CP_LEN);
+#else
         fft4096(td + (size_t)s * SYM_WORDS + 2 * CP_LEN);
+#endif
     build_corr_uc();          /* the FFT image owned the imem until here */
     return 0;
 }

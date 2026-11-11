@@ -25,7 +25,8 @@ static int32_t lu_hre[NSYM], lu_him[NSYM];
 static int32_t lu_dft[NSYM][2 * LU_N];
 
 /* 正向 DFT：X_k = (1/N) Σ x_n e^{-j2πkn/N}，Q15 cos 表、整数归一化。 */
-static void lu_dft200(const int32_t *ar, const int32_t *ai, int32_t *out)
+static void __attribute__((unused))
+lu_dft200_ref(const int32_t *ar, const int32_t *ai, int32_t *out)
 {
     for (int k = 0; k < LU_N; k++) {
         int64_t sr = 0, si = 0;
@@ -42,7 +43,8 @@ static void lu_dft200(const int32_t *ar, const int32_t *ai, int32_t *out)
 }
 
 /* 反向 IDFT：x_n = (1/N) Σ X_k e^{+j2πkn/N}。 */
-static void lu_idft200(const int32_t *ar, const int32_t *ai, int32_t *out)
+static void __attribute__((unused))
+lu_idft200_ref(const int32_t *ar, const int32_t *ai, int32_t *out)
 {
     for (int n = 0; n < LU_N; n++) {
         int64_t sr = 0, si = 0;
@@ -58,10 +60,44 @@ static void lu_idft200(const int32_t *ar, const int32_t *ai, int32_t *out)
     }
 }
 
+/* P1：200 点 DFT/IDFT 走 CGRA Bluestein（1024 点 FFT），旧 O(N²) 仅作校准参考。 */
+#ifdef PROTO_CPU_ONLY
+static void lu_dft200(const int32_t *ar, const int32_t *ai, int32_t *out)
+{
+    lu_dft200_ref(ar, ai, out);
+}
+
+static void lu_idft200(const int32_t *ar, const int32_t *ai, int32_t *out)
+{
+    lu_idft200_ref(ar, ai, out);
+}
+
 static int lu_setup(const uint32_t *par)
 {
     return lte_setup(par);
 }
+#else
+#define DFT_N 200
+#include "dft_bluestein.inc"
+
+static void lu_dft200(const int32_t *ar, const int32_t *ai, int32_t *out)
+{
+    dft_bluestein_fwd(ar, ai, out);
+}
+
+static void lu_idft200(const int32_t *ar, const int32_t *ai, int32_t *out)
+{
+    dft_bluestein_inv(ar, ai, out);
+}
+
+static int lu_setup(const uint32_t *par)
+{
+    int rc = lte_setup(par);
+    if (!rc)
+        dft_bluestein_setup();
+    return rc;
+}
+#endif
 
 static int lu_received(void) { return 0; }
 

@@ -57,19 +57,20 @@ def read_dump(path):
 
 
 PERF_STAGE_WORD = 1200
-PERF_FULL_WORD = 1320
+PERF_FULL_WORD = 1400
 PERF_MAGIC = 0x50455246
 
 
 def parse_perf(w):
-    """解析 proto_runner 写在结果区 1200/1320 的 CGRA 性能计数块。"""
+    """解析 proto_runner 写在结果区 1200/1400 的 CGRA 性能计数块。"""
     if len(w) < PERF_STAGE_WORD + 3 or w[PERF_STAGE_WORD] != PERF_MAGIC:
         return None
     nst = w[PERF_STAGE_WORD + 1]
     nk = w[PERF_STAGE_WORD + 2]
     stages = []
+    stride = nk + 1
     for i in range(nst):
-        b = PERF_STAGE_WORD + 3 + i * 10
+        b = PERF_STAGE_WORD + 3 + i * stride
         if b + 1 + nk > len(w):
             break
         stages.append({"id": w[b], "values": w[b + 1:b + 1 + nk]})
@@ -77,7 +78,7 @@ def parse_perf(w):
     if len(w) >= PERF_FULL_WORD + 2 and w[PERF_FULL_WORD] == PERF_MAGIC:
         n = w[PERF_FULL_WORD + 1]
         full = w[PERF_FULL_WORD + 2:PERF_FULL_WORD + 2 + n]
-    return {"stages": stages, "full": full}
+    return {"stages": stages, "full": full, "keys": nk}
 
 
 class Report:
@@ -259,6 +260,56 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
             lines.append("| %d | %s | %d | %.1f%% | %.1f%% | %.1f%% | %d/%d | %.1f%% | %d | %d |"
                          % (r["id"], opmap.get(r["id"], "?"),
                             v[0], util, eff, mac, v[4], v[5], conf, v[7], v[8]))
+
+        # 全周期账本：每拍只归一类，所有周期都有明确归属
+        def pctv(a, b):
+            return 100.0 * a / b if b else 0.0
+
+        cpu_rows = []
+        if perf.get("keys", 0) >= 16:
+            lines += ["", "## 全周期账本（互斥状态）", "",
+                      "口径：每拍只归一类，优先级 阵列 > DMA > CPU；"
+                      "`阵列执行 + DMA 传输 + DMA 等待 + CPU 执行 = 阶段实测周期`。"
+                      "DMA 等待是 DMA 状态下总线未给响应的子集。"
+                      "CPU 为该阶段墙钟减去阵列与 DMA 后的残差，"
+                      "已扣除计数器快照本身引入的约 0.14k 周期归属。", "",
+                      "| # | 阶段 | 实测周期 | 阵列执行 | DMA 传输 | DMA 等待 | CPU 执行 |",
+                      "|---|---|---|---|---|---|---|"]
+            for r in perf["stages"]:
+                v = r["values"]
+                cyc = cycmap.get(r["id"], 1)
+                arr = v[0]
+                dma_all = v[9]
+                if arr + dma_all > cyc:          # 快照跨阶段边界时夹紧，保证账本恒等
+                    dma_all = max(0, cyc - arr)
+                dma_wait = min(v[10], dma_all)
+                dma_xfer = dma_all - dma_wait
+                cpu = max(0, cyc - arr - dma_all)
+                imem, acfg, dcfg, cache = v[12], v[13], v[14], v[15]
+                sub = imem + acfg + dcfg + cache
+                if sub > cpu and sub:
+                    sc = float(cpu) / sub
+                    imem, acfg, dcfg, cache = (int(imem * sc), int(acfg * sc),
+                                               int(dcfg * sc), int(cache * sc))
+                    sub = imem + acfg + dcfg + cache
+                scalar = max(0, cpu - sub)
+                lines.append("| %d | %s | %d | %d (%.1f%%) | %d (%.1f%%) | %d (%.1f%%) | %d (%.1f%%) |"
+                             % (r["id"], opmap.get(r["id"], "?"), cyc,
+                                arr, pctv(arr, cyc),
+                                dma_xfer, pctv(dma_xfer, cyc),
+                                dma_wait, pctv(dma_wait, cyc),
+                                cpu, pctv(cpu, cyc)))
+                cpu_rows.append((r["id"], imem, acfg, dcfg, cache, scalar, cpu, cyc))
+            lines += ["", "### CPU 执行细分（只统计阵列与 DMA 都空闲的周期）", "",
+                      "| # | 阶段 | IMEM 装载 | 阵列配置写 | DMA 配置写 | 缓存维护 | 标量算法（含主机窗口拷贝/轮询） | 合计 |",
+                      "|---|---|---|---|---|---|---|---|"]
+            for (sid, imem, acfg, dcfg, cache, scalar, cpu, cyc) in cpu_rows:
+                lines.append("| %d | %s | %d (%.1f%%) | %d (%.1f%%) | %d (%.1f%%) | %d (%.1f%%) | %d (%.1f%%) | %d |"
+                             % (sid, opmap.get(sid, "?"),
+                                imem, pctv(imem, cyc), acfg, pctv(acfg, cyc),
+                                dcfg, pctv(dcfg, cyc), cache, pctv(cache, cyc),
+                                scalar, pctv(scalar, cyc), cpu))
+
         full = perf.get("full") or []
         if full:
             def g(i):
@@ -269,6 +320,9 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
             lines += ["", "### 整跑", "",
                       "- 总周期 **%d**；阵列忙 **%d（%.1f%%）**"
                       % (g(0), g(1), 100.0 * g(1) / cyc),
+                      "- 互斥状态：阵列 **%d（%.1f%%）**、DMA **%d（%.1f%%）**、CPU **%d（%.1f%%）**"
+                      % (g(1), 100.0 * g(1) / cyc, g(54), 100.0 * g(54) / cyc,
+                         g(56), 100.0 * g(56) / cyc),
                       "- 指令槽 **%d**：NOP **%.1f%%**、MAC **%.1f%%**、LD/ST **%d/%d**"
                       % (g(3), 100.0 * g(4) / issued, 100.0 * g(5) / issued,
                          g(7), g(8)),
@@ -286,25 +340,34 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
                 wb = worst(6)
                 wd = worst(8)
                 wm = worst(3)
+                hints = []
                 if max(r["values"][0] for r in perf["stages"]) == 0:
-                    lines += ["", "### 架构提示（自动）", "",
-                              "- 本场景无阵列工作（全部在 CVA6 标量执行）"]
+                    hints.append("- 本场景无阵列工作（全部在 CVA6 标量执行）")
                 else:
-                    lines += ["", "### 架构提示（自动）", "",
-                              "- 最大阵列利用率阶段：`%s`（%.1f%%）"
-                              % (opmap.get(max(perf["stages"],
-                                               key=lambda r: r["values"][0] / cycmap.get(r["id"], 1))["id"], "?"),
-                                 100.0 * max(r["values"][0] / cycmap.get(r["id"], 1)
-                                             for r in perf["stages"])),
-                              "- bank 冲突最多阶段：`%s`（%d 周期）"
-                              % (opmap.get(wb["id"], "?"), wb["values"][6]),
-                              "- DMA 等待最多阶段：`%s`（%d 周期）"
-                              % (opmap.get(wd["id"], "?"), wd["values"][8]),
-                              "- MAC 槽：%s"
-                              % (("所有阶段为 0（当前内核未用 MAC 指令）"
-                                  if wm["values"][3] == 0 else
-                                  "最多 `%s`（%d 槽）"
-                                  % (opmap.get(wm["id"], "?"), wm["values"][3])))]
+                    hints.append("- 最大阵列利用率阶段：`%s`（%.1f%%）"
+                                 % (opmap.get(max(perf["stages"],
+                                                  key=lambda r: r["values"][0] / cycmap.get(r["id"], 1))["id"], "?"),
+                                    100.0 * max(r["values"][0] / cycmap.get(r["id"], 1)
+                                                for r in perf["stages"])))
+                    hints.append("- bank 冲突最多阶段：`%s`（%d 周期）"
+                                 % (opmap.get(wb["id"], "?"), wb["values"][6]))
+                    hints.append("- DMA 等待最多阶段：`%s`（%d 周期）"
+                                 % (opmap.get(wd["id"], "?"), wd["values"][8]))
+                    hints.append("- MAC 槽：%s"
+                                 % (("所有阶段为 0（当前内核未用 MAC 指令）"
+                                     if wm["values"][3] == 0 else
+                                     "最多 `%s`（%d 槽）"
+                                     % (opmap.get(wm["id"], "?"), wm["values"][3]))))
+                if cpu_rows:
+                    cs = max(cpu_rows, key=lambda x: x[5])
+                    cd = max(cpu_rows, key=lambda x: x[6])
+                    hints.append("- CPU 标量最多阶段：`%s`（%d 周期，占其阶段 %.1f%%）"
+                                 % (opmap.get(cs[0], "?"), cs[5],
+                                    pctv(cs[5], cs[7])))
+                    hints.append("- CPU 执行最多阶段：`%s`（%d 周期，占其阶段 %.1f%%）"
+                                 % (opmap.get(cd[0], "?"), cd[6],
+                                    pctv(cd[6], cd[7])))
+                lines += ["", "### 架构提示（自动）", ""] + hints
 
     if ref_rows:
         lines += ["", "## 与手写基准的对账（等价门）", "",
@@ -332,6 +395,8 @@ def main(argv):
     ap.add_argument("--ref", help="手写 benchmark 的 dump（等价门）；auto = 用场景模型声明的路径")
     ap.add_argument("--ref-gate", action="store_true", help="只打印参照门的 make 目标名")
     ap.add_argument("--branch", default="base", help="用哪个 plan-<branch>.json")
+    ap.add_argument("--cpu-only", action="store_true",
+                    help="CPU 对照路径：不要求 DMA/阵列忙 > 0（docs/22）")
     a = ap.parse_args(argv)
 
     model = _model(a.scenario)
@@ -409,6 +474,10 @@ def main(argv):
     for name, off, kind in spec["scalars"]:
         got = w[base + off]
         anchors[name] = got
+        # CPU 对照路径不跑阵列，硬件运行次数类锚点不适用（docs/22）
+        if getattr(a, "cpu_only", False) and name in ("mmse_runs",):
+            rep.add(name, "不适用", got, True, "CPU 路径不跑阵列")
+            continue
         if kind == "window":
             lo, hi = gold["windows"][name]
             rep.window(name, got, lo, hi, "定点增益窗口（符号才是硬门）")
@@ -445,6 +514,8 @@ def main(argv):
     # 纯接收场景的 FFT 描述符不走 DMA API（ssb_fft.inc 自己编排），模型的
     # SPEC["platform"] 可以声明"本场景不统计"，此时只打印数值不判。
     plat = spec.get("platform", {})
+    if getattr(a, "cpu_only", False):
+        plat = dict(plat, dma=False, busy=False)
     rep.eq("阵列运行总数", w[3], sum(s["runs"] for s in stages))
     if plat.get("dma", True):
         rep.add("DMA 次数 > 0", "> 0", w[4], w[4] > 0)

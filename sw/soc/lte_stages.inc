@@ -72,6 +72,9 @@ static void wait_desc(uint32_t want)
 }
 
 #include "ssb_fft.inc"          /* fft4096() + rev4() */
+#ifdef PROTO_CPU_ONLY
+#include "fft_cpu.inc"
+#endif
 
 /* --------------------------------------------------------------- 小工具 */
 static int32_t *llr_buf = (int32_t *)LLR_BASE;        /* E_BITS */
@@ -326,8 +329,12 @@ static int lte_ofdm_modulate(void)
     int32_t *td = (int32_t *)TD_RAM;
     for (int s = 0; s < NSYM; s++) {
         int32_t *f = (int32_t *)(uintptr_t)(0x803A0000ul + (uint32_t)s * 0x8000u);
+#ifdef PROTO_CPU_ONLY
+        fft4096_cpu(f);
+#else
         fft4096(f);
         rt_dcache_flush();
+#endif
         {
             int32_t *t = td + s * SYM_WORDS;
             for (int k = 0; k < CP_LEN; k++) {
@@ -358,8 +365,12 @@ static int lte_ofdm_demodulate(void)
     int32_t *td = (int32_t *)TD_RAM;
     for (int s = 0; s < NSYM; s++) {
         int32_t *sp = td + s * SYM_WORDS + 2 * CP_LEN;
+#ifdef PROTO_CPU_ONLY
+        fft4096_cpu(sp);
+#else
         fft4096(sp);
         rt_dcache_flush();
+#endif
         for (int r = 0; r < NRE; r++) {
             uint32_t idx = rev4((uint32_t)(BIN0 + r));
             yre[s][r] = sp[2 * idx];

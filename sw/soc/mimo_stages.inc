@@ -72,6 +72,9 @@ static uint32_t gold_bit(uint32_t n)
 }
 
 #include "ssb_fft.inc"          /* fft4096() + rev4() */
+#ifdef PROTO_CPU_ONLY
+#include "fft_cpu.inc"
+#endif
 
 /* complex helpers on (re, im) pairs */
 static int64_t cm_re(int64_t ar, int64_t ai, int64_t br, int64_t bi)
@@ -169,8 +172,13 @@ static int ms_dmrs(void)
 static int ms_ofdm_demodulate(void)
 {
     int32_t *td = (int32_t *)TD_RAM;
-    for (int rx = 0; rx < 2; rx++)
+    for (int rx = 0; rx < 2; rx++) {
+#ifdef PROTO_CPU_ONLY
+        fft4096_cpu(td + (size_t)rx * SYM_WORDS + 2 * CP_LEN);
+#else
         fft4096(td + (size_t)rx * SYM_WORDS + 2 * CP_LEN);
+#endif
+    }
     return 0;
 }
 
@@ -266,6 +274,9 @@ static int ms_mimo_equalise(void)
         if (hmax > 32767 || ymax > 32767 || 4 * hmax * ymax > 0x7FFFFFFFLL)
             cg_ok = 0;
     }
+#ifdef PROTO_CPU_ONLY
+    cg_ok = 0;                  /* CPU 对照路径：直接走下面的标量相关 */
+#endif
     if (cg_ok) {
         mmse_prog_load();
         for (int base = 0; base < NDATA; base += 16) {

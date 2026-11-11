@@ -788,8 +788,12 @@ run-pdsch-loop: all
 #   不与 run-pdcch-loop 争文件）；与手写基准的逐值对账在 proto_eval --ref 里。
 # 目标名自带场景：`make run-proto-nr_pdsch` 就选中该场景（verify.sh 的门名
 # 必须自解释，不能靠外部再传 PROTO）。不带 run-proto-* 目标时才用默认值。
-PROTO ?= $(or $(patsubst run-proto-%,%,$(filter run-proto-%,$(MAKECMDGOALS))),nr_pdcch)
+PROTO_CPU_GOALS := $(filter run-proto-cpu-%,$(MAKECMDGOALS))
+PROTO_GOALS := $(filter run-proto-%,$(filter-out run-proto-cpu-%,$(MAKECMDGOALS)))
+PROTO ?= $(if $(PROTO_CPU_GOALS),$(patsubst run-proto-cpu-%,%,$(firstword $(PROTO_CPU_GOALS))),$(or $(patsubst run-proto-%,%,$(firstword $(PROTO_GOALS))),nr_pdcch))
 PROTO_DIR := $(ROOT)/build/proto/$(PROTO)
+PROTO_CPU ?= $(if $(PROTO_CPU_GOALS),1,0)
+PROTO_SUF := $(if $(filter 1,$(PROTO_CPU)),_cpu,)
 
 run-proto-$(PROTO): all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc proto PROTO=$(PROTO)
@@ -799,11 +803,30 @@ run-proto-$(PROTO): all
 		--load $(PROTO_DIR)/stimulus.bin@0x80400000 \
 		--load $(PROTO_DIR)/stimulus.bin@0x80600000 \
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
-		--results 0x80070000 --nwords 1400 \
+		--results 0x80070000 --nwords 1500 \
 		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_dump.txt \
 		--max-cycles 40000000
 	python3 $(ROOT)/proto/proto_eval.py --scenario $(PROTO) \
 		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_dump.txt
+
+# 同一场景的"全 CPU"对照路径（-DPROTO_CPU_ONLY）：阶段表/激励/判据完全不变，
+# 只把阵列承担的部分换成 CVA6 标量实现，用于逐阶段比较落点（docs/22）。
+run-proto-cpu-$(PROTO): all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc proto PROTO=$(PROTO) PROTO_CPU=1
+	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/proto_runner_$(PROTO)_cpu.bin@0x80000000 \
+		--load $(PROTO_DIR)/stimulus.bin@0x80400000 \
+		--load $(PROTO_DIR)/stimulus.bin@0x80600000 \
+		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
+		--results 0x80070000 --nwords 1500 \
+		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_cpu_dump.txt \
+		--max-cycles 40000000
+	python3 $(ROOT)/proto/proto_eval.py --scenario $(PROTO) --cpu-only \
+		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_cpu_dump.txt
+	@cp $(PROTO_DIR)/report.md $(PROTO_DIR)/report_cpu.md
+
+.PHONY: $(PROTO_CPU_GOALS)
 
 run-dl-mod: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc

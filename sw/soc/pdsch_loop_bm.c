@@ -101,12 +101,12 @@ int main(void)
     out[1081] = dmrs_cinit(0);
     out[1082] = dmrs_cinit(1);
     out[1083] = qs_rv;
-    out[1084] = QM;
+    out[1084] = qs_qm;
     out[1085] = QPSK;
-    out[1086] = MAX_SYM;
+    out[1086] = qs_max_sym;
     out[1087] = qs_tb_bad;
     out[1170] = qs_sym_max;
-    out[1171] = 2 * MAX_SYM;
+    out[1171] = 2 * qs_max_sym;
     out[1172] = qs_syn;
     out[1173] = qs_llr_bad;
     out[1174] = qs_llr_first;

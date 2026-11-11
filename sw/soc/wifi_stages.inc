@@ -46,6 +46,23 @@ static uint32_t errs, runs, dmas, busy;
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
+#ifndef PROTO_CPU_ONLY
+/* 256 点 FFT 复用 ssb_fft.inc 的 radix-4 引擎（stage + tail 两张镜像）。 */
+#define CGRA_BASE   0x50000000ul
+#define NPES        16
+#define RING_DEPTH  1024
+#define DESC_BASE   0x80020000ul
+static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static void wait_desc(uint32_t want)
+{
+    uint32_t spins = 0, got;
+    while ((got = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE)) != want) {
+        if (++spins > 4000000u) { (void)got; errs++; break; }
+    }
+}
+#include "ssb_fft.inc"
+#endif
+
 static int32_t wifi_y[WIFI_NSYM][WIFI_NDATA][2];
 static int32_t wifi_h[WIFI_NDATA][2];
 static int32_t wifi_llr[WIFI_NSYM][WIFI_NDATA];
@@ -187,7 +204,28 @@ static int wifi_ofdm_demodulate_impl(int use_fft)
             ar[n] = sp[2 * n];
             ai[n] = sp[2 * n + 1];
         }
-        if (use_fft) {
+        if (use_fft == 2) {
+#ifdef PROTO_CPU_ONLY
+            wifi_fft256(ar, ai);
+            for (int n = 0; n < WIFI_NFFT; n++) {
+                dft[2 * n] = ar[n];
+                dft[2 * n + 1] = ai[n];
+            }
+#else
+            static int32_t fbuf[2 * WIFI_NFFT];
+            for (int n = 0; n < WIFI_NFFT; n++) {
+                fbuf[2 * n] = ar[n];
+                fbuf[2 * n + 1] = ai[n];
+            }
+            fft_n(fbuf, WIFI_NFFT, FFT_LUT_256);
+            rt_dcache_flush();
+            for (int n = 0; n < WIFI_NFFT; n++) {
+                uint32_t r = rev4n((uint32_t)n, 4);
+                dft[2 * n] = fbuf[2 * r];
+                dft[2 * n + 1] = fbuf[2 * r + 1];
+            }
+#endif
+        } else if (use_fft) {
             wifi_fft256(ar, ai);
             for (int n = 0; n < WIFI_NFFT; n++) {
                 dft[2 * n] = ar[n];
@@ -210,6 +248,11 @@ static int wifi_ofdm_demodulate_impl(int use_fft)
         }
     }
     return 0;
+}
+
+static int wifi_ofdm_demodulate_cgra(void)
+{
+    return wifi_ofdm_demodulate_impl(2);
 }
 
 static int wifi_ofdm_demodulate(void) { return wifi_ofdm_demodulate_impl(0); }

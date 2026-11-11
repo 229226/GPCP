@@ -15,6 +15,8 @@
 #include "fft_stage_prog.h"   /* 编译器 image：与 fft_bm.c 共用 */
 #include "fft_block_prog.h"
 #define FFT_LUT_4096     3456ul
+#define FFT_LUT_1024     384ul
+#define FFT_LUT_256      0ul
 #define FFT_LUT_TAIL     21888ul
 #define FFT_LUT_RAM      0x80100000ul
 #define FFT_TD_RAM       0x80300000ul
@@ -31,13 +33,14 @@ static uint32_t f_cyc[FFT_MAX_TILES], f_in[FFT_MAX_TILES], f_out[FFT_MAX_TILES];
 static uint32_t f_ntiles, f_ndesc, f_done;
 
 /* 两张镜像由 cgra/kernels/fft_stage.yaml / fft_block.yaml 编译，
- * 与 sw/soc/fft_bm.c 用的是同一对头文件（含 include guard）。 */
+ * 与 sw/soc/fft_bm.c 用的是同一对头文件（含 include guard）。
+ * 装载走拷贝引擎（gpcp_cgra_imem_load）：2480 字从逐字写的 18,248 拍
+ * 降到 8,484 拍（docs/10 §13，2.15×）。 */
 static void fe_load(uint32_t which)
 {
     const uint32_t *p = which ? fft_block_prog : fft_stage_prog;
     uint32_t n = which ? FFT_BLOCK_PROG_CYCLES : FFT_STAGE_PROG_CYCLES;
-    for (uint32_t i = 0; i < n * NPES; i++)
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BASE + i * 4u, p[i]);
+    (void)gpcp_cgra_imem_load(CGRA_BASE, p, n * NPES);
 }
 
 static void fe_dsc(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
@@ -140,31 +143,42 @@ static void fe_exec(uint32_t first, uint32_t last)
     }
 }
 
-static void fft4096(int32_t *data)
+/* 任意支持的 2 的幂：256 / 1024 / 4096。lut_ofs 选 tools/fft_plan.py 的 LUT 段。 */
+static void fft_n(int32_t *data, uint32_t n, uint32_t lut_ofs)
 {
     uint32_t pg = 0;
     fe_load(0);
     f_ntiles = 0;
     f_ndesc = 0;
-    fe_desc_stages(FFT_N, data, FFT_LUT_4096, &pg);
+    fe_desc_stages(n, data, lut_ofs, &pg);
     fe_exec(0, f_ntiles);
 
     fe_load(1);
     f_ntiles = 0;
     f_ndesc = 0;
-    fe_desc_tail(FFT_N, data, &pg);
+    fe_desc_tail(n, data, &pg);
     fe_exec(0, f_ntiles);
+}
+
+static void fft4096(int32_t *data)
+{
+    fft_n(data, FFT_N, FFT_LUT_4096);
 }
 
 /* The engine is radix-4, so the output positions hold X[rev4(i)]: the base-4
  * digits of the index are reversed, *not* its bits (that is what a radix-2
  * transform would produce).  For 4096 points that is 6 base-4 digits. */
-static uint32_t rev4(uint32_t v)
+static uint32_t rev4n(uint32_t v, uint32_t digits)
 {
     uint32_t r = 0;
-    for (uint32_t d = 0; d < 6; d++) {
+    for (uint32_t d = 0; d < digits; d++) {
         r = (r << 2) | (v & 3u);
         v >>= 2;
     }
     return r;
+}
+
+static uint32_t rev4(uint32_t v)
+{
+    return rev4n(v, 6);
 }

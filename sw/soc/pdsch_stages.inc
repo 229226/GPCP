@@ -126,6 +126,9 @@ static void wait_desc(uint32_t want)
 }
 
 #include "ssb_fft.inc"          /* fft4096() + rev4() */
+#ifdef PROTO_CPU_ONLY
+#include "fft_cpu.inc"          /* 对照路径：同一算法的 CVA6 标量实现 */
+#endif
 
 /* 写完一大片 RAM 交给引擎读：fence + 读回最后一个字（WT 写缓冲） */
 static void drain_stores(const int32_t *p, uint32_t last)
@@ -588,8 +591,12 @@ static int qs_ofdm_modulate(void)
     uint32_t s, k;
     int32_t *td = (int32_t *)TD_RAM;
     for (s = 0; s < NSYM; s++) {
+#ifdef PROTO_CPU_ONLY
+        fft4096_cpu(freq[s]);
+#else
         fft4096(freq[s]);
         rt_dcache_flush();                      /* 引擎原地写了这片 */
+#endif
         {
             int32_t *t = td + s * SYM_WORDS;
             for (k = 0; k < CP_LEN; k++) {
@@ -623,8 +630,12 @@ static int qs_estimate(void)
 
     for (s = 0; s < NSYM; s++) {
         int32_t *sp = td + s * SYM_WORDS + 2 * CP_LEN;
+#ifdef PROTO_CPU_ONLY
+        fft4096_cpu(sp);
+#else
         fft4096(sp);
         rt_dcache_flush();
+#endif
         for (r = 0; r < NRE; r++) {
             uint32_t idx = rev4(re_bin(r));
             yw[(s * NRE + r) * 2 + 0] = sp[2 * idx] << 4;
@@ -748,6 +759,50 @@ static int qs_decode(void)
         for (i = 0; i < ZC; i++)
             gath[24][i] = llr[b][i];
     }
+#ifdef PROTO_CPU_ONLY
+    /* 对照路径：同一 min-sum / BN 公式全在 CVA6 上跑，不碰阵列 */
+    for (uint32_t it = 0; it < qs_decode_iters; it++) {
+        for (uint32_t r2 = 0; r2 < BG2_ROWS; r2++) {
+            for (i = 0; i < ZC; i++) {
+                int32_t m1 = SENTINEL, m2 = SENTINEL, sg = 0;
+                for (uint32_t p = 0; p < MAXD / 2; p++) {
+                    int32_t a = msg[r2][2 * p][i], b = msg[r2][2 * p + 1][i];
+                    int32_t al = a >> 31, bl = b >> 31;
+                    int32_t aa = (a ^ al) - al, ba = (b ^ bl) - bl;
+                    int32_t lo = aa < ba ? aa : ba, hi = aa > ba ? aa : ba;
+                    int32_t t2 = m2 < hi ? m2 : hi;
+                    int32_t t1 = m1 > lo ? m1 : lo;
+                    m2 = t1 < t2 ? t1 : t2;
+                    m1 = m1 < lo ? m1 : lo;
+                    sg ^= al ^ bl;
+                }
+                res_r[r2][0][i] = m1;
+                res_r[r2][1][i] = m2;
+                res_r[r2][2][i] = sg;
+            }
+        }
+        reconstruct_gather();
+
+        {
+            int want_hard = (it + 1u == qs_decode_iters);
+            for (uint32_t b = 0; b < BG2_COLS; b++) {
+                uint32_t n = blk_n[b];
+                int32_t (*gath)[ZC] = (int32_t (*)[ZC])(g_all + b * GSPAD);
+                int32_t *bout = b_all + b * GSPAD;
+                for (i = 0; i < ZC; i++) {
+                    int32_t v = llr[b][i];
+                    for (k = 0; k < 24; k++)
+                        v += gath[k][i];
+                    for (k = 0; k < n; k++)
+                        bout[k * ZC + i] = v - gath[k][i];
+                    if (want_hard)
+                        bout[n * ZC + i] = v < 0 ? -1 : 0;
+                }
+                bn_scatter(b, want_hard, qs_hard[b]);
+            }
+        }
+    }
+#else
     for (i = 0; i < ZC; i++) {
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i),
@@ -795,6 +850,7 @@ static int qs_decode(void)
             }
         }
     }
+#endif
 
     /* CRC24A：硬判前 104 位 = 80 TB + 24 CRC */
     for (i = 0; i < A_TB + CRC_LEN; i++)

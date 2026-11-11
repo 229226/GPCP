@@ -199,8 +199,17 @@ $(BUILD)/mimo_bm.elf: mmse_2x1_prog.h mimo_stages.inc
 # 所以换场景只改 PROTO，不会把上一个场景的计划混进来。
 PROTO     ?= nr_pdcch
 PROTO_DIR := ../../build/proto/$(PROTO)
+# PROTO_CPU=1 编出同一场景的"全 CPU"对照路径（-DPROTO_CPU_ONLY，docs/22）
+PROTO_CPU ?= 0
+ifeq ($(PROTO_CPU),1)
+PROTO_FLAGS := -DPROTO_CPU_ONLY
+PROTO_SUF   := _cpu
+else
+PROTO_FLAGS :=
+PROTO_SUF   :=
+endif
 
-proto: $(BUILD)/proto_runner_$(PROTO).bin
+proto: $(BUILD)/proto_runner_$(PROTO)$(PROTO_SUF).bin
 
 $(PROTO_DIR)/plan.h: ../../proto/emit.py ../../proto/models/$(PROTO).py \
 		../../proto/compile.py ../../proto/lower.py ../../proto/hll.py \
@@ -208,7 +217,7 @@ $(PROTO_DIR)/plan.h: ../../proto/emit.py ../../proto/models/$(PROTO).py \
 	python3 ../../proto/compile.py --scenario $(PROTO)
 	python3 ../../proto/emit.py --scenario $(PROTO)
 
-$(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
+$(BUILD)/proto_runner_$(PROTO)$(PROTO_SUF).elf: proto_runner.c start.S link.ld \
 		$(PROTO_DIR)/plan.h $(PROTO)_ops.inc \
 		pdcch_luts.h polar_node_prog.h \
 		polar_inword_s0_prog.h polar_inword_s1_prog.h polar_inword_s2_prog.h \
@@ -221,14 +230,14 @@ $(BUILD)/proto_runner_$(PROTO).elf: proto_runner.c start.S link.ld \
 		ssb_stages.inc lte_stages.inc pdsch_harq_stages.inc \
 		lte_ul_stages.inc lte_ul_dft200_tab.h lte_cell_stages.inc lte_pss_tab.h \
 		wifi_stages.inc wifi_cos256_tab.h wifi_ldpc_648_r12.h \
-		pusch_stages.inc \
+		pusch_stages.inc fft_cpu.inc dft_bluestein.inc dft_bluestein_tab.h \
 		prach_corr_prog.h prach_corr_layout.h mmse_2x1_prog.h ssb_fft.inc \
 		pss_corr_prog.h pss_corr_layout.h ../../tools/ssb_fid_luts.h \
 		fft_stage_prog.h fft_block_prog.h | $(BUILD)
-	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) -I$(PROTO_DIR) -I../../tools \
+	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(PROTO_FLAGS) -I$(PROTO_DIR) -I../../tools \
 		-DPROTO_OPS_INC='"$(PROTO)_ops.inc"' $(LDFLAGS) \
 		start.S proto_runner.c -o $@
-	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/proto_runner_$(PROTO).dis
+	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/proto_runner_$(PROTO)$(PROTO_SUF).dis
 
 # 802.11 N648 R1/2 基图的 C 头文件由 tools/wifi_ldpc.py 生成（单一真相）。
 wifi_ldpc_648_r12.h: ../../tools/wifi_ldpc.py

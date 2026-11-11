@@ -5,6 +5,7 @@ static const proto_op_t proto_ops[] = {
     { "received", 0, cell_received },
     { "dmrs",     0, cell_dmrs },
     { "correlate", "cell_search_scalar", cell_correlate },
+    { "correlate", "cell_search_cgra", cell_correlate },
 };
 
 #define N_OPS (sizeof(proto_ops) / sizeof(proto_ops[0]))

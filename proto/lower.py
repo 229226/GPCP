@@ -157,6 +157,14 @@ def lower(ir, target):
                         "tiling": {"form": "radix-2", "stages": 8,
                                    "butterflies": n // 2 * 8},
                     })
+                    cands.append({
+                        "impl": "dft256_cgra",
+                        "kind": "cgra-radix4-fft",
+                        "est_ops": 4096,            # 1 stage tile + 4 tail block
+                        "buffer_words": 2 * n,
+                        "tiling": {"form": "cgra-fft", "stages": 1,
+                                   "blocks": 4},
+                    })
                 best = min(cands, key=lambda c: (c["est_ops"], c["buffer_words"]))
                 st["where"] = "control-core"
                 st["impl"] = best["impl"]
@@ -293,12 +301,11 @@ def lower(ir, target):
             # sss_corr 都是 16 PE 的部分和 + 阵列内归约）。
             seq = nd["params"].get("seq", "zc")
             if seq in ("lte_pss", "lte_sss"):
-                # LTE 小区搜索的 62 点相关没有对应微码：落控制核标量。
-                st["where"] = "control-core"
-                st["impl"] = "cell_search_scalar"
-                st["array_runs"] = 0
-                st["notes"].append("%d 个假设，CVA6 标量相关" % int(
-                    nd["params"].get("hypotheses", 1)))
+                # 62 点相关复用 prach_corr 镜像（127 tap 补零），一个假设一次运行。
+                st["where"] = "array"
+                st["impl"] = "cell_search_cgra"
+                st["array_runs"] = int(nd["params"].get("hypotheses", 1))
+                st["notes"].append("%d 个假设，每个一次阵列相关" % st["array_runs"])
             else:
                 st["where"] = "array"
                 st["impl"] = {"zc": "prach_corr", "pss": "pss_corr",

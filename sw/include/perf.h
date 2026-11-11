@@ -36,6 +36,11 @@
 #define PERF_DMA_DATA_WAIT       19
 #define PERF_DMA_STARTS          20
 #define PERF_RING_DONE           21
+/* 互斥状态账本（每拍只归一类，54+55+56 = PERF_CYCLES）：
+ *   阵列忙 = PERF_ARRAY_BUSY；DMA = 54；DMA 等待 = 55（54 的子集）；CPU = 56。 */
+#define PERF_STATE_DMA           54
+#define PERF_STATE_DMA_WAIT      55
+#define PERF_STATE_CPU           56
 #define PERF_PE_ACTIVE0          22
 #define PERF_PE_MAC0             38
 
@@ -48,5 +53,24 @@ static inline uint32_t perf_read(uint32_t idx)
 {
     return mmio_r(CGRA_PERF_BASE + 4u * idx);
 }
+
+/* CPU 子账本（仅 proto 运行器编译时开启 GPCP_CPU_PROFILE）。
+ * 计时口径：区间内 PERF_STATE_CPU 的增量——只累计"阵列与 DMA 都空闲"的周期，
+ * 因此与轮询等待（那时阵列/DMA 忙）天然不重叠，各项相加不会超过 CPU 状态。 */
+#ifdef GPCP_CPU_PROFILE
+typedef struct {
+    uint32_t imem;       /* 指令存储器装载（寄存器配置部分） */
+    uint32_t array_cfg;  /* 阵列启动/页选择写 */
+    uint32_t dma_cfg;    /* DMA 描述符启动写 */
+    uint32_t cache;      /* D-cache 维护 */
+} cpu_prof_t;
+
+static cpu_prof_t g_cpu_prof;
+
+static inline uint32_t cpu_prof_now(void)
+{
+    return perf_read(PERF_STATE_CPU);
+}
+#endif
 
 #endif /* GPCP_PERF_H */

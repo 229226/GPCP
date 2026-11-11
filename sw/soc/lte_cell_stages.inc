@@ -15,6 +15,10 @@
 #define LTE_CELL_STAGES_INC
 
 #include "lte_pss_tab.h"
+#include "prach_corr_prog.h"
+#include "prach_corr_layout.h"
+#include "../include/gpcp_cgra_rt.h"
+#include "../include/gpcp_layout.h"
 
 #define EXIT_ADDR     0x40010000ul
 #define RESULT_BASE   ((uint32_t *)0x80070000ul)
@@ -98,10 +102,116 @@ static int cell_received(void) { return 0; }
 
 static int cell_dmrs(void) { return 0; }
 
+#ifndef PROTO_CPU_ONLY
+/* 62 点相关复用 prach_corr 镜像（复数参考、127 tap 补零）。
+ * 一个假设 = 一次阵列运行；参考/接收都按 [re,im] 交错写进 254 字。 */
+#define CGRA_BASE   0x50000000ul
+#define CELL_TAPS   127
+#define CELL_Y_SPAD  (GPCP_LAYOUT_REGION_IN * GPCP_LAYOUT_WORDS)
+#define CELL_RF_SPAD (GPCP_LAYOUT_REGION_REF * GPCP_LAYOUT_WORDS)
+#define CELL_PT_SPAD (GPCP_LAYOUT_REGION_OUT * GPCP_LAYOUT_WORDS)
+
+static int32_t cell_ybuf[2 * CELL_TAPS], cell_refbuf[2 * CELL_TAPS];
+static uint32_t cell_uc_loaded;
+
+static void cell_dma(uintptr_t ram, uint32_t spad, uint32_t words, uint32_t dir)
+{
+    uint32_t g = 0;
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DMA_CTRL, GPCP_CGRA_DMA_CLRDONE);
+    while (mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE)
+        if (++g > 100000u) { errs++; return; }
+    g = 0;
+    while (mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_BUSY)
+        if (++g > 400000u) { errs++; return; }
+    gpcp_cgra_dma_start(CGRA_BASE, ram, spad, words, 0, dir, 0, 0);
+    g = 0;
+    while (!(mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE))
+        if (++g > 4000000u) { errs++; return; }
+    dmas++;
+}
+
+static void cell_array_run(uint32_t cycles)
+{
+    if (rt_array_run(CGRA_BASE, 0, cycles)) errs++;
+    runs++;
+    busy += cycles;
+}
+
+static void cell_cgra_load(void)
+{
+    if (cell_uc_loaded)
+        return;
+    if (gpcp_cgra_imem_load(CGRA_BASE, prach_corr_prog,
+                            PRACH_CORR_PROG_CYCLES * GPCP_LAYOUT_NPES) != 0)
+        errs++;
+    cell_uc_loaded = 1;
+}
+
+static void cell_cgra_rx(const uint32_t *src, uint32_t off)
+{
+    /* 微码按 PE-major 取数：PE p 的 tap k 在 16*p + 2*k(+1) */
+    for (uint32_t p = 0; p < GPCP_LAYOUT_NPES; p++)
+        for (uint32_t k = 0; k < 8; k++) {
+            uint32_t n = 8u * p + k;
+            uint32_t d = 16u * p + 2u * k;
+            if (n < CELL_N) {
+                cell_ybuf[d] = (int32_t)src[off + 2u * n];
+                cell_ybuf[d + 1u] = (int32_t)src[off + 2u * n + 1u];
+            } else {
+                cell_ybuf[d] = 0;
+                cell_ybuf[d + 1u] = 0;
+            }
+        }
+    cell_dma((uintptr_t)cell_ybuf, CELL_Y_SPAD, 2 * CELL_TAPS, 0);
+}
+
+static void cell_cgra_corr(const int32_t *re, const int32_t *im, uint32_t stride,
+                           int64_t *ar, int64_t *ai)
+{
+    for (uint32_t p = 0; p < GPCP_LAYOUT_NPES; p++)
+        for (uint32_t k = 0; k < 8; k++) {
+            uint32_t n = 8u * p + k;
+            uint32_t d = 16u * p + 2u * k;
+            if (n < CELL_N) {
+                cell_refbuf[d] = re[n * stride];
+                cell_refbuf[d + 1u] = im ? im[n * stride] : 0;
+            } else {
+                cell_refbuf[d] = 0;
+                cell_refbuf[d + 1u] = 0;
+            }
+        }
+    cell_dma((uintptr_t)cell_refbuf, CELL_RF_SPAD, 2 * CELL_TAPS, 0);
+    /* 127 个 tap 只搬 254 字；PE15 的幻影 tap 在 spad 里显式清零 */
+    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(PRACH_CORR_SPAD_LEAF_R7(15)), 0);
+    gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(PRACH_CORR_SPAD_LEAF_RI7(15)), 0);
+    cell_array_run(PRACH_CORR_PROG_CYCLES);
+    {
+        /* 直接从 spad 主机窗口读分部：MMIO 非缓存，避开 "DMA 写 RAM 后
+         * CPU 命中旧 D$ 行"（mimo_stages 的 mmse 也出于同一原因这样做）。 */
+        int64_t r = 0, i = 0;
+        for (uint32_t p = 0; p < GPCP_LAYOUT_NPES; p++) {
+            r += (int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(CELL_PT_SPAD + 2 * p));
+            i += (int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(CELL_PT_SPAD + 2 * p + 1));
+        }
+        *ar = r;
+        *ai = i;
+    }
+}
+#endif
+
 static int cell_correlate_pss(void)
 {
     int64_t best = -1, second = -1;
+#ifndef PROTO_CPU_ONLY
+    cell_cgra_load();
+    cell_cgra_rx(CELL_IN, 0);
+#endif
     for (int u = 0; u < 3; u++) {
+#ifndef PROTO_CPU_ONLY
+        int64_t ar, ai;
+        cell_cgra_corr(cell_pss_re[u], cell_pss_im[u], 1, &ar, &ai);
+        cell_pss_e[u] = ar * ar + ai * ai;
+#else
         int64_t ar = 0, ai = 0;
         for (int n = 0; n < CELL_N; n++) {
             int64_t yr = (int32_t)CELL_IN[2 * n];
@@ -111,6 +221,7 @@ static int cell_correlate_pss(void)
             ai += yi * dr - yr * di;
         }
         cell_pss_e[u] = ar * ar + ai * ai;
+#endif
         if (cell_pss_e[u] > best) {
             second = best;
             best = cell_pss_e[u];
@@ -127,7 +238,16 @@ static int cell_correlate_pss(void)
 static int cell_correlate_sss(void)
 {
     int64_t best = -1, second = -1;
+#ifndef PROTO_CPU_ONLY
+    cell_cgra_load();
+    cell_cgra_rx(CELL_IN, 124);
+#endif
     for (uint32_t h = 0; h < CELL_NSSS; h++) {
+#ifndef PROTO_CPU_ONLY
+        int64_t ar, ai;
+        cell_cgra_corr(cell_sss_re[h], 0, 1, &ar, &ai);
+        cell_sss_e[h] = ar * ar + ai * ai;
+#else
         int64_t ar = 0, ai = 0;
         for (int n = 0; n < CELL_N; n++) {
             int64_t yr = (int32_t)CELL_IN[124 + 2 * n];
@@ -137,6 +257,7 @@ static int cell_correlate_sss(void)
             ai += yi * dr;
         }
         cell_sss_e[h] = ar * ar + ai * ai;
+#endif
         if (cell_sss_e[h] > best) {
             second = best;
             best = cell_sss_e[h];

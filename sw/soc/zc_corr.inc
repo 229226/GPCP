@@ -68,9 +68,48 @@ static int zc_received(void)
 /* 阶段 dmrs：候选参考序列随激励一起进来，这里不重算。 */
 static int zc_dmrs(void) { return 0; }
 
+#ifdef PROTO_CPU_ONLY
+/* 与阵列同一口径：MUL 取 sext16，累加按 32-bit 回卷；每个 PE 8 tap。 */
+static int zc_sx16(int32_t v)
+{
+    v &= 0xFFFF;
+    return (v & 0x8000) ? v - 0x10000 : v;
+}
+
+static void zc_corr_cpu(uint32_t n_cand)
+{
+    const int32_t *y = (const int32_t *)ZC_TD_BASE;
+    const int32_t *refs = (const int32_t *)(ZC_TD_BASE + 4u * (2u * ZC_L_RA));
+    for (uint32_t d = 0; d < n_cand; d++) {
+        int32_t *part = (int32_t *)(ZC_PART_BASE + d * ZC_PART_WORDS * 4u);
+        for (uint32_t p = 0; p < GPCP_LAYOUT_NPES; p++) {
+            int32_t re = 0, im = 0;
+            for (uint32_t k = 0; k < 8; k++) {
+                uint32_t t = 8u * p + k;
+                int32_t rr = (t < ZC_TAPS) ? refs[d * ZC_PAIR_WORDS + 2u * t] : 0;
+                int32_t ri = (t < ZC_TAPS) ? refs[d * ZC_PAIR_WORDS + 2u * t + 1u] : 0;
+                int32_t yr = y[2u * t], yi = y[2u * t + 1u];
+                int32_t pr = (int32_t)(zc_sx16(yr) * zc_sx16(rr)
+                                     + zc_sx16(yi) * zc_sx16(ri));
+                int32_t pi = (int32_t)(zc_sx16(yi) * zc_sx16(rr)
+                                     - zc_sx16(yr) * zc_sx16(ri));
+                re = (int32_t)((uint32_t)re + (uint32_t)pr);
+                im = (int32_t)((uint32_t)im + (uint32_t)pi);
+            }
+            part[2u * p] = re;
+            part[2u * p + 1u] = im;
+        }
+    }
+}
+#endif
+
 /* 阶段 correlate：n_cand 个候选，每个一次阵列运行 + 一次分部读回。 */
 static int zc_correlate(uint32_t n_cand)
 {
+#ifdef PROTO_CPU_ONLY
+    zc_corr_cpu(n_cand);
+    return 0;
+#else
     uintptr_t refs = ZC_TD_BASE + 4u * (2u * ZC_L_RA);
     for (uint32_t d = 0; d < n_cand; d++) {
         if (zc_dma(refs + 4u * d * ZC_PAIR_WORDS, ZC_REF_SPAD, ZC_PAIR_WORDS, 0) != 0)
@@ -90,6 +129,7 @@ static int zc_correlate(uint32_t n_cand)
             return 1;
     }
     return 0;
+#endif
 }
 
 /* CPU 复核 16 个 PE 分部并求和；part_out != 0 时逐分部导出（run-pucch 的

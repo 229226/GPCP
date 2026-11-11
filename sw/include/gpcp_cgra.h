@@ -13,6 +13,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef GPCP_CPU_PROFILE
+#include "perf.h"                       /* CPU 子账本：只累计阵列/DMA 都空闲的周期 */
+#endif
+
 /* ------------------------------------------------------------------ geometry */
 #define GPCP_CGRA_N            4u
 #define GPCP_CGRA_NPES         (GPCP_CGRA_N * GPCP_CGRA_N)
@@ -242,8 +246,8 @@ static inline void gpcp_cgra_dma_start(uintptr_t base, uintptr_t ram_addr,
  * 写两条指令（word index = 0..8191，行 = idx>>4、lane = idx&15）。
  * 一次最多 1024 字（DMA_LEN 上限），超过的分块；每块都要等 done + 清 done。
  * 相比逐字 AXI-Lite 写（~4 拍/字），这是 2 字/beat 的突发，快一个数量级。 */
-static inline int gpcp_cgra_imem_load(uintptr_t base, const uint32_t *prog,
-                                      uint32_t words)
+static inline int gpcp_cgra_imem_load_body(uintptr_t base, const uint32_t *prog,
+                                           uint32_t words)
 {
     uint32_t off = 0;
     if (!prog || words == 0u || words > GPCP_CGRA_IMEM_WORDS)
@@ -273,6 +277,19 @@ static inline int gpcp_cgra_imem_load(uintptr_t base, const uint32_t *prog,
         off += n;
     }
     return 0;
+}
+
+static inline int gpcp_cgra_imem_load(uintptr_t base, const uint32_t *prog,
+                                      uint32_t words)
+{
+#ifdef GPCP_CPU_PROFILE
+    uint32_t t0 = cpu_prof_now();
+    int rc = gpcp_cgra_imem_load_body(base, prog, words);
+    g_cpu_prof.imem += cpu_prof_now() - t0;
+    return rc;
+#else
+    return gpcp_cgra_imem_load_body(base, prog, words);
+#endif
 }
 
 /* -------------------------------------------------- completion interrupt (CGRA) */

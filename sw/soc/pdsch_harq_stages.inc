@@ -59,8 +59,12 @@ static int harq_ofdm_demodulate(void)
     for (int s = 0; s < NSYM; s++) {
         int32_t *sp = td + (harq_q * NSYM + (uint32_t)s) * SYM_WORDS
                       + 2 * CP_LEN;
+#ifdef PROTO_CPU_ONLY
+        fft4096_cpu(sp);
+#else
         fft4096(sp);
         rt_dcache_flush();
+#endif
         for (uint32_t r = 0; r < NRE; r++) {
             uint32_t idx = rev4(re_bin(r));
             yw[(s * NRE + r) * 2 + 0] = sp[2 * idx] << 4;

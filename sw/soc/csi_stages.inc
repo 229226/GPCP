@@ -85,6 +85,9 @@ static uint32_t csi_cinit(void)
 }
 
 #include "ssb_fft.inc"          /* fft4096() + rev4() */
+#ifdef PROTO_CPU_ONLY
+#include "fft_cpu.inc"
+#endif
 
 /* --------------------------------------------------------- 阶段状态（结果） */
 static uint32_t cs_cqi, cs_snr_q8, cs_ps40, cs_pn10, cs_cinit_v;
@@ -104,7 +107,11 @@ static int cs_dmrs(void)
 static int cs_ofdm_demodulate(void)
 {
     int32_t *td = (int32_t *)TD_RAM;
+#ifdef PROTO_CPU_ONLY
+    fft4096_cpu(td + 2 * CP_LEN);
+#else
     fft4096(td + 2 * CP_LEN);       /* X[k] at sp[rev4(k)] */
+#endif
     return 0;
 }
 

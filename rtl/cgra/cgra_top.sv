@@ -136,6 +136,10 @@ module cgra_top #(
   logic [31:0] perf_dma_b_wait;
   logic [31:0] perf_dma_data_wait;
   logic [31:0] perf_dma_starts;
+  // 互斥状态账本：每拍只归一类（阵列 → DMA → CPU），三者之和 = perf_cycles
+  logic [31:0] perf_state_dma;        // 阵列空闲、DMA busy
+  logic [31:0] perf_state_dma_wait;   // 上者中 DMA 正在等 AR/AW/B/数据
+  logic [31:0] perf_state_cpu;        // 阵列与 DMA 都空闲（CVA6 执行）
   logic [CGRA_NPES-1:0][31:0] perf_pe_active;
   logic [CGRA_NPES-1:0][31:0] perf_pe_mac;
   // array 侧计数器
@@ -678,6 +682,9 @@ module cgra_top #(
       perf_dma_b_wait <= 32'd0;
       perf_dma_data_wait <= 32'd0;
       perf_dma_starts <= 32'd0;
+      perf_state_dma <= 32'd0;
+      perf_state_dma_wait <= 32'd0;
+      perf_state_cpu <= 32'd0;
       busy_q <= 1'b0;
       dma_busy_q <= 1'b0;
     end else if (perf_clear) begin
@@ -691,6 +698,9 @@ module cgra_top #(
       perf_dma_b_wait <= 32'd0;
       perf_dma_data_wait <= 32'd0;
       perf_dma_starts <= 32'd0;
+      perf_state_dma <= 32'd0;
+      perf_state_dma_wait <= 32'd0;
+      perf_state_cpu <= 32'd0;
       busy_q <= busy;
       dma_busy_q <= dma_busy;
     end else begin
@@ -700,6 +710,18 @@ module cgra_top #(
       if (dma_busy) perf_dma_busy <= perf_dma_busy + 32'd1;
       if (dma_busy && !dma_busy_q)
         perf_dma_starts <= perf_dma_starts + 32'd1;
+      // 互斥状态（优先级：阵列 > DMA > CPU）
+      if (!busy && dma_busy) begin
+        perf_state_dma <= perf_state_dma + 32'd1;
+        if (((dstate == D_AR) && !m_axi_arready) ||
+            ((dstate == D_AW) && !m_axi_awready) ||
+            ((dstate == D_BRESP) && !m_axi_bvalid) ||
+            ((dstate == D_SIN) && !m_axi_rvalid) ||
+            ((dstate == D_SOUT) && !m_axi_wready))
+          perf_state_dma_wait <= perf_state_dma_wait + 32'd1;
+      end else if (!busy && !dma_busy) begin
+        perf_state_cpu <= perf_state_cpu + 32'd1;
+      end
       perf_dma_beats <= perf_dma_beats
           + ((m_axi_rvalid && m_axi_rready) ? 32'd1 : 32'd0)
           + ((m_axi_wvalid && m_axi_wready) ? 32'd1 : 32'd0);
@@ -718,7 +740,7 @@ module cgra_top #(
   end
 
   // 统一编址：0..21 为全局/array 计数，22..37 为每 PE 活跃周期，
-  // 38..53 为每 PE MAC 周期。
+  // 38..53 为每 PE MAC 周期，54..56 为互斥状态（DMA / DMA 等待 / CPU）。
   logic [31:0] perf_counters [0:PERF_N-1];
   always_comb begin
     for (int i = 0; i < PERF_N; i++) perf_counters[i] = 32'd0;
@@ -744,6 +766,9 @@ module cgra_top #(
     perf_counters[19] = perf_dma_data_wait;
     perf_counters[20] = perf_dma_starts;
     perf_counters[21] = {16'b0, ring_done};
+    perf_counters[54] = perf_state_dma;
+    perf_counters[55] = perf_state_dma_wait;
+    perf_counters[56] = perf_state_cpu;
     for (int p = 0; p < CGRA_NPES; p++) begin
       perf_counters[22 + p] = perf_pe_active[p];
       perf_counters[38 + p] = perf_pe_mac[p];

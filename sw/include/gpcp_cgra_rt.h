@@ -55,17 +55,29 @@ static inline int rt_wait_array(uintptr_t base)
  * 所以把使能位写 0 再写 1 = 排空写缓冲 + 整片 D$ 失效（32 KiB 约 4k 拍）。 */
 static inline void rt_dcache_flush(void)
 {
+#ifdef GPCP_CPU_PROFILE
+    uint32_t t0 = cpu_prof_now();
+#endif
     uint64_t on = 1;
     __asm__ __volatile__("csrw 0x7c1, zero" ::: "memory");
     __asm__ __volatile__("csrw 0x7c1, %0" :: "r"(on) : "memory");
     __asm__ __volatile__("fence" ::: "memory");
+#ifdef GPCP_CPU_PROFILE
+    g_cpu_prof.cache += cpu_prof_now() - t0;
+#endif
 }
 
 /* 启动阵列（选页）并等它跑完 */
 static inline int rt_array_run(uintptr_t base, uint32_t page, uint32_t cycles)
 {
+#ifdef GPCP_CPU_PROFILE
+    uint32_t t0 = cpu_prof_now();
+#endif
     gpcp_cgra_array_start(base, page, cycles);
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+#ifdef GPCP_CPU_PROFILE
+    g_cpu_prof.array_cfg += cpu_prof_now() - t0;
+#endif
     return rt_wait_array(base);
 }
 
@@ -75,20 +87,33 @@ static inline int rt_dma_begin(uintptr_t base, uintptr_t ram, uint32_t spad_idx,
                                uint32_t words, uint32_t page, uint32_t dir_out,
                                uint32_t stride, uint32_t row)
 {
+#ifdef GPCP_CPU_PROFILE
+    uint32_t t0 = cpu_prof_now();
+#endif
+    int rc = 0;
     uint32_t g = 0;
     while (gpcp_cgra_read(base, GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_BUSY) {
-        if (++g > RT_SPIN_LIMIT)
-            return -1;
+        if (++g > RT_SPIN_LIMIT) {
+            rc = -1;
+            goto out;
+        }
     }
     gpcp_cgra_dma_start(base, ram, spad_idx, words, page, dir_out, stride, row);
     g = 0;
     while (1) {
         uint32_t s = gpcp_cgra_read(base, GPCP_CGRA_DMA_CTRL);
         if ((s & GPCP_CGRA_DMA_BUSY) || !(s & GPCP_CGRA_DMA_DONE))
-            return 0;                       /* start 已生效（或已瞬间完成） */
-        if (++g > 4096u)
-            return -1;
+            break;                          /* start 已生效（或已瞬间完成） */
+        if (++g > 4096u) {
+            rc = -1;
+            break;
+        }
     }
+out:
+#ifdef GPCP_CPU_PROFILE
+    g_cpu_prof.dma_cfg += cpu_prof_now() - t0;
+#endif
+    return rc;
 }
 
 /* 等搬运完成。此时"done=1 且 busy=0"就意味着这次传输已经结束

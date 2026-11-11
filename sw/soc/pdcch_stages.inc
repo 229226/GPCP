@@ -121,6 +121,9 @@ static void wait_desc(uint32_t want)
 }
 
 #include "ssb_fft.inc"          /* fft4096(), rev4(), generated stage images */
+#ifdef PROTO_CPU_ONLY
+#include "fft_cpu.inc"
+#endif
 
 /* ---------------------------------------------------------------- TX helpers */
 static uint32_t pack32(const uint8_t *b)
@@ -183,6 +186,16 @@ static uint32_t polar_mask(uint32_t s)
 static void polar_transform(void)
 {
     uint32_t i, w;
+#ifdef PROTO_CPU_ONLY
+    /* CPU 对照路径：与 9 级阵列镜像同一多项式（stage 1..512 的标准极化变换） */
+    for (uint32_t step = 1; step < NPOL; step <<= 1)
+        for (uint32_t base = 0; base < NPOL; base += 2u * step)
+            for (uint32_t k = 0; k < step; k++)
+                u_bits[base + k] ^= u_bits[base + k + step];
+    for (uint32_t i = 0; i < NPOL; i++)
+        x_bits[i] = u_bits[i];
+    return;
+#endif
 
     for (i = 0; i < NW; i++)
         gpcp_cgra_write(CGRA_BASE, GPCP_SPAD_FLAT_ADDR(i), pack32(u_bits + 32 * i));
@@ -292,6 +305,24 @@ static void dsc(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
 static void node_run(uint32_t d, uint32_t o, uint32_t half,
                      const uint8_t *bp, uint32_t cnt)
 {
+#ifdef PROTO_CPU_ONLY
+    for (uint32_t chunk = 0; chunk < cnt; chunk += NPES) {
+        uint32_t n = cnt - chunk < NPES ? cnt - chunk : NPES;
+        for (uint32_t k = 0; k < n; k++) {
+            int32_t a = lbuf[d][o + chunk + k];
+            int32_t b = lbuf[d][o + half + chunk + k];
+            int32_t bt = bp ? bp[chunk + k] : 0;
+            int32_t sa = a >> 31, sb = b >> 31;
+            int32_t aa = (a ^ sa) - sa, ab = (b ^ sb) - sb;
+            int32_t m = aa < ab ? aa : ab;
+            int32_t s = sa ^ sb;
+            lbuf[d + 1][o + chunk + k] = (m ^ s) - s;
+            lbuf[d + 1][o + half + chunk + k] =
+                a + b - ((a & (-bt)) << 1);
+        }
+    }
+    return;
+#endif
     for (uint32_t chunk = 0; chunk < cnt; chunk += NPES) {
         uint32_t n = cnt - chunk < NPES ? cnt - chunk : NPES;
         for (uint32_t k = 0; k < n; k++) {
@@ -522,7 +553,11 @@ static int ps_ofdm_modulate(void)
     uint32_t k;
     int32_t *freq = (int32_t *)FREQ_BASE;
     int32_t *td = (int32_t *)TD_RAM;
+#ifdef PROTO_CPU_ONLY
+    fft4096_cpu(freq);
+#else
     fft4096(freq);
+#endif
     rt_dcache_flush();                          /* the engine wrote it in place */
     for (k = 0; k < CP_LEN; k++) {
         uint32_t t = NFFT - CP_LEN + k, r = rev4(t);
@@ -551,7 +586,11 @@ static int ps_estimate(void)
     int32_t *td = (int32_t *)TD_RAM;
     int32_t *spec = td + 2 * CP_LEN;
     uint32_t r, idx;
+#ifdef PROTO_CPU_ONLY
+    fft4096_cpu(spec);
+#else
     fft4096(spec);
+#endif
     rt_dcache_flush();                          /* CPU wrote this window, engine
                                                  * transformed it in place */
     for (r = 0; r < NRE; r++) {

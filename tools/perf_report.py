@@ -51,7 +51,8 @@ def parse_report(path):
 
     perf_rows = []
     if "## 硬件性能计数器" in text:
-        psec = text.split("## 硬件性能计数器")[1].split("### 整跑")[0]
+        psec = text.split("## 硬件性能计数器")[1]
+        psec = psec.split("## 全周期账本")[0].split("### 整跑")[0]
         for line in psec.splitlines():
             if not line.startswith("|"):
                 continue
@@ -65,6 +66,34 @@ def parse_report(path):
                     "bank_pct": num(c[7]),
                     "dma_beats": int(num(c[8])), "dma_wait": int(num(c[9])),
                 })
+
+    ledger = {}
+    if "## 全周期账本（互斥状态）" in text:
+        lsec = text.split("## 全周期账本（互斥状态）")[1]
+        lsec = lsec.split("### CPU 执行细分")[0]
+        for line in lsec.splitlines():
+            if not line.startswith("|"):
+                continue
+            c = [x.strip() for x in line.strip("|").split("|")]
+            if c and c[0].isdigit():
+                ledger[int(c[0])] = {
+                    "array": int(num(c[3])), "dma_xfer": int(num(c[4])),
+                    "dma_wait": int(num(c[5])), "cpu": int(num(c[6])),
+                }
+
+    cpu_detail = {}
+    if "### CPU 执行细分" in text:
+        csec = text.split("### CPU 执行细分")[1].split("### 整跑")[0]
+        for line in csec.splitlines():
+            if not line.startswith("|"):
+                continue
+            c = [x.strip() for x in line.strip("|").split("|")]
+            if c and c[0].isdigit():
+                cpu_detail[int(c[0])] = {
+                    "imem": int(num(c[2])), "array_cfg": int(num(c[3])),
+                    "dma_cfg": int(num(c[4])), "cache": int(num(c[5])),
+                    "scalar": int(num(c[6])),
+                }
 
     full = {
         "total_cycles": 0, "array_busy": 0, "array_pct": 0.0,
@@ -115,6 +144,20 @@ def parse_report(path):
         st = int(p.get("st", 0))
         alu = max(0.0, issued - nop - mac - ld - st)
         bank_pct = float(p.get("bank_pct", 0.0))
+        led = ledger.get(s["id"], {})
+        det = cpu_detail.get(s["id"], {})
+        if led:
+            dma_xfer = led["dma_xfer"]
+            dma_wait = led["dma_wait"]
+            cpu = led["cpu"]
+        else:
+            dma_wait = int(p.get("dma_wait", 0))
+            dma_xfer = 0
+            cpu = max(0, cycles - array_busy - dma_wait)
+        cpu_imem = det.get("imem", 0)
+        cpu_cfg = det.get("array_cfg", 0) + det.get("dma_cfg", 0)
+        cpu_cache = det.get("cache", 0)
+        cpu_scalar = det.get("scalar", max(0, cpu - cpu_imem - cpu_cfg - cpu_cache))
         stages.append({
             **s,
             "cycles": cycles,
@@ -130,7 +173,17 @@ def parse_report(path):
             "bank_pct": bank_pct,
             "bank_conflict": int(round(array_busy * bank_pct / 100.0)),
             "dma_beats": int(p.get("dma_beats", 0)),
-            "dma_wait": int(p.get("dma_wait", 0)),
+            "dma_wait": dma_wait, "dma_xfer": dma_xfer,
+            "cpu": cpu, "cpu_imem": cpu_imem, "cpu_cfg": cpu_cfg,
+            "cpu_cache": cpu_cache, "cpu_scalar": cpu_scalar,
+            "array_pct": pct(array_busy, cycles),
+            "dma_xfer_pct": pct(dma_xfer, cycles),
+            "dma_wait_pct": pct(dma_wait, cycles),
+            "cpu_pct": pct(cpu, cycles),
+            "cpu_imem_pct": pct(cpu_imem, cpu),
+            "cpu_cfg_pct": pct(cpu_cfg, cpu),
+            "cpu_cache_pct": pct(cpu_cache, cpu),
+            "cpu_scalar_pct": pct(cpu_scalar, cpu),
         })
     return {"name": name, "rat": rat, "direction": direction,
             "stages": stages, "full": full}
@@ -154,16 +207,22 @@ def bar(value, maxv, cls="blue", label=""):
             '<span class="bar-label">%s</span></div>' % (cls, w, esc(label)))
 
 
-def stack_bar(stage):
-    total = stage["cycles"]
-    a = min(100.0, 100.0 * stage["array_busy"] / total)
-    d = min(100.0 - a, 100.0 * stage["dma_wait"] / total)
-    o = max(0.0, 100.0 - a - d)
-    return ('<div class="stack" title="阶段 %d %s：%s 周期">'
-            '<span class="seg array" style="width:%.2f%%"></span>'
-            '<span class="seg dma" style="width:%.2f%%"></span>'
-            '<span class="seg other" style="width:%.2f%%"></span>'
-            '</div>' % (stage["id"], esc(stage["op"]), fmt(total), a, d, o))
+def ledger_segments(stage):
+    return [("array", stage["array_busy"]), ("dma", stage["dma_xfer"]),
+            ("dma2", stage["dma_wait"]), ("imem", stage["cpu_imem"]),
+            ("cfg", stage["cpu_cfg"]), ("cache", stage["cpu_cache"]),
+            ("scalar", stage["cpu_scalar"])]
+
+
+def ledger_bar(stage):
+    total = max(1, stage["cycles"])
+    out = ['<div class="stack" title="阶段 %d %s：%s 周期">'
+           % (stage["id"], esc(stage["op"]), fmt(total))]
+    for cls, v in ledger_segments(stage):
+        out.append('<span class="seg %s" style="width:%.2f%%"></span>'
+                   % (cls, min(100.0, 100.0 * v / total)))
+    out.append("</div>")
+    return "".join(out)
 
 
 def mix_bar(stage):
@@ -181,14 +240,17 @@ def mix_bar(stage):
     return "".join(out)
 
 
-def stack_vals(array_busy, dma_wait, cycles):
-    a = min(100.0, 100.0 * array_busy / cycles) if cycles else 0.0
-    d = min(100.0 - a, 100.0 * dma_wait / cycles) if cycles else 0.0
-    o = max(0.0, 100.0 - a - d)
-    return ('<div class="stack"><span class="seg array" style="width:%.2f%%"></span>'
-            '<span class="seg dma" style="width:%.2f%%"></span>'
-            '<span class="seg other" style="width:%.2f%%"></span></div>'
-            % (a, d, o))
+def kernel_bar(k):
+    total = max(1, k["cycles"])
+    out = ['<div class="stack">']
+    for cls, v in [("array", k["array_busy"]), ("dma", k["dma_xfer"]),
+                   ("dma2", k["dma_wait"]), ("imem", k["cpu_imem"]),
+                   ("cfg", k["cpu_cfg"]), ("cache", k["cpu_cache"]),
+                   ("scalar", k["cpu_scalar"])]:
+        out.append('<span class="seg %s" style="width:%.2f%%"></span>'
+                   % (cls, min(100.0, 100.0 * v / total)))
+    out.append("</div>")
+    return "".join(out)
 
 
 def heatmap(pe, name):
@@ -222,6 +284,9 @@ def main():
     total_dma_wait = sum(d["full"]["dma_wait"] for d in data)
     total_data_wait = sum(d["full"]["data_wait"] for d in data)
     total_dma_busy = sum(d["full"]["dma_busy"] for d in data)
+    total_dma_xfer = sum(s["dma_xfer"] for d in data for s in d["stages"])
+    total_cpu = sum(s["cpu"] for d in data for s in d["stages"])
+    total_cpu_scalar = sum(s["cpu_scalar"] for d in data for s in d["stages"])
 
     # kernel aggregation：有 impl 用 impl，否则用 op（标量阶段）
     kernels = {}
@@ -232,9 +297,15 @@ def main():
                                          "scenarios": set(), "cycles": 0,
                                          "array_busy": 0, "issued": 0, "nop": 0.0,
                                          "mac": 0.0, "ld": 0, "st": 0, "alu": 0.0,
-                                         "bank_conflict": 0, "dma_beats": 0, "dma_wait": 0})
+                                         "bank_conflict": 0, "dma_beats": 0, "dma_wait": 0,
+                                         "dma_xfer": 0, "cpu": 0, "cpu_imem": 0,
+                                         "cpu_cfg": 0, "cpu_cache": 0, "cpu_scalar": 0,
+                                         "instances": []})
             k["scenarios"].add(d["name"])
-            for f in ("cycles", "array_busy", "issued", "ld", "st", "dma_beats", "dma_wait", "bank_conflict"):
+            k["instances"].append((d["name"], s))
+            for f in ("cycles", "array_busy", "issued", "ld", "st", "dma_beats",
+                      "dma_wait", "dma_xfer", "cpu", "cpu_imem", "cpu_cfg",
+                      "cpu_cache", "cpu_scalar", "bank_conflict"):
                 k[f] += s[f]
             k["nop"] += s["nop"]
             k["mac"] += s["mac"]
@@ -248,7 +319,14 @@ def main():
         k["st_pct"] = pct(k["st"], k["issued"])
         k["alu_pct"] = pct(k["alu"], k["issued"])
         k["bank_pct"] = pct(k["bank_conflict"], k["array_busy"])
+        k["array_pct"] = pct(k["array_busy"], k["cycles"])
+        k["dma_xfer_pct"] = pct(k["dma_xfer"], k["cycles"])
         k["dma_wait_pct"] = pct(k["dma_wait"], k["cycles"])
+        k["cpu_pct"] = pct(k["cpu"], k["cycles"])
+        k["cpu_imem_pct"] = pct(k["cpu_imem"], k["cpu"])
+        k["cpu_cfg_pct"] = pct(k["cpu_cfg"], k["cpu"])
+        k["cpu_cache_pct"] = pct(k["cpu_cache"], k["cpu"])
+        k["cpu_scalar_pct"] = pct(k["cpu_scalar"], k["cpu"])
     kernel_list = sorted(kernels.values(), key=lambda x: -x["cycles"])
 
     max_scenario_cycles = max(d["full"]["total_cycles"] for d in data)
@@ -269,17 +347,29 @@ def main():
         w = csv.writer(f)
         w.writerow(["scenario", "rat", "direction", "stage_id", "op", "impl", "where",
                     "cycles", "share_pct", "array_busy", "array_util_pct",
+                    "dma_xfer", "dma_xfer_pct", "dma_wait", "dma_wait_pct",
+                    "cpu", "cpu_pct", "cpu_imem", "cpu_imem_pct",
+                    "cpu_cfg", "cpu_cfg_pct", "cpu_cache", "cpu_cache_pct",
+                    "cpu_scalar", "cpu_scalar_pct",
                     "issued", "nop_pct", "mac_pct", "ld", "st", "alu_pct",
-                    "bank_conflict", "bank_pct", "dma_beats", "dma_wait"])
+                    "bank_conflict", "bank_pct", "dma_beats"])
         for d in data:
             for s in d["stages"]:
                 w.writerow([d["name"], d["rat"], d["direction"], s["id"], s["op"],
                             s["impl"], s["where"], s["cycles"], "%.1f" % s["share"],
-                            s["array_busy"], "%.1f" % s["util"], s["issued"],
+                            s["array_busy"], "%.1f" % s["util"],
+                            s["dma_xfer"], "%.1f" % s["dma_xfer_pct"],
+                            s["dma_wait"], "%.1f" % s["dma_wait_pct"],
+                            s["cpu"], "%.1f" % s["cpu_pct"],
+                            s["cpu_imem"], "%.1f" % s["cpu_imem_pct"],
+                            s["cpu_cfg"], "%.1f" % s["cpu_cfg_pct"],
+                            s["cpu_cache"], "%.1f" % s["cpu_cache_pct"],
+                            s["cpu_scalar"], "%.1f" % s["cpu_scalar_pct"],
+                            s["issued"],
                             "%.1f" % s["nop_pct"], "%.1f" % s["mac_pct"],
                             s["ld"], s["st"], "%.1f" % s["alu_pct"],
                             s["bank_conflict"], "%.1f" % s["bank_pct"],
-                            s["dma_beats"], s["dma_wait"]])
+                            s["dma_beats"]])
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     css = """
@@ -299,6 +389,7 @@ h1{font-size:30px;margin:0 0 8px;letter-spacing:.5px}
 padding:5px 10px;border-radius:999px;font-size:12px;color:#e0e7ff}
 h2{font-size:21px;margin:34px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 h3{font-size:16px;margin:22px 0 10px}
+h4{font-size:13px;margin:16px 0 8px;font-weight:600}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
 box-shadow:0 1px 2px rgba(16,24,40,.04)}
@@ -319,6 +410,8 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .bar-label{position:absolute;right:5px;top:0;line-height:18px;font-size:11px;color:#344054}
 .stack{display:flex;height:14px;border-radius:4px;overflow:hidden;background:#eef2f7;min-width:120px}
 .seg{display:block;height:100%}.seg.array{background:#2563eb}.seg.dma{background:#f59e0b}
+.seg.dma2{background:#fcd34d}.seg.imem{background:#8b5cf6}.seg.cfg{background:#a78bfa}
+.seg.cache{background:#14b8a6}.seg.scalar{background:#94a3b8}
 .seg.other{background:#cbd5e1}.seg.nop{background:#cbd5e1}.seg.mac{background:#8b5cf6}
 .seg.ld{background:#10b981}.seg.st{background:#f97316}.seg.alu{background:#60a5fa}
 .mix{display:flex;height:10px;border-radius:3px;overflow:hidden;background:#eef2f7;min-width:80px}
@@ -347,6 +440,8 @@ border-radius:8px;padding:12px 15px;margin:12px 0}
 .toc a{font-size:12px;color:#344054;background:#fff;border:1px solid var(--line);
 padding:5px 10px;border-radius:999px;text-decoration:none}
 .toc a:hover{border-color:#93c5fd;color:#1d4ed8}
+.filter{width:min(560px,100%);padding:7px 10px;border:1px solid var(--line);
+border-radius:8px;font-size:13px;background:#fff;color:var(--ink)}
 @media(max-width:900px){.two{grid-template-columns:1fr}}
 @media print{header{background:#0f172a!important;-webkit-print-color-adjust:exact}
 details.scenario{break-inside:avoid}body{background:#fff}}
@@ -364,11 +459,12 @@ details.scenario{break-inside:avoid}body{background:#fff}}
     h.append('<p class="sub">17 个场景 · 3 种制式 · CGRA 硬件计数器逐阶段归因</p>')
     h.append('<div class="chips"><span class="chip">数据：%d 个 proto 报告</span>'
              '<span class="chip">生成：%s</span>'
-             '<span class="chip">验证：verify full 83 passed / 0 failed / 1073 s</span>'
-             '<span class="chip">计数器：53 × 32 bit @ 0x5000_0100</span></div>'
+             '<span class="chip">验证：verify full 83 passed / 0 failed / 1182 s</span>'
+             '<span class="chip">计数器：64 × 32 bit @ 0x5000_0100</span></div>'
              '</div></header><div class="wrap">' % (len(data), now))
     h.append('<nav class="toc"><a href="#insights">结论摘要</a>'
              '<a href="#protocols">按协议</a><a href="#kernels">按 Kernel</a>'
+             '<a href="#kernel-detail">Kernel 明细</a>'
              '<a href="#hot">热点阶段</a><a href="#details">逐场景明细</a>'
              '<a href="#method">口径</a></nav>')
 
@@ -381,9 +477,12 @@ details.scenario{break-inside:avoid}body{background:#fff}}
          "阵列忙 %s / 总周期 %s" % (fmt(total_busy), fmt(total_cycles))),
         ("MAC 槽占比", "%.1f%%" % pct(total_mac, total_issued),
          "当前内核未使用 MAC/MACL"),
-        ("DMA 等待", fmt(total_dma_wait),
-         "其中 data wait %s（%.0f%%）" % (fmt(total_data_wait),
-                                        pct(total_data_wait, total_dma_wait))),
+        ("DMA 活动", "%s（%.1f%%）" % (fmt(total_dma_xfer + total_dma_wait),
+                                     pct(total_dma_xfer + total_dma_wait, total_cycles)),
+         "有效传输 %s · 等总线 %s" % (fmt(total_dma_xfer), fmt(total_dma_wait))),
+        ("CPU 标量执行", "%s（%.1f%%）" % (fmt(total_cpu_scalar),
+                                       pct(total_cpu_scalar, total_cycles)),
+         "阵列与 DMA 都空闲时的 CVA6 算法/编排"),
         ("SPAD bank 冲突", fmt(total_bank),
          "占阵列忙 %.1f%%" % pct(total_bank, total_busy)),
     ]
@@ -396,10 +495,10 @@ details.scenario{break-inside:avoid}body{background:#fff}}
     # Insights
     h.append('<h2 id="insights">结论摘要</h2>')
     h.append('<div class="insight"><b>一句话：</b>当前 17 个场景的瓶颈不在 PE 数量，'
-             '而在阵列空闲（加权利用率仅 %.1f%%）与 DMA/CPU 编排；MAC 流水完全未使用，'
-             'bank 冲突和 data wait 是下一版硬件最明确的优化点。</div>'
-             % pct(total_busy, total_cycles))
-    h.append('<div class="insight good"><b>可直接指导架构的 6 条观察</b><ul>')
+             '而在阵列空闲（加权利用率仅 %.1f%%）和 CVA6 标量执行（占 %.1f%%）；'
+             'MAC 流水完全未使用，bank 冲突是阵列内部最明确的优化点。</div>'
+             % (pct(total_busy, total_cycles), pct(total_cpu, total_cycles)))
+    h.append('<div class="insight good"><b>可直接指导架构的 7 条观察</b><ul>')
     h.append('<li><b>阵列利用率</b>：大 CGRA 场景（≥20 万周期且有阵列工作）最高 <code>%s</code> %.1f%%，最低 <code>%s</code> %.1f%%；'
              '多数时间阵列空闲，先做 DMA/双缓冲/阶段重叠，而不是加 PE。</li>'
              % (by_util[0]["name"], pct(by_util[0]["full"]["array_busy"], by_util[0]["full"]["total_cycles"]),
@@ -416,6 +515,12 @@ details.scenario{break-inside:avoid}body{background:#fff}}
              % (worst_dma["name"], fmt(worst_dma["full"]["dma_wait"]),
                 pct(worst_dma["full"]["dma_wait"], worst_dma["full"]["total_cycles"]),
                 pct(total_data_wait, total_dma_wait)))
+    h.append('<li><b>CPU 执行</b>：全部场景 CPU 占 %.1f%%（%s 周期），其中标量算法 %s（占 CPU %.0f%%）、'
+             'IMEM 装载/配置/缓存维护合计 %s；这些周期阵列与 DMA 都空闲，'
+             '是“把算法下沉到阵列”或“加宽主机接口”的直接依据。</li>'
+             % (pct(total_cpu, total_cycles), fmt(total_cpu), fmt(total_cpu_scalar),
+                pct(total_cpu_scalar, total_cpu),
+                fmt(max(0, total_cpu - total_cpu_scalar))))
     h.append('<li><b>纯标量场景</b>：<code>%s</code> 阵列忙为 0，完全跑在 CVA6 上；'
              '若这些协议重要，应考虑 256 点 DFT/向量单元，而不是继续加 CGRA PE。</li>'
              % "、".join(pure_scalar))
@@ -463,38 +568,101 @@ details.scenario{break-inside:avoid}body{background:#fff}}
     h.append('<p class="note">口径：有 <code>impl</code> 的阶段按实现归并（如 <code>fft4096</code>、'
              '<code>ldpc_bg2_zc20</code>、<code>turbo_k104</code>），控制核阶段按动词归并'
              '（前缀 <code>scalar:</code>）。同一条形长度 = 该 kernel 在全部场景中的累计阶段周期。</p>')
-    h.append('<div class="legend"><span><i style="background:#2563eb"></i>阵列忙</span>'
-             '<span><i style="background:#f59e0b"></i>DMA 等待</span>'
-             '<span><i style="background:#cbd5e1"></i>其它（标量/编排/重叠）</span></div>')
-    h.append('<table><thead><tr><th>Kernel / 阶段</th><th class="num">场景数</th>'
-             '<th class="num">累计周期</th><th>时间构成</th><th class="num">阵列利用率</th>'
-             '<th class="num">NOP</th><th class="num">MAC</th><th class="num">LD/ST</th>'
-             '<th class="num">bank 冲突/阵列忙</th><th class="num">DMA 等待</th>'
-             '<th>指令构成</th></tr></thead><tbody>')
+    h.append('<div class="legend"><span><i style="background:#2563eb"></i>阵列执行</span>'
+             '<span><i style="background:#f59e0b"></i>DMA 传输</span>'
+             '<span><i style="background:#fcd34d"></i>DMA 等总线</span>'
+             '<span><i style="background:#8b5cf6"></i>CPU-IMEM</span>'
+             '<span><i style="background:#a78bfa"></i>CPU-配置</span>'
+             '<span><i style="background:#14b8a6"></i>CPU-缓存维护</span>'
+             '<span><i style="background:#94a3b8"></i>CPU-标量算法</span></div>')
+    h.append('<p><input id="kernel-filter" class="filter" placeholder="输入 kernel 过滤，例如 ldpc_bg2_zc20 / turbo_k104 / scalar:equalise_demap"></p>')
+    h.append('<table id="kernel-table"><thead><tr><th>Kernel / 阶段</th><th class="num">场景数</th>'
+             '<th class="num">累计周期</th><th class="num">阵列执行</th>'
+             '<th class="num">DMA 传输</th><th class="num">DMA 等待</th>'
+             '<th class="num">CPU 执行</th><th>CPU 细分（占 CPU）</th><th>时间构成</th>'
+             '<th class="num">NOP</th><th class="num">MAC</th>'
+             '<th class="num">bank 冲突/阵列忙</th></tr></thead><tbody>')
     for k in kernel_list[:28]:
         name = k["impl"] or k["key"]
-        h.append('<tr><td class="mono">%s</td><td class="num">%d</td>'
-                 '<td class="num">%s</td><td>%s</td><td class="num">%.1f%%</td>'
+        cpusub = ('IMEM %.1f%% · 配置 %.1f%% · 缓存 %.1f%% · 标量 %.1f%%'
+                  % (k["cpu_imem_pct"], k["cpu_cfg_pct"], k["cpu_cache_pct"],
+                     k["cpu_scalar_pct"])) if k["cpu"] else "—"
+        h.append('<tr data-kernel="%s"><td class="mono">%s</td><td class="num">%d</td>'
+                 '<td class="num">%s</td>'
+                 '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                 '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                 '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                 '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                 '<td class="note">%s</td><td>%s</td>'
                  '<td class="num">%.1f%%</td><td class="num">%.1f%%</td>'
-                 '<td class="num">%s/%s</td><td class="num">%.1f%%</td>'
-                 '<td class="num">%s</td><td>%s</td></tr>'
-                 % (esc(name), k["scenarios"], fmt(k["cycles"]),
-                    stack_vals(k["array_busy"], k["dma_wait"], k["cycles"]),
-                    k["util"], k["nop_pct"], k["mac_pct"], fmt(k["ld"]), fmt(k["st"]),
-                    k["bank_pct"], fmt(k["dma_wait"]),
-                    ('<span class="mix">'
-                     '<span class="seg nop" style="width:%.1f%%"></span>'
-                     '<span class="seg mac" style="width:%.1f%%"></span>'
-                     '<span class="seg ld" style="width:%.1f%%"></span>'
-                     '<span class="seg st" style="width:%.1f%%"></span>'
-                     '<span class="seg alu" style="width:%.1f%%"></span></span>'
-                     % (k["nop_pct"], k["mac_pct"], k["ld_pct"], k["st_pct"], k["alu_pct"]))))
+                 '<td class="num">%.1f%%</td></tr>'
+                 % (esc(name), esc(name), k["scenarios"], fmt(k["cycles"]),
+                    fmt(k["array_busy"]), k["array_pct"],
+                    fmt(k["dma_xfer"]), k["dma_xfer_pct"],
+                    fmt(k["dma_wait"]), k["dma_wait_pct"],
+                    fmt(k["cpu"]), k["cpu_pct"], cpusub,
+                    kernel_bar(k),
+                    k["nop_pct"], k["mac_pct"], k["bank_pct"]))
     h.append('</tbody></table>')
-    h.append('<div class="legend"><span><i style="background:#cbd5e1"></i>NOP</span>'
-             '<span><i style="background:#8b5cf6"></i>MAC</span>'
-             '<span><i style="background:#10b981"></i>LD</span>'
-             '<span><i style="background:#f97316"></i>ST</span>'
-             '<span><i style="background:#60a5fa"></i>其它 ALU</span></div>')
+
+    # Per-kernel ledger
+    def ipct(v, issued):
+        return "—" if not issued else "%.1f%%" % v
+
+    h.append('<h2 id="kernel-detail">Kernel 逐次账本（单个 kernel 的周期花在哪）</h2>')
+    h.append('<p class="note">展开任一 kernel 可看到它在各场景的全部实例。每行'
+             '<b>阵列执行 / DMA 传输 / DMA 等待 / CPU 执行</b>相加即该实例实测周期；'
+             'CPU 列再细分为 IMEM 装载、配置写、缓存维护、标量算法四类（括号为占该实例 CPU 的比例）。'
+             '表尾合计行为该 kernel 跨场景的加权占比。</p>')
+    for k in kernel_list[:14]:
+        name = k["impl"] or k["key"]
+        h.append('<details class="scenario"><summary><span class="mono">%s</span> '
+                 '<span class="muted">· %d 个实例 · %s 周期 · 阵列 %.1f%% · DMA %.1f%% · CPU %.1f%%</span></summary>'
+                 % (esc(name), len(k["instances"]), fmt(k["cycles"]),
+                    k["array_pct"], k["dma_xfer_pct"] + k["dma_wait_pct"], k["cpu_pct"]))
+        h.append('<table><thead><tr><th>场景</th><th>阶段</th><th class="num">周期</th>'
+                 '<th class="num">阵列执行</th><th class="num">DMA 传输</th>'
+                 '<th class="num">DMA 等待</th><th class="num">CPU 执行</th>'
+                 '<th>CPU 细分（占 CPU）</th><th>工作构成</th>'
+                 '<th class="num">bank 冲突</th><th class="num">DMA beats</th>'
+                 '</tr></thead><tbody>')
+        for sc, s in sorted(k["instances"], key=lambda x: -x[1]["cycles"]):
+            cpusub = ('IMEM <b>%s</b> · 配置 <b>%s</b> · 缓存 <b>%s</b> · 标量 <b>%s</b>'
+                      % (ipct(s["cpu_imem_pct"], s["cpu"]),
+                         ipct(s["cpu_cfg_pct"], s["cpu"]),
+                         ipct(s["cpu_cache_pct"], s["cpu"]),
+                         ipct(s["cpu_scalar_pct"], s["cpu"]))) if s["cpu"] else "—"
+            h.append('<tr><td><b>%s</b></td><td>%s</td><td class="num">%s</td>'
+                     '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                     '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                     '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                     '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                     '<td class="note">%s</td><td>%s</td>'
+                     '<td class="num">%.1f%%</td><td class="num">%s</td></tr>'
+                     % (esc(sc), esc(s["op"]), fmt(s["cycles"]),
+                        fmt(s["array_busy"]), s["array_pct"],
+                        fmt(s["dma_xfer"]), s["dma_xfer_pct"],
+                        fmt(s["dma_wait"]), s["dma_wait_pct"],
+                        fmt(s["cpu"]), s["cpu_pct"], cpusub,
+                        ledger_bar(s), s["bank_pct"], fmt(s["dma_beats"])))
+        h.append('<tr><td colspan="2"><b>合计</b></td><td class="num"><b>%s</b></td>'
+                 '<td class="num"><b>%s</b><br><span class="muted">%.1f%%</span></td>'
+                 '<td class="num"><b>%s</b><br><span class="muted">%.1f%%</span></td>'
+                 '<td class="num"><b>%s</b><br><span class="muted">%.1f%%</span></td>'
+                 '<td class="num"><b>%s</b><br><span class="muted">%.1f%%</span></td>'
+                 '<td class="note">IMEM %.1f%% · 配置 %.1f%% · 缓存 %.1f%% · 标量 %.1f%%</td>'
+                 '<td>%s</td><td class="num">%.1f%%</td><td class="num">%s</td></tr>'
+                 % (fmt(k["cycles"]),
+                    fmt(k["array_busy"]), k["array_pct"],
+                    fmt(k["dma_xfer"]), k["dma_xfer_pct"],
+                    fmt(k["dma_wait"]), k["dma_wait_pct"],
+                    fmt(k["cpu"]), k["cpu_pct"],
+                    k["cpu_imem_pct"], k["cpu_cfg_pct"],
+                    k["cpu_cache_pct"], k["cpu_scalar_pct"],
+                    kernel_bar(k), k["bank_pct"], fmt(k["dma_beats"])))
+        h.append('</tbody></table></details>')
+    h.append('<p class="note">仅展开累计周期前 14 的 kernel；完整逐阶段数据见 '
+             '<code>perf-summary.csv</code>（含全部账本列与指令构成）。</p>')
 
     # Hot stages
     hot = sorted([(d, s) for d in data for s in d["stages"]],
@@ -525,45 +693,69 @@ details.scenario{break-inside:avoid}body{background:#fff}}
              '<code>lte_pusch equalise_demap</code> 3.11M、<code>lte_pusch modulate</code> 3.08M），'
              '接着是 Turbo 译码（<code>turbo_k104</code> 2.79M / 2.75M）。'
              '如果目标是实时，优先做 200/360 点 DFT 的硬件单元或向量化，以及 Turbo 并行化；'
-             'LDPC decode（约 1.93M/场景）次之，且其 bank 冲突已达阵列忙的 25.5%。</div>')
+             'LDPC decode（约 1.96M/场景）次之，且其 bank 冲突已达阵列忙的 25.5%。</div>')
 
     # Scenario details
     h.append('<h2 id="details">逐场景逐阶段明细</h2>')
-    h.append('<div class="legend"><span><i style="background:#2563eb"></i>阵列忙</span>'
-             '<span><i style="background:#f59e0b"></i>DMA 等待</span>'
-             '<span><i style="background:#cbd5e1"></i>其它（标量/编排/重叠）</span>'
-             '<span class="muted">条形长度按该阶段实测周期归一</span></div>')
+    h.append('<div class="legend"><span><i style="background:#2563eb"></i>阵列执行</span>'
+             '<span><i style="background:#f59e0b"></i>DMA 传输</span>'
+             '<span><i style="background:#fcd34d"></i>DMA 等总线</span>'
+             '<span><i style="background:#8b5cf6"></i>CPU-IMEM</span>'
+             '<span><i style="background:#a78bfa"></i>CPU-配置</span>'
+             '<span><i style="background:#14b8a6"></i>CPU-缓存维护</span>'
+             '<span><i style="background:#94a3b8"></i>CPU-标量算法</span>'
+             '<span class="muted">条形按该阶段实测周期归一</span></div>')
     for d in sorted(data, key=lambda x: (RAT_ORDER.index(x["rat"]), -x["full"]["total_cycles"])):
         full = d["full"]
         pe = full["pe_active"]
         imb = (max(pe) / min(pe)) if pe and min(pe) else 0
         h.append('<details class="scenario"><summary>%s %s '
-                 '<span class="muted">· %s 周期 · 阵列 %.1f%% · NOP %.1f%% · MAC %.1f%% · DMA wait %s</span></summary>'
+                 '<span class="muted">· %s 周期 · 阵列 %.1f%% · CPU %.1f%% · NOP %.1f%% · MAC %.1f%%</span></summary>'
                  % (esc(d["name"]), rat_badge(d["rat"]), fmt(full["total_cycles"]),
-                    pct(full["array_busy"], full["total_cycles"]), full["nop_pct"],
-                    full["mac_pct"], fmt(full["dma_wait"])))
+                    pct(full["array_busy"], full["total_cycles"]),
+                    pct(sum(s["cpu"] for s in d["stages"]), full["total_cycles"]),
+                    full["nop_pct"], full["mac_pct"]))
         h.append('<table><thead><tr><th>#</th><th>阶段</th><th>实现</th>'
                  '<th class="num">周期</th><th class="num">占比</th>'
-                 '<th class="num">阵列忙</th><th class="num">利用率</th>'
-                 '<th>工作构成</th><th class="num">NOP</th><th class="num">MAC</th>'
-                 '<th class="num">LD/ST</th><th>指令构成</th>'
-                 '<th class="num">bank 冲突</th><th class="num">DMA beats</th>'
-                 '<th class="num">DMA wait</th></tr></thead><tbody>')
+                 '<th class="num">阵列执行</th><th class="num">DMA 传输</th>'
+                 '<th class="num">DMA 等待</th><th class="num">CPU 执行</th>'
+                 '<th>CPU 细分（占 CPU）</th><th>工作构成</th>'
+                 '</tr></thead><tbody>')
         for s in d["stages"]:
+            cpusub = ('IMEM <b>%s</b> · 配置 <b>%s</b> · 缓存 <b>%s</b> · 标量 <b>%s</b>'
+                      % (ipct(s["cpu_imem_pct"], s["cpu"]),
+                         ipct(s["cpu_cfg_pct"], s["cpu"]),
+                         ipct(s["cpu_cache_pct"], s["cpu"]),
+                         ipct(s["cpu_scalar_pct"], s["cpu"]))) if s["cpu"] else "—"
             h.append('<tr><td>%d</td><td><b>%s</b><br><span class="muted">%s</span></td>'
                      '<td class="mono">%s</td><td class="num">%s</td>'
-                     '<td class="num">%.1f%%</td><td class="num">%s</td>'
-                     '<td class="num">%.1f%%</td><td>%s</td>'
-                     '<td class="num">%.1f%%</td><td class="num">%.1f%%</td>'
-                     '<td class="num">%s/%s</td><td>%s</td>'
-                     '<td class="num">%.1f%%</td><td class="num">%s</td>'
-                     '<td class="num">%s</td></tr>'
+                     '<td class="num">%.1f%%</td>'
+                     '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                     '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                     '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                     '<td class="num">%s<br><span class="muted">%.1f%%</span></td>'
+                     '<td class="note">%s</td><td>%s</td></tr>'
                      % (s["id"], esc(s["op"]), esc(s["where"]),
                         esc(s["impl"] or "—"), fmt(s["cycles"]), s["share"],
-                        fmt(s["array_busy"]), s["util"], stack_bar(s),
-                        s["nop_pct"], s["mac_pct"], fmt(s["ld"]), fmt(s["st"]),
-                        mix_bar(s), s["bank_pct"], fmt(s["dma_beats"]),
-                        fmt(s["dma_wait"])))
+                        fmt(s["array_busy"]), s["array_pct"],
+                        fmt(s["dma_xfer"]), s["dma_xfer_pct"],
+                        fmt(s["dma_wait"]), s["dma_wait_pct"],
+                        fmt(s["cpu"]), s["cpu_pct"], cpusub, ledger_bar(s)))
+        h.append('</tbody></table>')
+        h.append('<h4 class="muted">微架构计数</h4>')
+        h.append('<table><thead><tr><th>#</th><th>阶段</th>'
+                 '<th class="num">NOP</th><th class="num">MAC</th>'
+                 '<th class="num">LD/ST</th><th>指令构成</th>'
+                 '<th class="num">bank 冲突</th><th class="num">DMA beats</th>'
+                 '</tr></thead><tbody>')
+        for s in d["stages"]:
+            h.append('<tr><td>%d</td><td>%s</td>'
+                     '<td class="num">%.1f%%</td><td class="num">%.1f%%</td>'
+                     '<td class="num">%s/%s</td><td>%s</td>'
+                     '<td class="num">%.1f%%</td><td class="num">%s</td></tr>'
+                     % (s["id"], esc(s["op"]), s["nop_pct"], s["mac_pct"],
+                        fmt(s["ld"]), fmt(s["st"]), mix_bar(s),
+                        s["bank_pct"], fmt(s["dma_beats"])))
         h.append('</tbody></table>')
         h.append('<h3>每 PE 活跃周期</h3>%s' % heatmap(pe, d["name"]))
         if imbu := (("%.2f×" % imb) if imb else "—"):
@@ -574,18 +766,22 @@ details.scenario{break-inside:avoid}body{background:#fff}}
 
     # Method
     h.append('<h2 id="method">口径与注意事项</h2>')
-    h.append('<div class="two"><div class="card"><h3>计数器定义</h3><ul class="note">'
-             '<li><b>阵列忙</b>：CGRA <code>busy</code> 周期；利用率 = 阵列忙 / 阶段实测周期。</li>'
+    h.append('<div class="two"><div class="card"><h3>全周期账本口径</h3><ul class="note">'
+             '<li><b>阵列执行</b>：CGRA <code>busy</code> 的墙钟周期。</li>'
+             '<li><b>DMA 传输 / 等待</b>：阵列空闲且 DMA busy 的周期；其中“等待”是'
+             'AR/AW/B/数据任一未就绪的子集。阵列与 DMA 重叠时归阵列（优先级 阵列 &gt; DMA &gt; CPU）。</li>'
+             '<li><b>CPU 执行</b>：阵列与 DMA 都空闲的周期，即 CVA6 在跑阶段代码。'
+             '恒等式：<code>阵列 + DMA 传输 + DMA 等待 + CPU = 阶段实测周期</code>。</li>'
+             '<li><b>CPU 细分</b>：用 <code>PERF_STATE_CPU</code> 的增量给 IMEM 装载、'
+             '阵列配置写、DMA 配置写、缓存维护计时（只累计 CPU 状态，天然不与轮询重叠）；'
+             '剩余即“标量算法”，含主机窗口拷贝、状态轮询与循环开销。</li>'
              '<li><b>NOP / MAC / LD / ST / ALU</b>：按每拍 16 个 PE 指令槽统计；'
              'MAC 只计 <code>OP_MAC/OP_MACL</code>。</li>'
-             '<li><b>bank 冲突</b>：同拍 ≥2 个 PE 写同一 bank 的周期；同 word 冲突单独计数。</li>'
-             '<li><b>DMA wait</b>：AR/AW/B/data 四类等待之和；阶段表只给等待，'
-             '整跑表另给 DMA busy/beats。</li>'
-             '<li><b>PE 活跃</b>：每 PE 非 NOP 的执行周期（16 个计数器）。</li>'
              '</ul></div><div class="card"><h3>注意</h3><ul class="note">'
-             '<li>“工作构成”条形把阶段周期拆成 阵列忙 / DMA 等待 / 其它；'
-             '阵列忙与 DMA 等待是独立计数器，理论上可能重叠，'
-             '这里按先阵列后 DMA 的顺序截断，仅用于看量级。</li>'
+             '<li>“工作构成”条形把阶段周期拆成 阵列 / DMA 传输 / DMA 等待 / CPU 四类，'
+             'CPU 再细分四类；七段宽度之和为 100%。</li>'
+             '<li>CPU 细分项由软件在公共运行时函数处计时，若阶段代码绕过这些函数'
+             '（例如直接逐字写 SPAD），会落入“标量算法”。</li>'
              '<li>阶段表里的 bank 冲突原始值由“阵列忙 × 百分比”估算；'
              '整跑表是硬件原始计数。</li>'
              '<li>数据来自每个场景一次代表性运行（SNR/seed 见各场景报告），'
@@ -598,6 +794,12 @@ details.scenario{break-inside:avoid}body{background:#fff}}
     h.append('<p class="note">生成脚本：<code>tools/perf_report.py</code>；'
              '明细 CSV：<code>perf-summary.csv</code>；原始报告：'
              '<code>build/proto/&lt;scenario&gt;/report.md</code>。</p>')
+    h.append('<script>'
+             'const f=document.getElementById("kernel-filter");'
+             'if(f)f.addEventListener("input",()=>{const q=f.value.trim().toLowerCase();'
+             'document.querySelectorAll("#kernel-table tbody tr").forEach(tr=>{'
+             'tr.style.display=tr.dataset.kernel.toLowerCase().includes(q)?"":"none";});});'
+             '</script>')
     h.append('</div></body></html>')
 
     with open(OUT_HTML, "w", encoding="utf-8") as f:
