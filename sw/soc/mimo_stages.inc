@@ -101,41 +101,6 @@ static uint32_t mmse_runs, mmse_dmas;
  * spad 侧对应 stride 2 布局（YAML 的 pe_per_bank: 16）：PE k 占 2k / 2k+1。
  * 奇偶趟分别落 page 1 / page 0，阵列读另一页时引擎写这一页。 */
 #define MS_TILES   ((NDATA + 15) / 16)
-static uint32_t ms_desc[MS_TILES * 32 + 32][8] __attribute__((aligned(64)));
-static uint32_t ms_desc_end[MS_TILES + 1];
-static int ms_desc_ready;
-
-static void ms_ring_build(int32_t *sp0, int32_t *sp1)
-{
-    static const uint32_t dst_bank[2] = {
-        MMSE_DUAL_SPAD_LEAF_Y1R_BASE, MMSE_DUAL_SPAD_LEAF_Y2R_BASE
-    };
-    int dre[NDATA];
-    int nd = 0;
-    for (int rr = 0; rr < NRE && nd < NDATA; rr++)
-        if (rr % 4 != 0) dre[nd++] = rr;
-
-    uint32_t n = 0;
-    int pos = 0;
-    for (int t = 0; t < MS_TILES; t++) {
-        for (int k = 0; k < 16 && pos < NDATA; k++, pos++) {
-            uint32_t ip = rev4(BIN0 + (uint32_t)dre[pos]);
-            for (int rx = 0; rx < 2; rx++) {
-                uint32_t *d = ms_desc[n++];
-                d[0] = (uint32_t)(uintptr_t)&(rx ? sp1 : sp0)[2 * ip];
-                d[1] = (dst_bank[rx] + 2u * (uint32_t)k) |
-                       ((t & 1) ? GPCP_DMA_DESC_PAGE1 : 0u);
-                d[2] = 2u;      /* I 和 Q */
-                d[3] = 0u;
-                d[4] = 0u;
-                d[5] = d[6] = d[7] = 0u;
-            }
-        }
-        ms_desc_end[t + 1] = n;
-    }
-    ms_desc_ready = 1;
-}
-
 static void mmse_prog_load(void)
 {
     if (gpcp_cgra_imem_load(CGRA_BASE, mmse_dual_prog,
@@ -323,71 +288,43 @@ static int ms_mimo_equalise(void)
 #endif
     if (cg_ok) {
         mmse_prog_load();
-        if (!ms_desc_ready) ms_ring_build(sp[0], sp[1]);
         ms_h_bcast();
-
-        uint16_t d0 = (uint16_t)mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
-        gpcp_cgra_ring_start(CGRA_BASE, (uintptr_t)&ms_desc[0][0], RING_DEPTH,
-                             ms_desc_end[1]);
 
         for (int t = 0; t < MS_TILES; t++) {
             int base = t * 16;
             int n = NDATA - base; if (n > 16) n = 16;
-            uint32_t pg = (uint32_t)(t & 1);
-            uint32_t off = pg * 1024u;
-            uint32_t g = 0;
+            const uint32_t pg = 0u, off = 0u;
+            int bad = 0;
 
-            while ((uint16_t)((uint16_t)mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE) - d0)
-                   < (uint16_t)ms_desc_end[t + 1]) {
-                if (++g > 400000u) { errs++; cg_ok = 0; break; }
+            /* y 由 CPU 直接写进 spad（I/Q 交错：PE k 占 2k / 2k+1）。
+             * 不使用搬运引擎：它的描述符环会静默漏做一段描述符（见
+             * docs/wip-mmse-ring-notes.md），而这里每趟只有 64 个字要写。
+             * 契约检查搭顺风车——这 4 个数本来就在寄存器里。 */
+            for (int k = 0; k < n; k++) {
+                uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
+                int32_t y1r = sp[0][2 * ip], y1i = sp[0][2 * ip + 1];
+                int32_t y2r = sp[1][2 * ip], y2i = sp[1][2 * ip + 1];
+                int32_t m = y1r < 0 ? -y1r : y1r, x;
+                x = y1i < 0 ? -y1i : y1i; if (x > m) m = x;
+                x = y2r < 0 ? -y2r : y2r; if (x > m) m = x;
+                x = y2i < 0 ? -y2i : y2i; if (x > m) m = x;
+                if (m > MMSE_DUAL_LEAF_MAX_ABS) { bad = 1; break; }
+
+                mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                           MMSE_DUAL_SPAD_LEAF_Y1R_BASE + 2u * (uint32_t)k), (uint32_t)y1r);
+                mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                           MMSE_DUAL_SPAD_LEAF_Y1I_BASE + 2u * (uint32_t)k), (uint32_t)y1i);
+                mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                           MMSE_DUAL_SPAD_LEAF_Y2R_BASE + 2u * (uint32_t)k), (uint32_t)y2r);
+                mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                           MMSE_DUAL_SPAD_LEAF_Y2I_BASE + 2u * (uint32_t)k), (uint32_t)y2i);
             }
-            if (!cg_ok) break;
+            if (bad) { cg_ok = 0; break; }
+            __asm__ __volatile__("fence iorw, iorw" ::: "memory");
 
             mmse_array_start(pg);
-            if (t + 1 < MS_TILES)               /* 阵列算这一趟，引擎搬下一趟 */
-                gpcp_cgra_ring_push(CGRA_BASE, ms_desc_end[t + 2]);
             mmse_array_wait();
 
-#ifdef MS_DEBUG_Y
-            if (t < MS_TILES) {                 /* 阵列的 b 与本机标量逐值对账 */
-                for (int k = 0; k < n; k++) {
-                    uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
-                    int64_t y1r_ = (int64_t)sp[0][2*ip] << FRONT_GAIN;
-                    int64_t y1i_ = (int64_t)sp[0][2*ip+1] << FRONT_GAIN;
-                    int64_t y2r_ = (int64_t)sp[1][2*ip] << FRONT_GAIN;
-                    int64_t y2i_ = (int64_t)sp[1][2*ip+1] << FRONT_GAIN;
-                    int64_t e0r = cm_re(ms_hre[0][0], -ms_him[0][0], y1r_, y1i_)
-                                + cm_re(ms_hre[1][0], -ms_him[1][0], y2r_, y2i_);
-                    int64_t e0i = cm_im(ms_hre[0][0], -ms_him[0][0], y1r_, y1i_)
-                                + cm_im(ms_hre[1][0], -ms_him[1][0], y2r_, y2i_);
-                    int64_t e1r = cm_re(ms_hre[0][1], -ms_him[0][1], y1r_, y1i_)
-                                + cm_re(ms_hre[1][1], -ms_him[1][1], y2r_, y2i_);
-                    int64_t e1i = cm_im(ms_hre[0][1], -ms_him[0][1], y1r_, y1i_)
-                                + cm_im(ms_hre[1][1], -ms_him[1][1], y2r_, y2i_);
-                    if (e0r != b0r_a[base+k] || e0i != b0i_a[base+k]) errs += 1;
-                    if (e1r != b1r_a[base+k] || e1i != b1i_a[base+k]) errs += 1000;
-                }
-            }
-            if (0) {                            /* 校验 spad 里的 y 是否等于源 */
-                for (int k = 0; k < n; k++) {
-                    uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
-                    if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                            MMSE_DUAL_SPAD_LEAF_Y1R_BASE + off + 2u * (uint32_t)k))
-                        != sp[0][2 * ip]) errs += 1;
-                    if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                            MMSE_DUAL_SPAD_LEAF_Y1I_BASE + off + 2u * (uint32_t)k))
-                        != sp[0][2 * ip + 1]) errs += 100;
-                    if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                            MMSE_DUAL_SPAD_LEAF_Y2R_BASE + off + 2u * (uint32_t)k))
-                        != sp[1][2 * ip]) errs += 10000;
-                    if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                            MMSE_DUAL_SPAD_LEAF_Y2I_BASE + off + 2u * (uint32_t)k))
-                        != sp[1][2 * ip + 1]) errs += 1000000;
-                }
-            }
-#endif
-
-            int bad = 0;
             for (int k = 0; k < n; k++) {
                 uint32_t a0 = MMSE_DUAL_SPAD_SINK_N0R_BASE + off + (uint32_t)k;
                 b0r_a[base + k] = ((int64_t)(int32_t)mmio_r(
@@ -398,12 +335,7 @@ static int ms_mimo_equalise(void)
                         CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0 + 64u))) << FRONT_GAIN;
                 b1i_a[base + k] = ((int64_t)(int32_t)mmio_r(
                         CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0 + 96u))) << FRONT_GAIN;
-                if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                        MMSE_DUAL_SPAD_SINK_YMAX_BASE + off + (uint32_t)k))
-                    > MMSE_DUAL_LEAF_MAX_ABS)
-                    bad = 1;
             }
-            if (bad) { cg_ok = 0; break; }
         }
     }
 

@@ -23,7 +23,9 @@ SNR = 25.0
 SEED = 1
 
 SPEC = {
-    "platform": {"dma": True, "busy": True},
+    # y 现在由 CPU 直接写进 spad（见 mimo_stages.inc）：本阶段不再调用
+    # DMA API，FFT 的描述符本来就不计入，所以平台锚点不统计 DMA。
+    "platform": {"dma": False, "busy": True},
     # run-mimo 只报 CGRA MMSE 运行数（[7]），没有总阵列运行数字段
     "ref_stats": {"cycles": 2, "runs": None},
     "scalars": [
@@ -75,7 +77,7 @@ def golden():
     return {
         "scenario": "nr_mimo",
         "anchors": {
-            "mmse_runs": 24,          # ceil(180/16) x 2 层
+            "mmse_runs": 12,          # ceil(180/16) 趟，一层算两层
             "ndata": CE.NDATA,
             "lam": 1,                 # 只要求非零（随信道量化变）
             "nbits": len(bits),
