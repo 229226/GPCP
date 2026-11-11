@@ -112,6 +112,14 @@ def _write_dfg(f, spec, mc, nvals, nops, nleaves, nsinks, instances,
     f.write(f"#ifndef {sym}_PROG_H\n#define {sym}_PROG_H\n\n")
     f.write(f"#define {sym}_PROG_CYCLES {mc.cycles}\n")
     f.write(f"#define {sym}_PROG_PES    {NPES}\n")
+    # 数值契约：把 check_contract 静态证明出的上界导出，C 侧用它替代运行时扫描
+    _ci = {}
+    if not ks.check_contract(spec, info=_ci) and _ci.get("leaf_max_abs"):
+        f.write(f"/* 数值契约：|leaf| <= {_ci['leaf_max_abs']} 时 mul 不截断、"
+                f"中间值不回绕（kernel_spec.check_contract 静态证明）。 */\n")
+        f.write(f"#define {sym}_HAS_CONTRACT  1\n")
+        f.write(f"#define {sym}_LEAF_MAX_ABS  {_ci['leaf_max_abs']}\n")
+        f.write(f"#define {sym}_SINK_MAX_ABS  {_ci['sink_max_abs']}\n")
     # 叶子/汇 → spad bank，供 C 基准按 bank 布局组织 DMA 缓冲
     for n in sorted(leaf_banks, key=lambda k: leaf_banks[k]):
         f.write(f"#define {sym}_BANK_{_sym(n)} {leaf_banks[n]}\n")

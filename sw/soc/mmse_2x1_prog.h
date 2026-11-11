@@ -9,6 +9,10 @@
 
 #define MMSE_2X1_PROG_CYCLES 32
 #define MMSE_2X1_PROG_PES    16
+/* 数值契约：|leaf| <= 20000 时 mul 不截断、中间值不回绕（kernel_spec.check_contract 静态证明）。 */
+#define MMSE_2X1_HAS_CONTRACT  1
+#define MMSE_2X1_LEAF_MAX_ABS  20000
+#define MMSE_2X1_SINK_MAX_ABS  1600000000
 #define MMSE_2X1_BANK_H1R 0
 #define MMSE_2X1_BANK_H1I 1
 #define MMSE_2X1_BANK_H2R 2

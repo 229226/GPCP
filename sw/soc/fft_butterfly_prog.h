@@ -9,6 +9,10 @@
 
 #define FFT_BUTTERFLY_PROG_CYCLES 32
 #define FFT_BUTTERFLY_PROG_PES    16
+/* 数值契约：|leaf| <= 32767 时 mul 不截断、中间值不回绕（kernel_spec.check_contract 静态证明）。 */
+#define FFT_BUTTERFLY_HAS_CONTRACT  1
+#define FFT_BUTTERFLY_LEAF_MAX_ABS  32767
+#define FFT_BUTTERFLY_SINK_MAX_ABS  49151
 #define FFT_BUTTERFLY_BANK_AR 0
 #define FFT_BUTTERFLY_BANK_AI 1
 #define FFT_BUTTERFLY_BANK_BR 2

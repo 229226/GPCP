@@ -178,8 +178,12 @@ INT16_MAX = (1 << 15) - 1
 #   sink_max_abs: 1600000000      汇的 |值| 上界，编译器校验推导值不超过它
 
 
-def check_contract(spec):
-    """从声明的叶子上界出发做静态范围传播，返回错误列表（空 = 契约成立）。"""
+def check_contract(spec, info=None):
+    """从声明的叶子上界出发做静态范围传播，返回错误列表（空 = 契约成立）。
+
+    传 info（dict）时回填推导结果，供生成器导出成头文件宏：
+      leaf_max_abs / q_format / sink_max_abs / sink_values
+    """
     c = spec.get("contract")
     if c is None:
         return []                      # 可选字段，向后兼容全部既有 spec
@@ -204,6 +208,10 @@ def check_contract(spec):
         rng = {k: int(lm) for k in leaves}
     if any(v < 0 for v in rng.values()):
         errs.append("contract.leaf_max_abs 不能为负")
+
+    if info is not None:
+        info["q_format"] = c.get("q_format")
+        info["leaf_max_abs"] = max(rng.values()) if rng else 0
 
     w = c.get("max_intermediate", "int32")
     limit = INT32_MAX if w in ("int32", 32, "32") else int(w)
@@ -250,9 +258,14 @@ def check_contract(spec):
                         % (n, op, format(v, ","), format(limit, ",")))
         vals[n] = min(v, limit)
 
+    sinks = set(expand_mapping(spec.get("sinks", {})).keys())
+    if info is not None:
+        derived = [vals.get(n) for n in sinks if vals.get(n) is not None]
+        info["sink_values"] = {n: vals.get(n) for n in sorted(sinks)}
+        info["sink_max_abs"] = max(derived) if derived else 0
+
     sm = c.get("sink_max_abs")
     if sm is not None:
-        sinks = set(expand_mapping(spec.get("sinks", {})).keys())
         for name in sorted(sinks):
             got = vals.get(name)
             if got is None:

@@ -10,6 +10,10 @@
  * mmse_2x1_prog.h / mmse_2x1_layout.h（由 gen_kernel_prog.py 生成）。
  * -------------------------------------------------------------------------- */
 
+#ifndef MMSE_2X1_LEAF_MAX_ABS
+#error "mmse_2x1_prog.h 缺契约宏：先跑 make kernels（数值契约由编译器生成）"
+#endif
+
 #define NPES          16
 #define RING_DEPTH    1024
 #define DESC_BASE     0x80020000ul
@@ -252,9 +256,12 @@ static int ms_mimo_equalise(void)
     for (int rr = 0; rr < NRE && nd < NDATA; rr++)
         if (rr % 4 != 0) dre[nd++] = rr;
 
-    /* 量纲守卫：mul 是 16x16，且 4 项 Q30 求和不能溢出 int32 */
+    /* 数值契约：MMSE_2X1_LEAF_MAX_ABS 由 gen_kernel_prog 从 YAML contract 静态
+     * 证明（|leaf| <= 该值时 mul 不截断、4 项 Q30 求和不回绕）。这里只查 4 个
+     * 信道系数（几乎免费）；180 个数据位置的检查合并进下面的 gather —— 同一批
+     * 数不再按 rev4 乱序重扫一遍（那段实测约 23,415 周期）。 */
     {
-        int64_t hmax = 0, ymax = 0;
+        int64_t hmax = 0;
         for (int rx = 0; rx < 2; rx++)
             for (int l = 0; l < 2; l++) {
                 int64_t a = ms_hre[rx][l] < 0 ? -ms_hre[rx][l] : ms_hre[rx][l];
@@ -262,16 +269,7 @@ static int ms_mimo_equalise(void)
                 if (a > hmax) hmax = a;
                 if (b > hmax) hmax = b;
             }
-        for (int i = 0; i < NDATA; i++) {
-            uint32_t ip = rev4(BIN0 + (uint32_t)dre[i]);
-            for (int rx = 0; rx < 2; rx++)
-                for (int q = 0; q < 2; q++) {
-                    int64_t v = sp[rx][2 * ip + q];
-                    if (v < 0) v = -v;
-                    if (v > ymax) ymax = v;
-                }
-        }
-        if (hmax > 32767 || ymax > 32767 || 4 * hmax * ymax > 0x7FFFFFFFLL)
+        if (hmax > MMSE_2X1_LEAF_MAX_ABS)
             cg_ok = 0;
     }
 #ifdef PROTO_CPU_ONLY
@@ -285,18 +283,29 @@ static int ms_mimo_equalise(void)
                 for (int k = 0; k < 16; k++) {
                     if (k < n) {
                         uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
+                        int32_t y1r = (int32_t)sp[0][2 * ip];
+                        int32_t y1i = (int32_t)sp[0][2 * ip + 1];
+                        int32_t y2r = (int32_t)sp[1][2 * ip];
+                        int32_t y2i = (int32_t)sp[1][2 * ip + 1];
                         mleaf[MMSE_2X1_BANK_H1R - MMSE_2X1_BANK_LO][k] = (int32_t)ms_hre[0][l];
                         mleaf[MMSE_2X1_BANK_H1I - MMSE_2X1_BANK_LO][k] = (int32_t)ms_him[0][l];
                         mleaf[MMSE_2X1_BANK_H2R - MMSE_2X1_BANK_LO][k] = (int32_t)ms_hre[1][l];
                         mleaf[MMSE_2X1_BANK_H2I - MMSE_2X1_BANK_LO][k] = (int32_t)ms_him[1][l];
-                        mleaf[MMSE_2X1_BANK_Y1R - MMSE_2X1_BANK_LO][k] = (int32_t)sp[0][2 * ip];
-                        mleaf[MMSE_2X1_BANK_Y1I - MMSE_2X1_BANK_LO][k] = (int32_t)sp[0][2 * ip + 1];
-                        mleaf[MMSE_2X1_BANK_Y2R - MMSE_2X1_BANK_LO][k] = (int32_t)sp[1][2 * ip];
-                        mleaf[MMSE_2X1_BANK_Y2I - MMSE_2X1_BANK_LO][k] = (int32_t)sp[1][2 * ip + 1];
+                        mleaf[MMSE_2X1_BANK_Y1R - MMSE_2X1_BANK_LO][k] = y1r;
+                        mleaf[MMSE_2X1_BANK_Y1I - MMSE_2X1_BANK_LO][k] = y1i;
+                        mleaf[MMSE_2X1_BANK_Y2R - MMSE_2X1_BANK_LO][k] = y2r;
+                        mleaf[MMSE_2X1_BANK_Y2I - MMSE_2X1_BANK_LO][k] = y2i;
+                        /* 契约阈值：搭 gather 的顺风车；越界就整段回退 CPU */
+                        if (y1r > MMSE_2X1_LEAF_MAX_ABS || y1r < -MMSE_2X1_LEAF_MAX_ABS ||
+                            y1i > MMSE_2X1_LEAF_MAX_ABS || y1i < -MMSE_2X1_LEAF_MAX_ABS ||
+                            y2r > MMSE_2X1_LEAF_MAX_ABS || y2r < -MMSE_2X1_LEAF_MAX_ABS ||
+                            y2i > MMSE_2X1_LEAF_MAX_ABS || y2i < -MMSE_2X1_LEAF_MAX_ABS)
+                            cg_ok = 0;
                     } else {
                         for (int j = 0; j < MBANKS; j++) mleaf[j][k] = 0;
                     }
                 }
+                if (!cg_ok) break;          /* 本趟越界：不再 DMA / 启动阵列 */
                 mmse_dma((uintptr_t)&mleaf[0][0],
                          GPCP_SPAD_IDX(MMSE_2X1_BANK_LO, 0), MBANKS * 16, 0);
                 mmse_run();
@@ -313,6 +322,7 @@ static int ms_mimo_equalise(void)
                     else        { b1r_a[base + k] = br; b1i_a[base + k] = bi; }
                 }
             }
+            if (!cg_ok) break;              /* 已回退 CPU：后面的 tile 也不再跑 */
         }
     }
 
