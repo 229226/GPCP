@@ -79,3 +79,6 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-10,,,90,rtl,feature,CGRA 硬件性能计数器：PE 活跃/MAC、指令组合、SPAD 冲突、DMA 等待,,estimate,cgra_top/cgra_array 53 个 32 位计数器，0x5000_0068 清零、0x5000_0100+4*idx 读
 2026-11-10,,,45,sw,feature,proto_runner 每阶段性能快照 + proto_eval 报告/架构提示,,measured,结果区 1200/1320 性能块，nwords 1400；nr_pdsch 报告已输出阵列利用率/DMA 等待/bank 冲突
 2026-11-10,,,15,doc,doc,docs/20 §4/§10 性能计数块与 MMIO 映射,,estimate,53 个计数器索引、读法、开销 0.1%
+2026-11-11,,,60,sw,feature,补齐 docs/22 四项无 CGRA 实现的 kernel：qam_map 三变体 / ldpc_enc_acc / turbo_acs / wifi_vn / wifi_cn24,9a5388f,measured,gen_kernel_prog.py --all 7 张镜像自检 0 差异；check_new_kernels.py 独立黄金 7/7；SoC run-new-kernels 732 汇值逐值一致；yaml-check 36 spec/0 物理坐标；handprog-check 0 新增
+2026-11-11,,,25,verif,feature,新增 kernel 三层验收门禁：独立黄金 ISA 对账 + SoC 自检门 + verify 静态段,9a5388f,measured,make new-kernels-check 与 make -C sim/soc run-new-kernels 均 PASS；verify.sh full 84 passed / 0 failed（exit 0）
+2026-11-11,,,20,doc,doc,docs/23 新增 CGRA kernel 实现说明 + docs/22 §2.3 状态更新,9a5388f,measured,docs/23 含设计取舍/三层验收/边界；docs/22 待补表改为已有实现并注明有实现≠已下沉
