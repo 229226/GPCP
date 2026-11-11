@@ -83,3 +83,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-11,,,25,verif,feature,新增 kernel 三层验收门禁：独立黄金 ISA 对账 + SoC 自检门 + verify 静态段,9a5388f,measured,make new-kernels-check 与 make -C sim/soc run-new-kernels 均 PASS；verify.sh full 84 passed / 0 failed（exit 0）
 2026-11-11,,,20,doc,doc,docs/23 新增 CGRA kernel 实现说明 + docs/22 §2.3 状态更新,9a5388f,measured,docs/23 含设计取舍/三层验收/边界；docs/22 待补表改为已有实现并注明有实现≠已下沉
 2026-11-11,,,45,sw,feature,kernel YAML 数值契约机器可读化：contract 字段 + 编译器静态范围传播 + 契约门禁,bf401f2,measured,36 份 spec 全量重编 rc=0 且生成物逐字节零变化；5 项反例全部拒绝且 CLI 越界 spec 拒绝生成；yaml-check/handprog-check 0 违规；verify quick 19 passed / 0 failed / 395 s
+2026-11-11,,,40,sw,feature,数值契约驱动 mimo 运行时守卫：生成器导出 LEAF_MAX_ABS/SINK_MAX_ABS，180 位置重扫合并进 gather,358d030,measured,"run-mimo 25/15/10 dB 比特 720/711/618 不变且 mmse_runs=24；25dB 504,889->485,397；run-proto-nr_mimo 阶段 119,554->105,381、整链 490,437、判据全过；仅 2 个 _prog.h 变化且微码数组未动；yaml/handprog 0 违规；verify quick 19 passed / 0 failed / 352 s"
