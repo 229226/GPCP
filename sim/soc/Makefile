@@ -187,6 +187,13 @@ run-pdsch-bg2: all
 	python3 $(ROOT)/tools/check_pdsch_bg2.py $(ROOT)/$(OBJ)/pdsch_bg2_dump.txt
 
 # Debug: one variable block through the streaming BN microcode (26 x 20 words)
+# 新增 7 个 CGRA kernel 的 SoC 逐值自检（docs/22 待补项）
+run-new-kernels: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/new_kernels_bm.bin@0x80000000 --results 0x80010000 --nwords 1800 \
+		--dump $(ROOT)/$(OBJ)/new_kernels_dump.txt
+	python3 $(ROOT)/tools/check_new_kernels_hw.py $(ROOT)/$(OBJ)/new_kernels_dump.txt
+
 run-pdsch-bn1: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_bn1_bm.bin@0x80000000 --results 0x80010000 --nwords 268 \

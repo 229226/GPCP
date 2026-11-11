@@ -7,6 +7,7 @@
   3. 判断可行性，不可行就说明"缺什么"，绝不回退成让用户手写坐标。
 """
 import json
+import os
 import math
 import re
 
@@ -19,6 +20,25 @@ POLAR_N = 512               # polar 9 级镜像覆盖 512 点
 POLAR_PES = 16              # polar_node 微码固定 16 PE（与 target 的 what-if 无关）
 # 经验常数：一次阵列运行的编排开销（T0 台架实测 T(c)=32+1.0045c，取上限估计）
 T0_OVERHEAD = 32
+
+# ---------------------------------------------------------------------------
+# 新增 CGRA 镜像（docs/22 §2.3「仍缺阵列实现」四项，2026-11-11 补齐）
+#
+# 镜像都由 cgra/kernels/*.yaml -> gen_kernel_prog.py 生成，自带 ISA 级逐值
+# 自检，并由 tools/check_new_kernels.py（算法黄金）与
+# sim/soc:run-new-kernels（SoC 硬件）双重对账。
+#
+# 默认不启用：docs/22 实测这些算法留在 CVA6 更快，或阵列被编排拖累
+# （LDPC 阵列只忙 6%）。置 PROTO_NEW_ARRAY=1 才切到阵列，用于 A/B 与
+# docs/21 P4/P5 的后续优化，不改变任何默认 plan.h。
+# ---------------------------------------------------------------------------
+NEW_ARRAY_IMAGES = {
+    "modulate":        ("qam_map",        "qam_qpsk/qam_16qam/qam_64qam"),
+    "ldpc_encode":     ("ldpc_enc_acc",   "ldpc_enc_acc"),
+    "turbo":           ("turbo_acs",      "turbo_acs"),
+    "ldpc_wifi":       ("wifi_ldpc_tiles", "wifi_vn + wifi_cn24"),
+}
+USE_NEW_ARRAY = os.environ.get("PROTO_NEW_ARRAY", "") == "1"
 
 # 4096 点 FFT 镜像的 tiling（与 ssb_fft.inc 的 fe_desc_stages/fe_desc_tail 同源）：
 #   每 256 点一个 tile，radix-4 阶段数 = floor(log4(N/256)) + 1，最后 64 点一个 tail tile。
@@ -375,6 +395,29 @@ def lower(ir, target):
 
         elif op in ("channel", "equalise_demap", "extract", "received", "measure"):
             st["where"] = "control-core"
+
+        # 新增镜像的显式落点开关（默认关闭，见文件头的取舍说明）。
+        # 放在所有既有分支之后，保证 USE_NEW_ARRAY=0 时 plan 逐字节不变。
+        if USE_NEW_ARRAY:
+            key = None
+            if op == "modulate":
+                key = "modulate"
+            elif op == "encode" and nd["params"].get("scheme") == "ldpc":
+                key = "ldpc_encode"
+            elif op in ("encode", "decode") and nd["params"].get("scheme") == "turbo":
+                key = "turbo"
+            elif op in ("encode", "decode") and nd["params"].get("scheme") == "ldpc_wifi":
+                key = "ldpc_wifi"
+            if key:
+                images = NEW_ARRAY_IMAGES[key]
+                st["where"] = "array"
+                st["impl"] = images[0]
+                st["array_runs"] = 1
+                st["notes"].append(
+                    "PROTO_NEW_ARRAY=1：改用新增镜像 %s（%s）；"
+                    "默认落点见 docs/22 实测结论" % (images[0], images[1]))
+                plan["search"].setdefault("new_array", []).append(
+                    {"stage": nd["id"], "op": op, "images": images[1]})
 
         plan["stages"].append(st)
 

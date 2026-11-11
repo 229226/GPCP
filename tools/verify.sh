@@ -88,10 +88,10 @@ declare -A MODEL_CMD=(
     [model-reg]="python3 tools/nr_pdcch_reg.py selftest"
     [model-pc]="python3 tools/nr_pc.py selftest"
 )
-SOCCORE_QUICK="run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
+SOCCORE_QUICK="run-new-kernels run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
 # run-rach is the single longest gate (~9 min, 11.8 M cycles); it lives in the
 # `slow` tier so the default full run stays ~10-12 min.
-SOCCORE_FULL="run run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be"
+SOCCORE_FULL="run run-new-kernels run-pbch-tx run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-ssb-fid run-ssb-slot run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-pdsch-zc64 run-pdsch-bg1-zc64 run-pdsch-iter run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pusch run-pusch-tp run-sib1 run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-prach run-prach-cgra run-pucch run-csi run-mimo-ce run-mimo run-fftprobe run-slot run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be"
 SLOW_EXTRA="run-rach"
 
 MODEL_SET=()
@@ -249,6 +249,15 @@ if ! COUPLING_OUT=$(cd "$ROOT" && python3 tools/check_yaml_coupling.py 2>&1); th
     exit 1
 fi
 printf '%s\n' "$COUPLING_OUT" | sed -n '1p;$p'
+echo
+
+# ---- 新增 kernel 独立黄金模型对账（ISA 仿真 + 算法公式，秒级） ------------
+if ! NK_OUT=$(cd "$ROOT" && python3 tools/check_new_kernels.py 2>&1); then
+    printf '%s\n' "$NK_OUT"
+    echo "verify aborted: 新增 CGRA kernel 的独立黄金模型对账失败" >&2
+    exit 1
+fi
+printf '%s\n' "$NK_OUT" | tail -1
 echo
 
 # ---- 协议描述层（docs/20）：硬件无关检查 + 换厨房测试（纯静态，秒级） ------

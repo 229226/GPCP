@@ -57,6 +57,11 @@ verify-changed:
 handprog-check:
 	python3 tools/check_handprog.py
 
+# 新增 kernel 的独立黄金模型对账（ISA 仿真 + 算法规格公式，docs/22 待补项）
+new-kernels-check:
+	python3 cgra/tools/gen_kernel_prog.py --all
+	python3 tools/check_new_kernels.py
+
 # 铁律：kernel YAML 不直接描述硬件（AGENTS.md 4.19）。每次 verify 也会自动跑。
 yaml-check:
 	python3 tools/check_yaml_coupling.py

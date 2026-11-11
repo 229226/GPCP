@@ -22,3 +22,6 @@ trace_hart_*.log
 # generated performance report (tools/perf_report.py)
 perf-report.html
 perf-summary.csv
+
+# IDE share-package temp exports
+.trae-html-share-packages/

@@ -1,0 +1,16 @@
+# GPCP kernel: 802.11be LDPC 校验节点（docs/22 待补项）
+#
+# IEEE 802.11 N=648/Z=27 R1/2 的 CN：324 个校验行，每行最多 24 条边。
+# 复用既有参数化的 schedule_cn(edges=24)（原用于 BG1 20 边），
+# 一条程序跑完 20 个提升行，输出 min1 / min2 / sign。
+#
+# 边占前 24 个命名槽，结果区避开它们；哨兵沿用 target 的 SENTINEL 区。
+# 每边不同旋转量的 gather/scatter 仍由 C 侧编排（docs/21 R1 指出的接口缺口），
+# 本镜像负责阵列真正吃算力的 min1/min2/sign。
+name: wifi_cn24
+kind: cn
+desc: "802.11 N648 R1/2 校验节点：24 条边一次程序算 min1/min2/sign"
+out: sw/soc/wifi_cn24_prog.h
+edges: 24
+sentinel_bank: 30
+res_banks: [26, 27, 28]

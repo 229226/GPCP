@@ -11,7 +11,7 @@ LDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,-T,link.ld -Wl,--build-id=none
 
 BUILD := ../../build/sw
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm pdcch_loop_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm pbch_pack_bm ifft_bm overhead_bm ssb_tx_bm ldpc_enc_bm dl_mod_bm pdcch_tx_bm pdsch_loop_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm pdcch_loop_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm pbch_pack_bm ifft_bm overhead_bm ssb_tx_bm ldpc_enc_bm dl_mod_bm pdcch_tx_bm pdsch_loop_bm new_kernels_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
