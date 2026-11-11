@@ -41,7 +41,8 @@
 #define RESULT_BASE   ((uint32_t *)0x80070000ul)
 #define CGRA_BASE     0x50000000ul
 
-#define MBANKS (MMSE_2X1_BANK_HI - MMSE_2X1_BANK_LO + 1)
+#include "mmse_dual_prog.h"
+#include "mmse_dual_layout.h"
 
 static inline uint32_t mtime(void) { return *(volatile uint32_t *)0x0200BFF8ul; }
 
@@ -90,56 +91,101 @@ static int64_t cm_im(int64_t ar, int64_t ai, int64_t br, int64_t bi)
 /* b = H^H y 由 CGRA 的 mmse_2x1 tile 计算：一次 16 个 RE（一个 PE 一个 RE），
  * 每个 RE 喂 8 个 Q15 叶子，回 2 个 Q30 汇（numr/numi）。板级验证时 *16 还原到
  * C 参考的 FRONT_GAIN 量纲，因此 2x2 求解与纯 C 版逐位一致。 */
-/* DMA 直接读 RAM，编译器看不见 -> 必须 volatile */
-static volatile int32_t mleaf[MBANKS][16];
 static uint32_t mmse_runs, mmse_dmas;
+
+/* 描述符环：把 180 个 RE 的接收样本直接搬进 spad，CPU 不再经手数据。
+ *
+ * 地址在整段运行里固定（sp[] 由 TD_RAM 决定），描述符表只建一次；之后每趟只写
+ * 一次 RING_TAIL。搬运引擎按 64 位 beat 取数，所以一条描述符搬 I+Q 两个**8 字节
+ * 对齐**的连续字（只搬奇数地址的 Q 会拿回低半部分 = I，实测虚部全错）。
+ * spad 侧对应 stride 2 布局（YAML 的 pe_per_bank: 16）：PE k 占 2k / 2k+1。
+ * 奇偶趟分别落 page 1 / page 0，阵列读另一页时引擎写这一页。 */
+#define MS_TILES   ((NDATA + 15) / 16)
+static uint32_t ms_desc[MS_TILES * 32 + 32][8] __attribute__((aligned(64)));
+static uint32_t ms_desc_end[MS_TILES + 1];
+static int ms_desc_ready;
+
+static void ms_ring_build(int32_t *sp0, int32_t *sp1)
+{
+    static const uint32_t dst_bank[2] = {
+        MMSE_DUAL_SPAD_LEAF_Y1R_BASE, MMSE_DUAL_SPAD_LEAF_Y2R_BASE
+    };
+    int dre[NDATA];
+    int nd = 0;
+    for (int rr = 0; rr < NRE && nd < NDATA; rr++)
+        if (rr % 4 != 0) dre[nd++] = rr;
+
+    uint32_t n = 0;
+    int pos = 0;
+    for (int t = 0; t < MS_TILES; t++) {
+        for (int k = 0; k < 16 && pos < NDATA; k++, pos++) {
+            uint32_t ip = rev4(BIN0 + (uint32_t)dre[pos]);
+            for (int rx = 0; rx < 2; rx++) {
+                uint32_t *d = ms_desc[n++];
+                d[0] = (uint32_t)(uintptr_t)&(rx ? sp1 : sp0)[2 * ip];
+                d[1] = (dst_bank[rx] + 2u * (uint32_t)k) |
+                       ((t & 1) ? GPCP_DMA_DESC_PAGE1 : 0u);
+                d[2] = 2u;      /* I 和 Q */
+                d[3] = 0u;
+                d[4] = 0u;
+                d[5] = d[6] = d[7] = 0u;
+            }
+        }
+        ms_desc_end[t + 1] = n;
+    }
+    ms_desc_ready = 1;
+}
 
 static void mmse_prog_load(void)
 {
-    if (gpcp_cgra_imem_load(CGRA_BASE, mmse_2x1_prog,
-                            MMSE_2X1_PROG_CYCLES * NPES) != 0)
+    if (gpcp_cgra_imem_load(CGRA_BASE, mmse_dual_prog,
+                            MMSE_DUAL_PROG_CYCLES * NPES) != 0)
         errs++;
 }
 
-static void mmse_dma(uintptr_t ram, uint32_t spad, uint32_t words, uint32_t dir)
+/* 88 拍的阵列太短：必须"清 DONE + 回读确认 + 轮询本次 DONE"。 */
+static void mmse_array_start(uint32_t page)
 {
-    /* 显式序列：清 done -> 回读确认 -> 等 busy 落 -> 启动 -> 轮询本次 done。
-     * rt_dma_run 会在 "start 被 busy 忽略" 时误判成功，所以不用它。 */
-    uint32_t g = 0;
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DMA_CTRL, GPCP_CGRA_DMA_CLRDONE);
-    while (mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE)
-        if (++g > 100000u) { errs++; return; }
-    g = 0;
-    while (mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_BUSY)
-        if (++g > 200000u) { errs++; return; }
-    gpcp_cgra_dma_start(CGRA_BASE, ram, spad, words, 0, dir, 32, 16);
-    g = 0;
-    while (!(mmio_r(CGRA_BASE + GPCP_CGRA_DMA_CTRL) & GPCP_CGRA_DMA_DONE))
-        if (++g > 200000u) { errs++; return; }
-    mmse_dmas++;
-}
-
-static void mmse_run(void)
-{
-    /* 32 拍的阵列太短：必须"清 DONE + 回读确认 + 轮询本次 DONE"；
-     * 否则会读到上一轮遗留的 done 而提前读 spad（实测 l=1 的 b 恒等于 l=0）。 */
     uint32_t g = 0;
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_CTRL, GPCP_CGRA_CTRL_CLRDONE);
     while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_DONE)
         if (++g > 100000u) { errs++; break; }
-    gpcp_cgra_array_start(CGRA_BASE, 0, MMSE_2X1_PROG_CYCLES);
+    /* CVA6 有写缓冲：START 会抢在前面的 store 之前到达 */
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-    g = 0;
+    gpcp_cgra_array_start(CGRA_BASE, page, MMSE_DUAL_PROG_CYCLES);
+}
+
+static void mmse_array_wait(void)
+{
+    uint32_t g = 0;
     while (!(mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_DONE))
         if (++g > 200000u) { errs++; break; }
     mmse_runs++;
     runs++;
-    busy += MMSE_2X1_PROG_CYCLES;
+    busy += MMSE_DUAL_PROG_CYCLES;
 }
 
 /* --------------------------------------------------------- 阶段状态与激励 */
 static int32_t ms_pre[2][NP_LAYER], ms_pim[2][NP_LAYER];
 static int64_t ms_hre[2][2], ms_him[2][2];
+
+/* 9 个广播叶子：8 个信道系数 + 常量 0（守卫用）。每页各写一份，页内地址相同。 */
+static void ms_h_bcast(void)
+{
+    const uint32_t b0 = MMSE_DUAL_SPAD_LEAF_H00R_BASE;
+    int32_t v[8];
+    v[0] = (int32_t)ms_hre[0][0]; v[1] = (int32_t)ms_him[0][0];
+    v[2] = (int32_t)ms_hre[1][0]; v[3] = (int32_t)ms_him[1][0];
+    v[4] = (int32_t)ms_hre[0][1]; v[5] = (int32_t)ms_him[0][1];
+    v[6] = (int32_t)ms_hre[1][1]; v[7] = (int32_t)ms_him[1][1];
+    for (uint32_t pg = 0; pg < 2u; pg++) {
+        uint32_t off = pg * 1024u;
+        for (uint32_t j = 0; j < 8u; j++)
+            mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(b0 + j + off), (uint32_t)v[j]);
+        mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(MMSE_DUAL_SPAD_LEAF_ZERO_BASE + off), 0u);
+    }
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+}
 static int64_t ms_g00r, ms_g01r, ms_g01i, ms_g11r, ms_lam, ms_detr, ms_deti, ms_dd;
 static uint32_t ms_bits[NDATA];
 static uint32_t ms_bit_err;
@@ -277,52 +323,87 @@ static int ms_mimo_equalise(void)
 #endif
     if (cg_ok) {
         mmse_prog_load();
-        for (int base = 0; base < NDATA; base += 16) {
+        if (!ms_desc_ready) ms_ring_build(sp[0], sp[1]);
+        ms_h_bcast();
+
+        uint16_t d0 = (uint16_t)mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
+        gpcp_cgra_ring_start(CGRA_BASE, (uintptr_t)&ms_desc[0][0], RING_DEPTH,
+                             ms_desc_end[1]);
+
+        for (int t = 0; t < MS_TILES; t++) {
+            int base = t * 16;
             int n = NDATA - base; if (n > 16) n = 16;
-            for (int l = 0; l < 2; l++) {
-                for (int k = 0; k < 16; k++) {
-                    if (k < n) {
-                        uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
-                        int32_t y1r = (int32_t)sp[0][2 * ip];
-                        int32_t y1i = (int32_t)sp[0][2 * ip + 1];
-                        int32_t y2r = (int32_t)sp[1][2 * ip];
-                        int32_t y2i = (int32_t)sp[1][2 * ip + 1];
-                        mleaf[MMSE_2X1_BANK_H1R - MMSE_2X1_BANK_LO][k] = (int32_t)ms_hre[0][l];
-                        mleaf[MMSE_2X1_BANK_H1I - MMSE_2X1_BANK_LO][k] = (int32_t)ms_him[0][l];
-                        mleaf[MMSE_2X1_BANK_H2R - MMSE_2X1_BANK_LO][k] = (int32_t)ms_hre[1][l];
-                        mleaf[MMSE_2X1_BANK_H2I - MMSE_2X1_BANK_LO][k] = (int32_t)ms_him[1][l];
-                        mleaf[MMSE_2X1_BANK_Y1R - MMSE_2X1_BANK_LO][k] = y1r;
-                        mleaf[MMSE_2X1_BANK_Y1I - MMSE_2X1_BANK_LO][k] = y1i;
-                        mleaf[MMSE_2X1_BANK_Y2R - MMSE_2X1_BANK_LO][k] = y2r;
-                        mleaf[MMSE_2X1_BANK_Y2I - MMSE_2X1_BANK_LO][k] = y2i;
-                        /* 契约阈值：搭 gather 的顺风车；越界就整段回退 CPU */
-                        if (y1r > MMSE_2X1_LEAF_MAX_ABS || y1r < -MMSE_2X1_LEAF_MAX_ABS ||
-                            y1i > MMSE_2X1_LEAF_MAX_ABS || y1i < -MMSE_2X1_LEAF_MAX_ABS ||
-                            y2r > MMSE_2X1_LEAF_MAX_ABS || y2r < -MMSE_2X1_LEAF_MAX_ABS ||
-                            y2i > MMSE_2X1_LEAF_MAX_ABS || y2i < -MMSE_2X1_LEAF_MAX_ABS)
-                            cg_ok = 0;
-                    } else {
-                        for (int j = 0; j < MBANKS; j++) mleaf[j][k] = 0;
-                    }
-                }
-                if (!cg_ok) break;          /* 本趟越界：不再 DMA / 启动阵列 */
-                mmse_dma((uintptr_t)&mleaf[0][0],
-                         GPCP_SPAD_IDX(MMSE_2X1_BANK_LO, 0), MBANKS * 16, 0);
-                mmse_run();
-                /* 直接从 spad 主机窗口读汇：MMIO 非缓存，且 mmse_run 已等到 DONE，
-                 * 绕开 "DMA 写 RAM -> CPU 命中旧 D$ 行" 的异步清空竞态。 */
+            uint32_t pg = (uint32_t)(t & 1);
+            uint32_t off = pg * 1024u;
+            uint32_t g = 0;
+
+            while ((uint16_t)((uint16_t)mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE) - d0)
+                   < (uint16_t)ms_desc_end[t + 1]) {
+                if (++g > 400000u) { errs++; cg_ok = 0; break; }
+            }
+            if (!cg_ok) break;
+
+            mmse_array_start(pg);
+            if (t + 1 < MS_TILES)               /* 阵列算这一趟，引擎搬下一趟 */
+                gpcp_cgra_ring_push(CGRA_BASE, ms_desc_end[t + 2]);
+            mmse_array_wait();
+
+#ifdef MS_DEBUG_Y
+            if (t < MS_TILES) {                 /* 阵列的 b 与本机标量逐值对账 */
                 for (int k = 0; k < n; k++) {
-                    int64_t br = ((int64_t)(int32_t)mmio_r(
-                                      CGRA_BASE + GPCP_SPAD_ADDR(MMSE_2X1_BANK_NUMR, k)))
-                                 << FRONT_GAIN;
-                    int64_t bi = ((int64_t)(int32_t)mmio_r(
-                                      CGRA_BASE + GPCP_SPAD_ADDR(MMSE_2X1_BANK_NUMI, k)))
-                                 << FRONT_GAIN;
-                    if (l == 0) { b0r_a[base + k] = br; b0i_a[base + k] = bi; }
-                    else        { b1r_a[base + k] = br; b1i_a[base + k] = bi; }
+                    uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
+                    int64_t y1r_ = (int64_t)sp[0][2*ip] << FRONT_GAIN;
+                    int64_t y1i_ = (int64_t)sp[0][2*ip+1] << FRONT_GAIN;
+                    int64_t y2r_ = (int64_t)sp[1][2*ip] << FRONT_GAIN;
+                    int64_t y2i_ = (int64_t)sp[1][2*ip+1] << FRONT_GAIN;
+                    int64_t e0r = cm_re(ms_hre[0][0], -ms_him[0][0], y1r_, y1i_)
+                                + cm_re(ms_hre[1][0], -ms_him[1][0], y2r_, y2i_);
+                    int64_t e0i = cm_im(ms_hre[0][0], -ms_him[0][0], y1r_, y1i_)
+                                + cm_im(ms_hre[1][0], -ms_him[1][0], y2r_, y2i_);
+                    int64_t e1r = cm_re(ms_hre[0][1], -ms_him[0][1], y1r_, y1i_)
+                                + cm_re(ms_hre[1][1], -ms_him[1][1], y2r_, y2i_);
+                    int64_t e1i = cm_im(ms_hre[0][1], -ms_him[0][1], y1r_, y1i_)
+                                + cm_im(ms_hre[1][1], -ms_him[1][1], y2r_, y2i_);
+                    if (e0r != b0r_a[base+k] || e0i != b0i_a[base+k]) errs += 1;
+                    if (e1r != b1r_a[base+k] || e1i != b1i_a[base+k]) errs += 1000;
                 }
             }
-            if (!cg_ok) break;              /* 已回退 CPU：后面的 tile 也不再跑 */
+            if (0) {                            /* 校验 spad 里的 y 是否等于源 */
+                for (int k = 0; k < n; k++) {
+                    uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
+                    if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                            MMSE_DUAL_SPAD_LEAF_Y1R_BASE + off + 2u * (uint32_t)k))
+                        != sp[0][2 * ip]) errs += 1;
+                    if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                            MMSE_DUAL_SPAD_LEAF_Y1I_BASE + off + 2u * (uint32_t)k))
+                        != sp[0][2 * ip + 1]) errs += 100;
+                    if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                            MMSE_DUAL_SPAD_LEAF_Y2R_BASE + off + 2u * (uint32_t)k))
+                        != sp[1][2 * ip]) errs += 10000;
+                    if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                            MMSE_DUAL_SPAD_LEAF_Y2I_BASE + off + 2u * (uint32_t)k))
+                        != sp[1][2 * ip + 1]) errs += 1000000;
+                }
+            }
+#endif
+
+            int bad = 0;
+            for (int k = 0; k < n; k++) {
+                uint32_t a0 = MMSE_DUAL_SPAD_SINK_N0R_BASE + off + (uint32_t)k;
+                b0r_a[base + k] = ((int64_t)(int32_t)mmio_r(
+                        CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0))) << FRONT_GAIN;
+                b0i_a[base + k] = ((int64_t)(int32_t)mmio_r(
+                        CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0 + 32u))) << FRONT_GAIN;
+                b1r_a[base + k] = ((int64_t)(int32_t)mmio_r(
+                        CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0 + 64u))) << FRONT_GAIN;
+                b1i_a[base + k] = ((int64_t)(int32_t)mmio_r(
+                        CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0 + 96u))) << FRONT_GAIN;
+                if ((int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                        MMSE_DUAL_SPAD_SINK_YMAX_BASE + off + (uint32_t)k))
+                    > MMSE_DUAL_LEAF_MAX_ABS)
+                    bad = 1;
+            }
+            if (bad) { cg_ok = 0; break; }
         }
     }
 
