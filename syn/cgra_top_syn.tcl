@@ -49,7 +49,7 @@ opt -purge
 dfflibmap -liberty $LIB
 opt -undriven
 abc -D $ABC_D -liberty $LIB \
-    -script "+strash;ifraig;retime,{D},-M,6;strash;dch,-f;map,-p,-M,1,{D},-f;topo;dnsize;buffer,-p;upsize;"
+    -script "+strash;ifraig;retime,{D},-M,6;strash;dch,-f;map,-p,-M,1,{D},-f;topo;dnsize;buffer,-p,-N,16;upsize;"
 hilomap -singleton -hicell LOGIC1_X1 Z -locell LOGIC0_X1 Z
 setundef -zero
 opt_clean -purge

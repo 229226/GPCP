@@ -8,7 +8,7 @@
 | 环节 | 工具/库 | 说明 |
 |---|---|---|
 | SV 前端 | `yosys -m slang`（`third_party/eda/oss-cad-suite` 自带 `slang.so`） | 我们的 RTL 是 SystemVerilog（`package cgra_pkg` + `import cgra_pkg::*;`），Yosys 自带前端不支持通配 import，必须用 slang |
-| 综合 | Yosys 0.52 `synth -flatten` + `dfflibmap` + `abc -D <ps>` | ABC 用 `ifraig/retime/dch/map` 配方（脚本在 `syn/cgra_syn.tcl`） |
+| 综合 | Yosys 0.52 `synth -flatten` + `dfflibmap` + `abc -D <ps>` | ABC 用 `ifraig/retime/dch/map` 配方（脚本在 `syn/cgra_top_syn.tcl`） |
 | 工艺库 | Nangate45（45 nm 开源标准单元，`third_party/pdk/nangate45`） | 来自 OpenROAD-flow-scripts 的 `flow/platforms/nangate45`（Apache-2.0），135 个单元；TT `NangateOpenCellLibrary_typical.lib`；`DFFR_X1` = 5.32 µm²、`MUX2_X1` = 1.862 µm² |
 | 时序/功耗 | iEDA `iSTA`/`iPA`（`third_party/eda/bin/iEDA`） | 开源 OSCC-Project/iEDA 的发布二进制；SDC 只约束一个时钟（`clk`），无 I/O delay；功耗 toggle 0.1（工具默认） |
 
@@ -21,7 +21,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500     # 综合 + STA/功�
 # 结果在 build/syn/cgra_top-<freq>MHz/：synth_stat.txt / cgra_top.rpt / cgra_top.pwr
 ```
 
-流程文件：`syn/Makefile`、`syn/cgra_syn.tcl`、`syn/sta.tcl`、`syn/cgra_top.sdc`、`tools/fetch_eda.sh`。
+流程文件：`syn/Makefile`、`syn/cgra_top_syn.tcl`、`syn/sta.tcl`、`syn/cgra_top.sdc`、`tools/fetch_eda.sh`。
 
 ## 2. 综合前先修的 RTL（行为不变，`verify.sh quick` 7/7 逐拍回归）
 
