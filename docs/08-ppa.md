@@ -8,7 +8,7 @@
 | 环节 | 工具/库 | 说明 |
 |---|---|---|
 | SV 前端 | `yosys -m slang`（`third_party/eda/oss-cad-suite` 自带 `slang.so`） | 我们的 RTL 是 SystemVerilog（`package cgra_pkg` + `import cgra_pkg::*;`），Yosys 自带前端不支持通配 import，必须用 slang |
-| 综合 | Yosys 0.52 `synth -flatten` + `dfflibmap` + `abc -D <ps>` | ABC 用 `ifraig/retime/dch/map` 配方（脚本在 `syn/cgra_top_syn.tcl`） |
+| 综合 | Yosys 0.52 `synth -flatten` + `dfflibmap` + `abc -D <ps>` | ABC 用 `ifraig/retime/dch/map` 配方（脚本在 `syn/cgra_syn.tcl`） |
 | 工艺库 | Nangate45（45 nm 开源标准单元，`third_party/pdk/nangate45`） | 来自 OpenROAD-flow-scripts 的 `flow/platforms/nangate45`（Apache-2.0），135 个单元；TT `NangateOpenCellLibrary_typical.lib`；`DFFR_X1` = 5.32 µm²、`MUX2_X1` = 1.862 µm² |
 | 时序/功耗 | iEDA `iSTA`/`iPA`（`third_party/eda/bin/iEDA`） | 开源 OSCC-Project/iEDA 的发布二进制；SDC 只约束一个时钟（`clk`），无 I/O delay；功耗 toggle 0.1（工具默认） |
 
@@ -21,7 +21,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500     # 综合 + STA/功�
 # 结果在 build/syn/cgra_top-<freq>MHz/：synth_stat.txt / cgra_top.rpt / cgra_top.pwr
 ```
 
-流程文件：`syn/Makefile`、`syn/cgra_top_syn.tcl`、`syn/sta.tcl`、`syn/cgra_top.sdc`、`tools/fetch_eda.sh`。
+流程文件：`syn/Makefile`、`syn/cgra_syn.tcl`、`syn/sta.tcl`、`syn/cgra_top.sdc`、`tools/fetch_eda.sh`。
 
 ## 2. 综合前先修的 RTL（行为不变，`verify.sh quick` 7/7 逐拍回归）
 
@@ -427,47 +427,41 @@ make -C syn cpu CLK_FREQ_MHZ=500     # 与 CGRA 同库、同目标、同 ABC 配
 这是**完整 CVA6 逻辑**（RV64GC + sv39 MMU + FPU + 流水线 + 寄存器堆 + 各级 cache 控制）。
 I$/D$ 的 `tc_sram` 存储宏不在其中（与 CGRA 排除 spad/IMEM 的口径一致）。
 
-### 9.3 频率
+### 9.3 频率（全核实测，OpenSTA）
 
-CVA6 的综合有两个变体，结果差别很大，**必须分开说**：
+500 MHz 目标综合后，iEDA 仍然无法链接这份网表（宽结构体端口 + 别名 assign），改用
+**OpenSTA 2.0.17**（`apt-get download opensta` 解包免 root）做全核 STA：
 
-| 变体 | `noc_resp_i` | 逻辑单元 | iEDA 能 STA？ |
-|---|---|---:|---|
-| **完整核** | 接真实输入 | **321,474**（含 FPU/RF/ALU） | 否（见 §9.4） |
-| **控制/流水线逻辑** | 接 0（常量传播剪掉 RF/ALU 数据通路） | 4,323 | 是 |
+| 步骤 | 结果 |
+|---|---|
+| 直接 STA | 解析器拒绝 `assign {a,b} = {c,c};`（拼接 LHS）→ 用位爆破脚本消掉 370 条 |
+| 第一次时序 | WNS **−15.3 ns**：单个 FF clk→Q 13.97 ns，Q 网络 5.8 pF / 2334 负载 |
+| abc `buffer -N 16` | 无效——FF 输出在 abc 眼里是网络输入，它不管寄存器扇出 |
+| `syn/insert_buffers.py` 对 323 条扇出>32 的网络插缓冲树 | 2,678 个 BUF（BUF_X2/X4/X16 三层，叶驱动 ≤24 负载） |
+| **最终 STA** | WNS **−1.83 ns**，clk→Q 0.22 ns（正常），到达 3.787 ns → **fmax ≈ 264 MHz** |
 
-控制/流水线变体（4.3k cells）在 500 MHz 目标下，iEDA 给出最差 5 条 setup 路径：
+最差路径的起点/终点**都在 FPU**（`fpnew_bulk` gen_operation_groups[0] 的 FMA 流水级）：
+一条 ~50 级 AND2 链，3.5 ns 组合逻辑——这是 fpnew 该流水级的真实深度。
 
-| 端点 | Path Delay | Slack | Freq(MHz) |
-|---|---:|---:|---:|
-| `i_instr_queue.gen_instr_fifo[0]...status_cnt_q` | 0.972 ns | +0.989 | **989.35** |
-| `i_instr_queue...status_cnt_q`（下降沿） | 0.963 ns | +0.995 | 994.86 |
-| `issue_stage_i.fwd_q[472]` | 0.970 ns | +0.996 | 995.53 |
-| `issue_stage_i.fwd_q[470]` | 0.970 ns | +0.996 | 995.53 |
-| `issue_stage_i.i_scoreboard.mem_q[7]` | 0.970 ns | +0.996 | 995.53 |
+> 中间踩的坑（记录给下次）：① 正则只匹配转义标识符，漏掉 `rvfi_probes[1195]` 这类
+> 纯名字网络（实为 scoreboard commit pointer，1250 负载）；② 层次名里含数组下标
+> `gen_operation_groups[1]`，在 `[` 处截断正则会漏掉所有 FPU/cache 网络；
+> ③ 转义名以空白结束，yosys 写 `.Q(\name )`，驱动检测必须容忍空白。
 
-**控制路径 pre-layout fmax ≈ 0.99 GHz**（关键路径在取指队列/发射级）。
-注意：这是**不含 ALU/FPU 数据通路**的控制逻辑；完整 CVA6 的经典关键路径是
-"寄存器堆读 → ALU → 写回"以及 FPU 的 FMA，通常比控制路径更慢。
+### 9.4 与 CGRA 的对照
 
-### 9.4 与 CGRA 的对照（口径不对等，务必看注）
+| | CGRA | CPU (CVA6 完整核) |
+|---|---:|---:|
+| 逻辑单元 | 31,729 | 312,266（+2,678 手工缓冲） |
+| 逻辑面积 | 68,536 µm² | 485,508 µm² ≈ 0.486 mm² |
+| **pre-layout fmax** | **1,053 MHz** | **264 MHz** |
+| f_CGRA / f_CPU | — | **≈ 4.0×** |
 
-| | CGRA | CPU 控制逻辑 | CPU 完整核 |
-|---|---:|---:|---:|
-| 逻辑单元 | 32,751 | 4,323 | 321,474 |
-| 逻辑面积 | 54,148 µm² | — | 492,919 µm² |
-| **pre-layout fmax** | **1,077 MHz** | **989 MHz** | **未测出** |
+同一个库、同一目标、同一 ABC 配方、同一 STA 工具（OpenSTA）。CGRA 的关键路径是
+短逻辑（0.94 ns 的 PE 数据通路）；CPU 的关键路径是 FPU 的 FMA 级（3.5 ns）。
+**CPU 比 CGRA 慢约 4 倍**，这与"6 级顺序核 + fpnew 流水级 vs 规整 PE 阵列"的直觉一致。
 
-**CGRA 的 1,077 MHz 是含 MAC 数据通路的完整阵列逻辑；CPU 的 989 MHz 只有控制逻辑。**
-两者口径并不对等，不能直接说"CPU 比 CGRA 慢 8%"。完整 CPU（含 ALU/FPU）一定更慢，
-按 CVA6 类核在 45 nm 的经验，量级在 **0.6–0.8 GHz**（未实测，只作数量级参考）。
-
-> **为什么全核测不出（工具限制，可复现）**
-> - 项目自带的 iEDA 的 Verilog 解析器不接受"拼接/范围 LHS 的 assign"与宽二进制常量；
->   用位爆破脚本消掉后能解析，但在 `link_design` 阶段仍报 `the left port is not exist`
->   （宽结构体端口 + 别名 assign）。
-> - `yosys-abc` 直接读同一网表也在 `128'b...` 常量处断言失败。
-> - `ltp`（拓扑最长路）对 Nangate 单元网表返回 `length=0`（不认识单元引脚），也不可用。
-> - 结论：**全核含 FPU 的 fmax 需要 OpenSTA / OpenROAD**；本轮只给出控制逻辑的 989 MHz。
-> - 其余口径：都是 pre-layout（无布线/时钟树/理想时钟），45 nm 布线后经验值约 0.5–0.65×；
->   CGRA 排除 spad/IMEM（§3.2），CPU 排除 I$/D$ 的 `tc_sram` 宏。
+> 口径与局限：都是 pre-layout（无布线/时钟树/理想时钟，45 nm 布线后约 0.5–0.65×，
+> 该系数对两者近似相同，比值受影响小）；CGRA 排除 spad/IMEM，CPU 排除 I$/D$ 的
+> `tc_sram` 宏。CPU 的 264 MHz 依赖手工缓冲树（真实 P&R 的缓冲/尺寸选择会更优，
+> 估计上限 ~300 MHz）；CGRA 侧无高扇出问题，1,053 MHz 即逻辑受限值。
