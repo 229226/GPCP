@@ -29,10 +29,11 @@ export ABC_D := $(shell echo $$((1000 / $(CLK_FREQ_MHZ))))
 .PHONY: all tools syn sta clean show cpu
 all: sta
 
-# CPU (CVA6/ariane) PPA: synthesize the core logic fabric and report its
-# pre-layout fmax.  OUT, NETLIST, the synthesis script and the sdc are all
-# derived from DESIGN at parse time, so DESIGN must be set on the command line:
-# re-invoke make instead of using a target-specific variable.
+# CPU (CVA6/ariane) PPA: synthesize the core logic fabric.  OUT, NETLIST, the
+# synthesis script and the sdc are all derived from DESIGN at parse time, so
+# DESIGN must be set on the command line: re-invoke make instead of using a
+# target-specific variable.  NOTE: synthesis (area) completes, but the bundled
+# iEDA cannot link this 321k-cell netlist for STA - see docs/08 section 9.4.
 cpu:
 	$(MAKE) sta DESIGN=cpu_top CLK_FREQ_MHZ=$(CLK_FREQ_MHZ)
 
