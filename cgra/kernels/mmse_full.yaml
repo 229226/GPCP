@@ -1,0 +1,157 @@
+name: mmse_full
+kind: image
+desc: >
+  2x2 MMSE 全下沉：corr 一次算两层的 b 并留在 spad；四段 solve 各自算一个
+  符号位（拆段以绕开 PE 只有 8 个寄存器、调度器无 spill 的限制）；pack
+  把 4 bit 打包成 1 个字/RE。段间靠 spad word 传值，CPU 不读回 b。
+  符号判据与 CVA6 完全一致，只是所有项统一缩放 1/16（b 未左移 FRONT_GAIN），
+  缩放不改变符号。契约要求 C 侧运行时保证 |b_arr| <= 32767。
+parallelism: full
+parts:
+  - name: corr
+    leaves:
+      h00r: {at: {region: "MIN1", slot: 0, broadcast: True}}
+      h00i: {at: {region: "MIN1", slot: 1, broadcast: True}}
+      h10r: {at: {region: "MIN1", slot: 2, broadcast: True}}
+      h10i: {at: {region: "MIN1", slot: 3, broadcast: True}}
+      h01r: {at: {region: "MIN1", slot: 4, broadcast: True}}
+      h01i: {at: {region: "MIN1", slot: 5, broadcast: True}}
+      h11r: {at: {region: "MIN1", slot: 6, broadcast: True}}
+      h11i: {at: {region: "MIN1", slot: 7, broadcast: True}}
+      y1r: {at: {region: "IN + 0", slot: 0, pe_per_bank: 16}}
+      y1i: {at: {region: "IN + 0", slot: 1, pe_per_bank: 16}}
+      y2r: {at: {region: "IN + 1", slot: 0, pe_per_bank: 16}}
+      y2i: {at: {region: "IN + 1", slot: 1, pe_per_bank: 16}}
+    ops:
+      - {name: a0r, op: mul, a: h00r, b: y1r}
+      - {name: a0i, op: mul, a: h00i, b: y1i}
+      - {name: b0r, op: mul, a: h10r, b: y2r}
+      - {name: b0i, op: mul, a: h10i, b: y2i}
+      - {name: r0p, op: add, a: a0r, b: a0i}
+      - {name: r0q, op: add, a: b0r, b: b0i}
+      - {name: o0r, op: add, a: r0p, b: r0q}
+      - {name: c0r, op: mul, a: h00r, b: y1i}
+      - {name: c0i, op: mul, a: h00i, b: y1r}
+      - {name: d0r, op: mul, a: h10r, b: y2i}
+      - {name: d0i, op: mul, a: h10i, b: y2r}
+      - {name: s0p, op: sub, a: c0r, b: c0i}
+      - {name: s0q, op: sub, a: d0r, b: d0i}
+      - {name: o0i, op: add, a: s0p, b: s0q}
+      - {name: a1r, op: mul, a: h01r, b: y1r}
+      - {name: a1i, op: mul, a: h01i, b: y1i}
+      - {name: b1r, op: mul, a: h11r, b: y2r}
+      - {name: b1i, op: mul, a: h11i, b: y2i}
+      - {name: r1p, op: add, a: a1r, b: a1i}
+      - {name: r1q, op: add, a: b1r, b: b1i}
+      - {name: o1r, op: add, a: r1p, b: r1q}
+      - {name: c1r, op: mul, a: h01r, b: y1i}
+      - {name: c1i, op: mul, a: h01i, b: y1r}
+      - {name: d1r, op: mul, a: h11r, b: y2i}
+      - {name: d1i, op: mul, a: h11i, b: y2r}
+      - {name: s1p, op: sub, a: c1r, b: c1i}
+      - {name: s1q, op: sub, a: d1r, b: d1i}
+      - {name: o1i, op: add, a: s1p, b: s1q}
+    sinks:
+      o0r: {at: {region: "OUT + 0", slot: 0, pe_per_bank: 32}}
+      o0i: {at: {region: "OUT + 1", slot: 0, pe_per_bank: 32}}
+      o1r: {at: {region: "OUT + 2", slot: 0, pe_per_bank: 32}}
+      o1i: {at: {region: "OUT + 3", slot: 0, pe_per_bank: 32}}
+
+  - name: s0r
+    leaves:
+      p0r: {at: {region: "OUT + 0", slot: 0, pe_per_bank: 32}}
+      p1r: {at: {region: "OUT + 2", slot: 0, pe_per_bank: 32}}
+      p1i: {at: {region: "OUT + 3", slot: 0, pe_per_bank: 32}}
+      g11: {at: {region: "MIN1", slot: 9, broadcast: True}}
+      gr:  {at: {region: "MIN1", slot: 10, broadcast: True}}
+      gi:  {at: {region: "MIN1", slot: 11, broadcast: True}}
+      one: {at: {region: "MIN1", slot: 12, broadcast: True}}
+    ops:
+      - {name: m0, op: mul, a: p0r, b: g11}
+      - {name: m1, op: mul, a: p1r, b: gr}
+      - {name: m2, op: mul, a: p1i, b: gi}
+      - {name: d, op: sub, a: m1, b: m2}
+      - {name: nv, op: sub, a: m0, b: d}
+      - {name: sg, op: shr, a: nv, imm: 31}
+      - {name: q, op: and, a: sg, b: one}
+    sinks:
+      q: {at: {region: "OUT + 4", slot: 0, pe_per_bank: 32}}
+
+  - name: s0i
+    leaves:
+      p0i: {at: {region: "OUT + 1", slot: 0, pe_per_bank: 32}}
+      p1r: {at: {region: "OUT + 2", slot: 0, pe_per_bank: 32}}
+      p1i: {at: {region: "OUT + 3", slot: 0, pe_per_bank: 32}}
+      g11: {at: {region: "MIN1", slot: 9, broadcast: True}}
+      gr:  {at: {region: "MIN1", slot: 10, broadcast: True}}
+      gi:  {at: {region: "MIN1", slot: 11, broadcast: True}}
+      one: {at: {region: "MIN1", slot: 12, broadcast: True}}
+    ops:
+      - {name: m0, op: mul, a: p0i, b: g11}
+      - {name: m1, op: mul, a: p1r, b: gi}
+      - {name: m2, op: mul, a: p1i, b: gr}
+      - {name: d, op: add, a: m1, b: m2}
+      - {name: nv, op: sub, a: m0, b: d}
+      - {name: sg, op: shr, a: nv, imm: 31}
+      - {name: q, op: and, a: sg, b: one}
+    sinks:
+      q: {at: {region: "OUT + 5", slot: 0, pe_per_bank: 32}}
+
+  - name: s1r
+    leaves:
+      p1r: {at: {region: "OUT + 2", slot: 0, pe_per_bank: 32}}
+      p0r: {at: {region: "OUT + 0", slot: 0, pe_per_bank: 32}}
+      p0i: {at: {region: "OUT + 1", slot: 0, pe_per_bank: 32}}
+      g00: {at: {region: "MIN1", slot: 8, broadcast: True}}
+      gr:  {at: {region: "MIN1", slot: 10, broadcast: True}}
+      gi:  {at: {region: "MIN1", slot: 11, broadcast: True}}
+      one: {at: {region: "MIN1", slot: 12, broadcast: True}}
+    ops:
+      - {name: m0, op: mul, a: p1r, b: g00}
+      - {name: m1, op: mul, a: p0r, b: gr}
+      - {name: m2, op: mul, a: p0i, b: gi}
+      - {name: d, op: add, a: m1, b: m2}
+      - {name: nv, op: sub, a: m0, b: d}
+      - {name: sg, op: shr, a: nv, imm: 31}
+      - {name: q, op: and, a: sg, b: one}
+    sinks:
+      q: {at: {region: "OUT + 6", slot: 0, pe_per_bank: 32}}
+
+  - name: s1i
+    leaves:
+      p1i: {at: {region: "OUT + 3", slot: 0, pe_per_bank: 32}}
+      p0r: {at: {region: "OUT + 0", slot: 0, pe_per_bank: 32}}
+      p0i: {at: {region: "OUT + 1", slot: 0, pe_per_bank: 32}}
+      g00: {at: {region: "MIN1", slot: 8, broadcast: True}}
+      gr:  {at: {region: "MIN1", slot: 10, broadcast: True}}
+      gi:  {at: {region: "MIN1", slot: 11, broadcast: True}}
+      one: {at: {region: "MIN1", slot: 12, broadcast: True}}
+    ops:
+      - {name: m0, op: mul, a: p1i, b: g00}
+      - {name: m1, op: mul, a: p0r, b: gi}
+      - {name: m2, op: mul, a: p0i, b: gr}
+      - {name: d, op: sub, a: m1, b: m2}
+      - {name: nv, op: add, a: m0, b: d}
+      - {name: sg, op: shr, a: nv, imm: 31}
+      - {name: q, op: and, a: sg, b: one}
+    sinks:
+      q: {at: {region: "OUT + 7", slot: 0, pe_per_bank: 32}}
+
+  - name: pack
+    leaves:
+      q0: {at: {region: "OUT + 4", slot: 0, pe_per_bank: 32}}
+      q1: {at: {region: "OUT + 5", slot: 0, pe_per_bank: 32}}
+      q2: {at: {region: "OUT + 6", slot: 0, pe_per_bank: 32}}
+      q3: {at: {region: "OUT + 7", slot: 0, pe_per_bank: 32}}
+    ops:
+      - {name: x1, op: add, a: q1, b: q1}
+      - {name: x2, op: add, a: q2, b: q2}
+      - {name: x2b, op: add, a: x2, b: x2}
+      - {name: x3, op: add, a: q3, b: q3}
+      - {name: x3b, op: add, a: x3, b: x3}
+      - {name: x3c, op: add, a: x3b, b: x3b}
+      - {name: z0, op: add, a: q0, b: x1}
+      - {name: z1, op: add, a: z0, b: x2b}
+      - {name: bits, op: add, a: z1, b: x3c}
+    sinks:
+      bits: {at: {region: "HARD", slot: 0, pe_per_bank: 32}}

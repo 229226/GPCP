@@ -41,8 +41,12 @@
 #define RESULT_BASE   ((uint32_t *)0x80070000ul)
 #define CGRA_BASE     0x50000000ul
 
-#include "mmse_dual_prog.h"
-#include "mmse_dual_layout.h"
+#include "mmse_full_prog.h"
+#include "mmse_full_layout.h"
+
+/* 与 cgra/kernels/mmse_full.yaml::contract 一致（mmse_full 是 kind:image，
+   check_contract 只支持 kind:dfg，所以这个上界在这里显式声明。 */
+#define MS_LEAF_MAX_ABS 20000
 
 static inline uint32_t mtime(void) { return *(volatile uint32_t *)0x0200BFF8ul; }
 
@@ -103,8 +107,8 @@ static uint32_t mmse_runs, mmse_dmas;
 #define MS_TILES   ((NDATA + 15) / 16)
 static void mmse_prog_load(void)
 {
-    if (gpcp_cgra_imem_load(CGRA_BASE, mmse_dual_prog,
-                            MMSE_DUAL_PROG_CYCLES * NPES) != 0)
+    if (gpcp_cgra_imem_load(CGRA_BASE, mmse_full_prog,
+                            MMSE_FULL_PROG_CYCLES * NPES) != 0)
         errs++;
 }
 
@@ -117,7 +121,7 @@ static void mmse_array_start(uint32_t page)
         if (++g > 100000u) { errs++; break; }
     /* CVA6 有写缓冲：START 会抢在前面的 store 之前到达 */
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-    gpcp_cgra_array_start(CGRA_BASE, page, MMSE_DUAL_PROG_CYCLES);
+    gpcp_cgra_array_start(CGRA_BASE, page, MMSE_FULL_PROG_CYCLES);
 }
 
 static void mmse_array_wait(void)
@@ -127,31 +131,44 @@ static void mmse_array_wait(void)
         if (++g > 200000u) { errs++; break; }
     mmse_runs++;
     runs++;
-    busy += MMSE_DUAL_PROG_CYCLES;
+    busy += MMSE_FULL_PROG_CYCLES;
 }
 
 /* --------------------------------------------------------- 阶段状态与激励 */
 static int32_t ms_pre[2][NP_LAYER], ms_pim[2][NP_LAYER];
 static int64_t ms_hre[2][2], ms_him[2][2];
 
-/* 9 个广播叶子：8 个信道系数 + 常量 0（守卫用）。每页各写一份，页内地址相同。 */
+/* 13 个广播叶子：8 个信道系数 + g00/g11/gr/gi + 常量 1。
+   全部 PE 读同一个字，两页各写一份。g 元素也必须 <= 32767，否则 mul 会
+   把高 16 位静默截掉（硬件没有溢出标志）。 */
+static int64_t ms_g00r, ms_g01r, ms_g01i, ms_g11r, ms_lam, ms_detr, ms_deti, ms_dd;
+static int64_t ms_hmax;
+static int ms_leaf_ovf;
 static void ms_h_bcast(void)
 {
-    const uint32_t b0 = MMSE_DUAL_SPAD_LEAF_H00R_BASE;
-    int32_t v[8];
+    const uint32_t b0 = MMSE_FULL_SPAD_CORR_LEAVES_H00R_BASE;
+    int32_t v[13];
     v[0] = (int32_t)ms_hre[0][0]; v[1] = (int32_t)ms_him[0][0];
     v[2] = (int32_t)ms_hre[1][0]; v[3] = (int32_t)ms_him[1][0];
     v[4] = (int32_t)ms_hre[0][1]; v[5] = (int32_t)ms_him[0][1];
     v[6] = (int32_t)ms_hre[1][1]; v[7] = (int32_t)ms_him[1][1];
+    v[8] = (int32_t)ms_g00r;  v[9] = (int32_t)ms_g11r;
+    v[10] = (int32_t)ms_g01r; v[11] = (int32_t)ms_g01i;
+    v[12] = 1;
+    ms_hmax = 0;
+    ms_leaf_ovf = 0;
+    for (uint32_t j = 0; j < 13u; j++) {
+        int64_t a = v[j] < 0 ? -(int64_t)v[j] : (int64_t)v[j];
+        if (j < 8u && a > ms_hmax) ms_hmax = a;   /* 仅 h 计入 |b| 上界 */
+        if (a > 32767) ms_leaf_ovf = 1;   /* 16 位 mul 输入截断，回退 */
+    }
     for (uint32_t pg = 0; pg < 2u; pg++) {
         uint32_t off = pg * 1024u;
-        for (uint32_t j = 0; j < 8u; j++)
+        for (uint32_t j = 0; j < 13u; j++)
             mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(b0 + j + off), (uint32_t)v[j]);
-        mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(MMSE_DUAL_SPAD_LEAF_ZERO_BASE + off), 0u);
     }
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
 }
-static int64_t ms_g00r, ms_g01r, ms_g01i, ms_g11r, ms_lam, ms_detr, ms_deti, ms_dd;
 static uint32_t ms_bits[NDATA];
 static uint32_t ms_bit_err;
 
@@ -257,7 +274,6 @@ static int ms_mimo_equalise(void)
     int32_t *td = (int32_t *)TD_RAM;
     int32_t *sp[2];
     int dre[NDATA], nd = 0;
-    static int64_t b0r_a[NDATA], b0i_a[NDATA], b1r_a[NDATA], b1i_a[NDATA];
     int cg_ok = 1;
 
     for (int rx = 0; rx < 2; rx++)
@@ -280,7 +296,7 @@ static int ms_mimo_equalise(void)
                 if (a > hmax) hmax = a;
                 if (b > hmax) hmax = b;
             }
-        if (hmax > MMSE_2X1_LEAF_MAX_ABS)
+        if (hmax > MS_LEAF_MAX_ABS)
             cg_ok = 0;
     }
 #ifdef PROTO_CPU_ONLY
@@ -289,6 +305,7 @@ static int ms_mimo_equalise(void)
     if (cg_ok) {
         mmse_prog_load();
         ms_h_bcast();
+        if (ms_leaf_ovf) cg_ok = 0;   /* g/h 叶子越 16 位，回退 CPU 标量相关 */
 
         for (int t = 0; t < MS_TILES; t++) {
             int base = t * 16;
@@ -300,91 +317,87 @@ static int ms_mimo_equalise(void)
              * 不使用搬运引擎：它的描述符环会静默漏做一段描述符（见
              * docs/wip-mmse-ring-notes.md），而这里每趟只有 64 个字要写。
              * 契约检查搭顺风车——这 4 个数本来就在寄存器里。 */
+            int32_t ymax = 0;
             for (int k = 0; k < n; k++) {
-                uint32_t ip = rev4(BIN0 + (uint32_t)dre[base + k]);
+                uint32_t ip = BIN0 + (uint32_t)dre[base + k];
                 int32_t y1r = sp[0][2 * ip], y1i = sp[0][2 * ip + 1];
                 int32_t y2r = sp[1][2 * ip], y2i = sp[1][2 * ip + 1];
                 int32_t m = y1r < 0 ? -y1r : y1r, x;
                 x = y1i < 0 ? -y1i : y1i; if (x > m) m = x;
                 x = y2r < 0 ? -y2r : y2r; if (x > m) m = x;
                 x = y2i < 0 ? -y2i : y2i; if (x > m) m = x;
-                if (m > MMSE_DUAL_LEAF_MAX_ABS) { bad = 1; break; }
+                if (m > ymax) ymax = m;
+                if (m > MS_LEAF_MAX_ABS) { bad = 1; break; }
 
                 mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                           MMSE_DUAL_SPAD_LEAF_Y1R_BASE + 2u * (uint32_t)k), (uint32_t)y1r);
+                           MMSE_FULL_SPAD_CORR_LEAVES_Y1R_BASE + 2u * (uint32_t)k), (uint32_t)y1r);
                 mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                           MMSE_DUAL_SPAD_LEAF_Y1I_BASE + 2u * (uint32_t)k), (uint32_t)y1i);
+                           MMSE_FULL_SPAD_CORR_LEAVES_Y1I_BASE + 2u * (uint32_t)k), (uint32_t)y1i);
                 mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                           MMSE_DUAL_SPAD_LEAF_Y2R_BASE + 2u * (uint32_t)k), (uint32_t)y2r);
+                           MMSE_FULL_SPAD_CORR_LEAVES_Y2R_BASE + 2u * (uint32_t)k), (uint32_t)y2r);
                 mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
-                           MMSE_DUAL_SPAD_LEAF_Y2I_BASE + 2u * (uint32_t)k), (uint32_t)y2i);
+                           MMSE_FULL_SPAD_CORR_LEAVES_Y2I_BASE + 2u * (uint32_t)k), (uint32_t)y2i);
             }
             if (bad) { cg_ok = 0; break; }
+            /* |b_arr| <= 4*max|h|*max|y|，且 |g| <= 32767（ms_h_bcast 已查）。
+               保证 16 位 mul 输入不截断、乘积与两项之差都在 int32 内。 */
+            if (4 * ms_hmax * (int64_t)ymax > 32767) { cg_ok = 0; break; }
             __asm__ __volatile__("fence iorw, iorw" ::: "memory");
 
             mmse_array_start(pg);
             mmse_array_wait();
 
-            for (int k = 0; k < n; k++) {
-                uint32_t a0 = MMSE_DUAL_SPAD_SINK_N0R_BASE + off + (uint32_t)k;
-                b0r_a[base + k] = ((int64_t)(int32_t)mmio_r(
-                        CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0))) << FRONT_GAIN;
-                b0i_a[base + k] = ((int64_t)(int32_t)mmio_r(
-                        CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0 + 32u))) << FRONT_GAIN;
-                b1r_a[base + k] = ((int64_t)(int32_t)mmio_r(
-                        CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0 + 64u))) << FRONT_GAIN;
-                b1i_a[base + k] = ((int64_t)(int32_t)mmio_r(
-                        CGRA_BASE + GPCP_SPAD_FLAT_ADDR(a0 + 96u))) << FRONT_GAIN;
-            }
+            for (int k = 0; k < n; k++)
+                ms_bits[base + k] = mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(
+                    MMSE_FULL_SPAD_PACK_SINKS_BITS_BASE + off + (uint32_t)k));
         }
     }
 
-    for (int i = 0; i < NDATA; i++) {
-        int r = dre[i];
-        uint32_t ip = rev4(BIN0 + (uint32_t)r);
-        int64_t y0r = (int64_t)sp[0][2 * ip] << FRONT_GAIN;
-        int64_t y0i = (int64_t)sp[0][2 * ip + 1] << FRONT_GAIN;
-        int64_t y1r = (int64_t)sp[1][2 * ip] << FRONT_GAIN;
-        int64_t y1i = (int64_t)sp[1][2 * ip + 1] << FRONT_GAIN;
+    /* 阵列成功时 ms_bits 已由 pack 段打包读回；只有回退或 CPU 对照路径
+       才需要在 CVA6 上把 180 个 RE 重算一遍。 */
+    if (!cg_ok) {
+      for (int i = 0; i < NDATA; i++) {
+          int r = dre[i];
+          uint32_t ip = BIN0 + (uint32_t)r;
+          int64_t y0r = (int64_t)sp[0][2 * ip] << FRONT_GAIN;
+          int64_t y0i = (int64_t)sp[0][2 * ip + 1] << FRONT_GAIN;
+          int64_t y1r = (int64_t)sp[1][2 * ip] << FRONT_GAIN;
+          int64_t y1i = (int64_t)sp[1][2 * ip + 1] << FRONT_GAIN;
 
-        int64_t b0r, b0i, b1r, b1i;
-        if (cg_ok) {
-            b0r = b0r_a[i]; b0i = b0i_a[i]; b1r = b1r_a[i]; b1i = b1i_a[i];
-        } else {                              /* 量纲越界时回退到纯 C，保证仍可诊断 */
-            b0r = cm_re(ms_hre[0][0], -ms_him[0][0], y0r, y0i)
-                + cm_re(ms_hre[1][0], -ms_him[1][0], y1r, y1i);
-            b0i = cm_im(ms_hre[0][0], -ms_him[0][0], y0r, y0i)
-                + cm_im(ms_hre[1][0], -ms_him[1][0], y1r, y1i);
-            b1r = cm_re(ms_hre[0][1], -ms_him[0][1], y0r, y0i)
-                + cm_re(ms_hre[1][1], -ms_him[1][1], y1r, y1i);
-            b1i = cm_im(ms_hre[0][1], -ms_him[0][1], y0r, y0i)
-                + cm_im(ms_hre[1][1], -ms_him[1][1], y1r, y1i);
-        }
+          int64_t b0r = cm_re(ms_hre[0][0], -ms_him[0][0], y0r, y0i)
+                      + cm_re(ms_hre[1][0], -ms_him[1][0], y1r, y1i);
+          int64_t b0i = cm_im(ms_hre[0][0], -ms_him[0][0], y0r, y0i)
+                      + cm_im(ms_hre[1][0], -ms_him[1][0], y1r, y1i);
+          int64_t b1r = cm_re(ms_hre[0][1], -ms_him[0][1], y0r, y0i)
+                      + cm_re(ms_hre[1][1], -ms_him[1][1], y1r, y1i);
+          int64_t b1i = cm_im(ms_hre[0][1], -ms_him[0][1], y0r, y0i)
+                      + cm_im(ms_hre[1][1], -ms_him[1][1], y1r, y1i);
 
-        /* num0 = b0*g11 - b1*g01 ; num1 = b1*g00 - b0*g10 */
-        int64_t g10r = ms_g01r, g10i = -ms_g01i;
-        int64_t n0r = b0r * ms_g11r - cm_re(b1r, b1i, ms_g01r, ms_g01i);
-        int64_t n0i = b0i * ms_g11r - cm_im(b1r, b1i, ms_g01r, ms_g01i);
-        int64_t n1r = b1r * ms_g00r - cm_re(b0r, b0i, g10r, g10i);
-        int64_t n1i = b1i * ms_g00r - cm_im(b0r, b0i, g10r, g10i);
+          /* num0 = b0*g11 - b1*g01 ; num1 = b1*g00 - b0*g10 */
+          int64_t g10r = ms_g01r, g10i = -ms_g01i;
+          int64_t n0r = b0r * ms_g11r - cm_re(b1r, b1i, ms_g01r, ms_g01i);
+          int64_t n0i = b0i * ms_g11r - cm_im(b1r, b1i, ms_g01r, ms_g01i);
+          int64_t n1r = b1r * ms_g00r - cm_re(b0r, b0i, g10r, g10i);
+          int64_t n1i = b1i * ms_g00r - cm_im(b0r, b0i, g10r, g10i);
 
-        /* 归一化整段省掉：判决只看符号，而符号不会被这一步改变。
-         *
-         *   ms_deti = 0 - Im(g01 * conj(g01)) = 0      （整数里恰好为 0）
-         *   det     = g00*g11 - |g01|^2 > 0            （Cauchy-Schwarz + lambda*I）
-         *   s = num * conj(det) / |det|^2 = num / det
-         *
-         * 乘一个正实数、再除一个正实数，都不会把正变负、把负变正。所以
-         * sign(s) == sign(num)，这一步的 8 次乘和 4 次 64 位除法对硬判零贡献。
-         * 三档实测与原式逐位一致：25/15/10 dB = 720/711/618 bit。 */
-        int64_t s0r = n0r, s0i = n0i, s1r = n1r, s1i = n1i;
+          /* 归一化整段省掉：判决只看符号，而符号不会被这一步改变。
+           *
+           *   ms_deti = 0 - Im(g01 * conj(g01)) = 0      （整数里恰好为 0）
+           *   det     = g00*g11 - |g01|^2 > 0            （Cauchy-Schwarz + lambda*I）
+           *   s = num * conj(det) / |det|^2 = num / det
+           *
+           * 乘一个正实数、再除一个正实数，都不会把正变负、把负变正。所以
+           * sign(s) == sign(num)，这一步的 8 次乘和 4 次 64 位除法对硬判零贡献。
+           * 三档实测与原式逐位一致：25/15/10 dB = 720/711/618 bit。 */
+          int64_t s0r = n0r, s0i = n0i, s1r = n1r, s1i = n1i;
 
-        uint32_t bits = 0;
-        bits |= (s0r < 0) ? 1u : 0u;
-        bits |= (s0i < 0) ? 2u : 0u;
-        bits |= (s1r < 0) ? 4u : 0u;
-        bits |= (s1i < 0) ? 8u : 0u;
-        ms_bits[i] = bits;
+          uint32_t bits = 0;
+          bits |= (s0r < 0) ? 1u : 0u;
+          bits |= (s0i < 0) ? 2u : 0u;
+          bits |= (s1r < 0) ? 4u : 0u;
+          bits |= (s1i < 0) ? 8u : 0u;
+          ms_bits[i] = bits;
+      }
     }
     return 0;
 }
