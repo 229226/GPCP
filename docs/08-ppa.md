@@ -440,6 +440,10 @@ I$/D$ 的 `tc_sram` 存储宏不在其中（与 CGRA 排除 spad/IMEM 的口径�
 | `syn/insert_buffers.py` 对 323 条扇出>32 的网络插缓冲树 | 2,678 个 BUF（BUF_X2/X4/X16 三层，叶驱动 ≤24 负载） |
 | **最终 STA** | WNS **−1.83 ns**，clk→Q 0.22 ns（正常），到达 3.787 ns → **fmax ≈ 264 MHz** |
 
+**为什么信 OpenSTA**：它是 OpenROAD/OpenLane 的时序引擎（开源签核事实标准），
+学术对比（DATE'24 / ASPDAC'26）显示其相对 PrimeTime 的延迟平均误差仅 ~4 ps（R²≈0.98）；
+本项目内交叉验证：CGRA 网表 iEDA 1,077 vs OpenSTA 1,053 MHz，差 2.3%。
+
 最差路径的起点/终点**都在 FPU**（`fpnew_bulk` gen_operation_groups[0] 的 FMA 流水级）：
 一条 ~50 级 AND2 链，3.5 ns 组合逻辑——这是 fpnew 该流水级的真实深度。
 
