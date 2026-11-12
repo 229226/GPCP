@@ -429,7 +429,14 @@ I$/D$ 的 `tc_sram` 存储宏不在其中（与 CGRA 排除 spad/IMEM 的口径�
 
 ### 9.3 频率
 
-综合到 500 MHz 目标后，iEDA 对 CPU 逻辑网表给出最差 5 条 setup 路径（`sta.log`）：
+CVA6 的综合有两个变体，结果差别很大，**必须分开说**：
+
+| 变体 | `noc_resp_i` | 逻辑单元 | iEDA 能 STA？ |
+|---|---|---:|---|
+| **完整核** | 接真实输入 | **321,474**（含 FPU/RF/ALU） | 否（见 §9.4） |
+| **控制/流水线逻辑** | 接 0（常量传播剪掉 RF/ALU 数据通路） | 4,323 | 是 |
+
+控制/流水线变体（4.3k cells）在 500 MHz 目标下，iEDA 给出最差 5 条 setup 路径：
 
 | 端点 | Path Delay | Slack | Freq(MHz) |
 |---|---:|---:|---:|
@@ -439,25 +446,28 @@ I$/D$ 的 `tc_sram` 存储宏不在其中（与 CGRA 排除 spad/IMEM 的口径�
 | `issue_stage_i.fwd_q[470]` | 0.970 ns | +0.996 | 995.53 |
 | `issue_stage_i.i_scoreboard.mem_q[7]` | 0.970 ns | +0.996 | 995.53 |
 
-**CPU 逻辑 pre-layout fmax ≈ 0.99 GHz**（关键路径在取指队列/发射级，均为真实控制路径）。
+**控制路径 pre-layout fmax ≈ 0.99 GHz**（关键路径在取指队列/发射级）。
+注意：这是**不含 ALU/FPU 数据通路**的控制逻辑；完整 CVA6 的经典关键路径是
+"寄存器堆读 → ALU → 写回"以及 FPU 的 FMA，通常比控制路径更慢。
 
-### 9.4 与 CGRA 的对照
+### 9.4 与 CGRA 的对照（口径不对等，务必看注）
 
-| | CGRA | CPU (CVA6) |
-|---|---:|---:|
-| 逻辑单元 | 32,751 | 321,474 |
-| 逻辑面积 | 54,148 µm² | 492,919 µm² |
-| **pre-layout fmax** | **1,077 MHz** | **989 MHz** |
-| f_CPU / f_CGRA | — | **0.92** |
+| | CGRA | CPU 控制逻辑 | CPU 完整核 |
+|---|---:|---:|---:|
+| 逻辑单元 | 32,751 | 4,323 | 321,474 |
+| 逻辑面积 | 54,148 µm² | — | 492,919 µm² |
+| **pre-layout fmax** | **1,077 MHz** | **989 MHz** | **未测出** |
 
-两者在同一 45 nm 库、同一目标、同一 ABC 配方下都落在 **~1 GHz**，相差约 8%。
+**CGRA 的 1,077 MHz 是含 MAC 数据通路的完整阵列逻辑；CPU 的 989 MHz 只有控制逻辑。**
+两者口径并不对等，不能直接说"CPU 比 CGRA 慢 8%"。完整 CPU（含 ALU/FPU）一定更慢，
+按 CVA6 类核在 45 nm 的经验，量级在 **0.6–0.8 GHz**（未实测，只作数量级参考）。
 
-> **口径与局限（引用时必须带上）**
-> - 都是 **pre-layout**（无布线、无时钟树、理想时钟）；45 nm 上布线后经验值约 0.5–0.65×；
-> - CGRA 侧排除 spad/IMEM（见 §3.2），CPU 侧排除 I$/D$ 的 `tc_sram` 宏，口径一致；
-> - CPU 的 989 MHz 来自**控制/流水线逻辑**网表（`noc_resp_i` 接到真实输入后综合，
->   iEDA STA 完成）。完整 321k-cell 核（含 FPU）**面积**能出，但项目自带的 iEDA 的
->   Verilog 解析/链接器吃不下这种"宽结构体端口 + 别名 assign"的网表
->   （`link_design` 阶段报 `the left port is not exist`；`yosys-abc` 亦在 128 位常量处断言），
->   因此**全核含 FPU 的 fmax 暂缺**。按 FPU 组合路径的经验，全核 fmax 可能再低 10–25%，
->   但这不改变"CPU 与 CGRA 同量级（~1 GHz）"的结论。
+> **为什么全核测不出（工具限制，可复现）**
+> - 项目自带的 iEDA 的 Verilog 解析器不接受"拼接/范围 LHS 的 assign"与宽二进制常量；
+>   用位爆破脚本消掉后能解析，但在 `link_design` 阶段仍报 `the left port is not exist`
+>   （宽结构体端口 + 别名 assign）。
+> - `yosys-abc` 直接读同一网表也在 `128'b...` 常量处断言失败。
+> - `ltp`（拓扑最长路）对 Nangate 单元网表返回 `length=0`（不认识单元引脚），也不可用。
+> - 结论：**全核含 FPU 的 fmax 需要 OpenSTA / OpenROAD**；本轮只给出控制逻辑的 989 MHz。
+> - 其余口径：都是 pre-layout（无布线/时钟树/理想时钟），45 nm 布线后经验值约 0.5–0.65×；
+>   CGRA 排除 spad/IMEM（§3.2），CPU 排除 I$/D$ 的 `tc_sram` 宏。
