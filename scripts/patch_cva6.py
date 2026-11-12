@@ -13,6 +13,10 @@ Changes:
   2. core/cva6.sv        : new `mtime_i` port + connect to csr_regfile
   3. corev_apu/src/ariane.sv : new `mtime_i` port + connect to cva6
   4. (the SoC connects CLINT mtime; see rtl/soc/gpcp_soc.sv)
+  5. core/cva6_rvfi_probes.sv : set the RVFI probe `type` parameter defaults to
+     the real struct types (mirroring ariane.sv) instead of `logic`, so the
+     yosys-slang frontend can elaborate the module body.  RVFI is debug-only
+     observation logic and does not affect the datapath frequency.
 
 Usage: python3 scripts/patch_cva6.py
 """
@@ -76,6 +80,30 @@ def main() -> int:
           "    .time_irq_i           ( time_irq_i                ),\n"
           "    .mtime_i              ( mtime_i                   ),",
           "    .mtime_i              ( mtime_i")
+
+    # RVFI probe default types.  The yosys-slang frontend elaborates a module
+    # body against its DEFAULT parameter types; cva6_rvfi_probes's defaults are
+    # `logic`, but its body does member access on rvfi_probes_instr_t /
+    # rvfi_probes_csr_t / rvfi_probes_t.  The SoC connects ariane with the real
+    # types, so this only affects standalone PPA synthesis with slang.  RVFI is
+    # debug-only observation logic and has no bearing on the datapath frequency.
+    patch(CVA6 / "core" / "cva6_rvfi_probes.sv",
+          "module cva6_rvfi_probes\n  import ariane_pkg::*;\n#(",
+          "`include \"rvfi_types.svh\"\n"
+          "module cva6_rvfi_probes\n  import ariane_pkg::*;\n#(",
+          "GPCP: RVFI probe include")
+
+    patch(CVA6 / "core" / "cva6_rvfi_probes.sv",
+          "    parameter type rvfi_probes_instr_t = logic,\n"
+          "    parameter type rvfi_probes_csr_t = logic,\n"
+          "    parameter type rvfi_probes_t = logic",
+          "    parameter type rvfi_probes_instr_t = `RVFI_PROBES_INSTR_T(CVA6Cfg),  // GPCP\n"
+          "    parameter type rvfi_probes_csr_t = `RVFI_PROBES_CSR_T(CVA6Cfg),  // GPCP\n"
+          "    parameter type rvfi_probes_t = struct packed {  // GPCP\n"
+          "      logic        csr;\n"
+          "      rvfi_probes_instr_t instr;\n"
+          "    }",
+          "GPCP: RVFI probe real types")
 
     print("done")
     return 0

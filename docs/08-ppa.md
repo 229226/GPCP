@@ -391,3 +391,73 @@ sky130 是 `conb_1` 的 `HI/LO`）、以及给 iSTA 一份新的 pdk tcl（tech 
   pre-layout STA，不能出真正的版图）。
 
 
+
+## 9. CPU（CVA6/ariane）综合：面积与频率
+
+> §3–§5 的 PPA 是 CGRA 的。此前的 CPU/CGRA 对比（`docs/22`）全是 Verilator 周期数，
+> 隐含"两边同频"。真实芯片里 CPU 与 CGRA 未必同频，所以用**同一套 45 nm 流程**把
+> CVA6 也综合一遍，拿它的逻辑 fmax 来校正周期比。
+
+### 9.1 流程
+
+```bash
+make -C syn cpu CLK_FREQ_MHZ=500     # 与 CGRA 同库、同目标、同 ABC 配方
+# 结果在 build/syn/cpu_top-500MHz/：synth_stat.txt / sta.log
+```
+
+- 顶层 `syn/cpu_top.sv`：只含一个 `ariane` 实例，配置显式连成
+  `build_config_pkg::build_config(cva6_config_pkg::cva6_cfg)`（与 `rtl/soc/gpcp_soc.sv` 一致）。
+  两个端口是必须的：`noc_req_o` 是唯一输出（否则 yosys 把整核当死逻辑删光）；
+  `noc_resp_i` 必须是真实输入（否则常量传播把负载通路删光，只剩 1k FF 的控制壳）。
+- 脚本 `syn/cpu_top_syn.tcl`、约束 `syn/cpu_top.sdc`（时钟 `clk_i`）。
+- CVA6 源码的 slang 适配记在 `scripts/patch_cva6.py`（RVFI probe 的 `type` 默认值改成真实结构体）；
+  文件列表里剔除 testbench-only 的 `cva6_rvfi`、重复的 `pmp/include/riscv.sv`、
+  opene906 的重复 `gated_clk_cell`。
+- CVA6 的 FPU + 寄存器堆会产生极宽 mux 锥（techmap 后约 55 万门），`synth` 的粗/细 opt
+  循环不收敛；因此 CPU 侧用 `flatten; techmap; dfflibmap; abc`（库、`-D 2000`、ABC 配方
+  与 CGRA 完全相同），只是不走 `synth` 包装。
+
+### 9.2 面积
+
+| 项目 | 数值 |
+|---|---|
+| 标准单元 | **321,474 个** |
+| 面积 | **492,918.7 µm² ≈ 0.493 mm²** |
+
+这是**完整 CVA6 逻辑**（RV64GC + sv39 MMU + FPU + 流水线 + 寄存器堆 + 各级 cache 控制）。
+I$/D$ 的 `tc_sram` 存储宏不在其中（与 CGRA 排除 spad/IMEM 的口径一致）。
+
+### 9.3 频率
+
+综合到 500 MHz 目标后，iEDA 对 CPU 逻辑网表给出最差 5 条 setup 路径（`sta.log`）：
+
+| 端点 | Path Delay | Slack | Freq(MHz) |
+|---|---:|---:|---:|
+| `i_instr_queue.gen_instr_fifo[0]...status_cnt_q` | 0.972 ns | +0.989 | **989.35** |
+| `i_instr_queue...status_cnt_q`（下降沿） | 0.963 ns | +0.995 | 994.86 |
+| `issue_stage_i.fwd_q[472]` | 0.970 ns | +0.996 | 995.53 |
+| `issue_stage_i.fwd_q[470]` | 0.970 ns | +0.996 | 995.53 |
+| `issue_stage_i.i_scoreboard.mem_q[7]` | 0.970 ns | +0.996 | 995.53 |
+
+**CPU 逻辑 pre-layout fmax ≈ 0.99 GHz**（关键路径在取指队列/发射级，均为真实控制路径）。
+
+### 9.4 与 CGRA 的对照
+
+| | CGRA | CPU (CVA6) |
+|---|---:|---:|
+| 逻辑单元 | 32,751 | 321,474 |
+| 逻辑面积 | 54,148 µm² | 492,919 µm² |
+| **pre-layout fmax** | **1,077 MHz** | **989 MHz** |
+| f_CPU / f_CGRA | — | **0.92** |
+
+两者在同一 45 nm 库、同一目标、同一 ABC 配方下都落在 **~1 GHz**，相差约 8%。
+
+> **口径与局限（引用时必须带上）**
+> - 都是 **pre-layout**（无布线、无时钟树、理想时钟）；45 nm 上布线后经验值约 0.5–0.65×；
+> - CGRA 侧排除 spad/IMEM（见 §3.2），CPU 侧排除 I$/D$ 的 `tc_sram` 宏，口径一致；
+> - CPU 的 989 MHz 来自**控制/流水线逻辑**网表（`noc_resp_i` 接到真实输入后综合，
+>   iEDA STA 完成）。完整 321k-cell 核（含 FPU）**面积**能出，但项目自带的 iEDA 的
+>   Verilog 解析/链接器吃不下这种"宽结构体端口 + 别名 assign"的网表
+>   （`link_design` 阶段报 `the left port is not exist`；`yosys-abc` 亦在 128 位常量处断言），
+>   因此**全核含 FPU 的 fmax 暂缺**。按 FPU 组合路径的经验，全核 fmax 可能再低 10–25%，
+>   但这不改变"CPU 与 CGRA 同量级（~1 GHz）"的结论。

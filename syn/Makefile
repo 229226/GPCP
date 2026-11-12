@@ -7,7 +7,8 @@
 # OpenROAD-flow-scripts' flow/platforms/nangate45 (Apache-2.0).
 #
 #   make tools                     # one-off: fetch yosys + iEDA + PDK (~2.3 GB)
-#   make -C syn sta CLK_FREQ_MHZ=500
+#   make -C syn sta CLK_FREQ_MHZ=500   # CGRA (cgra_top)
+#   make -C syn cpu CLK_FREQ_MHZ=500   # CPU  (cva6/ariane)
 
 ROOT      := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 EDA_HOME  ?= $(ROOT)/third_party/eda
@@ -25,15 +26,22 @@ NETLIST   := $(OUT)/$(DESIGN).netlist.syn.v
 export LIB OUT CLK_FREQ_MHZ
 export ABC_D := $(shell echo $$((1000 / $(CLK_FREQ_MHZ))))
 
-.PHONY: all tools syn sta clean show
+.PHONY: all tools syn sta clean show cpu
 all: sta
+
+# CPU (CVA6/ariane) PPA: synthesize the core logic fabric and report its
+# pre-layout fmax.  OUT, NETLIST, the synthesis script and the sdc are all
+# derived from DESIGN at parse time, so DESIGN must be set on the command line:
+# re-invoke make instead of using a target-specific variable.
+cpu:
+	$(MAKE) sta DESIGN=cpu_top CLK_FREQ_MHZ=$(CLK_FREQ_MHZ)
 
 tools:
 	bash $(ROOT)/tools/fetch_eda.sh
 
 syn: $(LIB)
 	mkdir -p $(OUT)
-	env -u LD_LIBRARY_PATH $(YOSYS) -m slang -c $(ROOT)/syn/cgra_syn.tcl -l $(OUT)/yosys.log
+	env -u LD_LIBRARY_PATH $(YOSYS) -m slang -c $(ROOT)/syn/$(DESIGN)_syn.tcl -l $(OUT)/yosys.log
 
 sta: syn
 	env -u LD_LIBRARY_PATH CLK_FREQ_MHZ=$(CLK_FREQ_MHZ) \
