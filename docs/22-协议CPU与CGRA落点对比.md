@@ -326,3 +326,7 @@ python3 tools/proto_compare.py --scenario nr_pdsch \
 > 局限：两个 fmax 都是 pre-layout（布线后约 0.5–0.65×，该系数对两者近似相同，比值受
 > 影响小）。CPU 的 264 MHz 依赖手工缓冲树，真实 P&R 可能到 ~300 MHz（比值 3.5×，
 > `nr_mimo` ~78×）；但量级不变：**CPU 频率显著低于 CGRA，纯周期比是时间比的低估**。
+
+> 更进一步的对比：把对比对象从 CPU 换成**最新研究中的通信处理器**——专用基带 ASIC
+> （BayesBB，ISSCC'24/JSSC'25）、向量核（Ara BSoC）、以及**同架构 CGRA**（NUS PACE，
+> HotChips'24，硅片实测 753 MHz/26.4 MOPS/mW）——见 `docs/24`。
