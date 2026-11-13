@@ -327,6 +327,7 @@ python3 tools/proto_compare.py --scenario nr_pdsch \
 > 影响小）。CPU 的 264 MHz 依赖手工缓冲树，真实 P&R 可能到 ~300 MHz（比值 3.5×，
 > `nr_mimo` ~78×）；但量级不变：**CPU 频率显著低于 CGRA，纯周期比是时间比的低估**。
 
-> 更进一步的对比：把对比对象从 CPU 换成**最新研究中的通信处理器**——专用基带 ASIC
-> （BayesBB，ISSCC'24/JSSC'25）、向量核（Ara BSoC）、以及**同架构 CGRA**（NUS PACE，
-> HotChips'24，硅片实测 753 MHz/26.4 MOPS/mW）——见 `docs/24`。
+> 更进一步的对比：把锚点从 CPU 换成**最新研究中的 CGRA 架构通信处理器**
+> （清华 JSSC'20 动态 CGRA 基带处理器、Michigan DAP JSSC'25 12nm 256 核、
+> 海南大学 TCAS-I'26 16nm ASIP+动态 CGRA、Tampere JSPS'26 五波形统一 CGRA），
+> 并下沉到**算子级加速差异**——见 `docs/24`（2026-11-13 重做版）。
