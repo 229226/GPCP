@@ -20,38 +20,9 @@ _KERNEL_FFT = (256, 1024, 4096)
 
 
 def _derive(cfg):
-    """把协议配置推导成波形级参数。v1 只推导"带宽决定"的那几个量；
-    传输块大小/码块数等需要 38.214 表，留到阶段 1（见 docs/20 §7）。"""
-    bw = cfg.get("bw_mhz")
-    scs = cfg.get("scs_khz")
-    d = {}
-    # WiFi（802.11be）直接给 FFT 点数/CP/数据子载波：这些是协议 numerology，
-    # 不是芯片参数；不在 3GPP 的带宽表里。
-    if "fft_points" in cfg:
-        n = int(cfg["fft_points"])
-        d["n_fft_min"] = n
-        d["cp_len"] = int(cfg.get("cp_len", int(round(n * 0.0703125))))
-        d["n_subcarriers"] = int(cfg.get("n_data_subcarriers", 0))
-    if bw is not None and scs is not None:
-        key = (bw, scs)
-        if key not in _N_RB:
-            raise ValueError(
-                "cfg: 带宽/子载波间隔组合 %s 未登记（38.101-1），请先补 _N_RB 表" % (key,))
-        n_rb = _N_RB[key]
-        need = n_rb * 12
-        d["n_rb"] = n_rb
-        d["n_subcarriers"] = need
-        # 最小 FFT 点数（取 2 的幂）
-        n = 1
-        while n < need:
-            n <<= 1
-        d["n_fft_min"] = n
-        # 常规 CP ≈ 7% 符号（本工程算子库按 288/4096 的口径）
-        d["cp_len"] = int(round(n * 0.0703125))
-    for k in ("n_id", "n_rnti", "qm", "al", "reg", "e_bits", "a_bits"):
-        if k in cfg:
-            d[k] = cfg[k]
-    return d
+    """协议参数派生；表与规则由 numerology 插件提供（v1 字节兼容）。"""
+    from wlbench import numerology
+    return numerology.derive(cfg)
 
 
 class Tensor:

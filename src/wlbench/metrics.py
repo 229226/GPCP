@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""The evaluation contract: backend reports clock_hz / cycles / correct,
+"""Evaluation contract: a backend reports clock_hz / cycles / correct,
 wlbench decides whether the protocol timing requirement was met.
 
-This module contains no architecture concepts.  A backend may be a CPU, a CGRA,
-an FPGA, a GPU or a pure-software reference - all of them report the same three
-generic quantities.  Time budgets live in the workload bundle (ms); cycle
-budgets are derived here from the backend's clock_hz.
+No architecture concepts live here.  Time budgets are in ms and live in the
+workload bundle; cycle budgets are derived from the backend's clock_hz.
+Continuous-arrival on-time rate reuses load.profile()/load.simulate() so it
+stays identical to the original GPCP timeline model.
 """
 import json
 import os
+import re
+
+from wlbench import load as LOAD
 
 METRICS_SCHEMA = {
     "schema": "wlbench-metrics/1",
@@ -35,6 +38,12 @@ METRICS_SCHEMA = {
     },
 }
 
+# Architecture-specific words a backend must never put into a metric key.
+FORBIDDEN = ("spad", "imem", "microcode", "array_runs", "pe_array",
+             "bank_conflict", "tiling", "context_page", "planned_runs",
+             "dma_beats", "proto_where")
+FORBIDDEN_RE = re.compile("|".join(re.escape(w) for w in FORBIDDEN), re.I)
+
 
 def load_json(path):
     with open(path, encoding="utf-8") as f:
@@ -42,22 +51,32 @@ def load_json(path):
 
 
 def validate_metrics(m):
+    """Validate the generic contract and reject architecture leakage."""
+    if not isinstance(m, dict):
+        raise ValueError("metrics must be an object")
     missing = [k for k in METRICS_SCHEMA["required"] if k not in m]
     if missing:
         raise ValueError("metrics missing required fields: %s" % missing)
-    if int(m["clock_hz"]) <= 0:
-        raise ValueError("clock_hz must be positive")
+    if not isinstance(m["clock_hz"], int) or m["clock_hz"] <= 0:
+        raise ValueError("clock_hz must be a positive integer")
+    if not isinstance(m["total_cycles"], int) or m["total_cycles"] < 0:
+        raise ValueError("total_cycles must be a non-negative integer")
+    if not isinstance(m["correct"], bool):
+        raise ValueError("correct must be a boolean")
+    for key in m:
+        if FORBIDDEN_RE.search(key):
+            raise ValueError("architecture-specific metric key rejected: %s" % key)
+    for st in m.get("stages", []):
+        for need in ("id", "op", "cycles"):
+            if need not in st:
+                raise ValueError("stage missing %s" % need)
+        if FORBIDDEN_RE.search(" ".join(str(k) for k in st)):
+            raise ValueError("architecture-specific stage key rejected")
     return m
 
 
 def evaluate(bundle_dir, metrics):
-    """Pure function: workload bundle + backend metrics -> timing verdict.
-
-    Returns on_time, wall time, derived cycle budget and a per-stage gap table.
-    Continuous-arrival on-time rate is exposed as `timeline` only when the
-    workload declares a traffic model; that part is aligned with GPCP load.py
-    in P2.
-    """
+    """Pure function: workload bundle + backend metrics -> timing verdict."""
     m = validate_metrics(metrics)
     manifest = load_json(os.path.join(bundle_dir, "manifest.json"))
     budget = manifest.get("budget") or {}
@@ -82,11 +101,24 @@ def evaluate(bundle_dir, metrics):
         })
 
     traffic = manifest.get("traffic") or {}
-    arrival = traffic.get("arrival", "single")
-    timeline_note = (
-        "single-arrival verdict only; continuous timeline is aligned in P2"
-        if arrival in ("single", "none", None, "") else
-        "continuous arrival declared; timeline aligned with load.py in P2"
+    slots = int(traffic.get("slots", 0) or 0)
+    counts = LOAD.profile(traffic, slots) if (slots and budget_cycles) else []
+    timeline = None
+    if counts:
+        rows, late = LOAD.simulate(total, counts, budget_cycles)
+        timeline = {
+            "slots": len(counts),
+            "cost_per_job": total,
+            "budget_cycles": budget_cycles,
+            "on_time_rate": (len(counts) - late) / float(len(counts)),
+            "late_slots": late,
+            "worst_backlog": max((r["backlog"] for r in rows), default=0),
+            "rows": rows,
+        }
+
+    primary_on_time = (
+        bool(timeline and timeline["on_time_rate"] >= 1.0)
+        if timeline else on_time
     )
 
     return {
@@ -101,7 +133,8 @@ def evaluate(bundle_dir, metrics):
         "wall_ms": wall_ms,
         "overrun_x": (total / budget_cycles) if budget_cycles else None,
         "on_time": on_time,
+        "primary_on_time": primary_on_time,
         "correct": bool(m["correct"]),
         "stages": stages,
-        "timeline": timeline_note,
+        "timeline": timeline,
     }
