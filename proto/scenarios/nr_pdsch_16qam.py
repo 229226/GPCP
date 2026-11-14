@@ -7,11 +7,11 @@ from proto.hll import scenario
 
 S = scenario("nr_pdsch_16qam", rat="nr", direction="dl")
 
-S.cfg(bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
+S.cfg(oversample=2, bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
       a_bits=80, e_bits=720, qm=4, layers=1, nsym=2)
 S.traffic(arrival="periodic", jobs_per_slot=1, slots=40, util=1.0)
 
-wave = S.received(form="td", length=2 * 2 * (288 + 4096) + 7)
+wave = S.received(form="td", length=S.sym_len(2, 7))
 ref = S.dmrs(type="type1", n_id=1, l=2)
 h = S.estimate(wave, ref)
 llr = S.equalise_demap(wave, h, qm=4)

@@ -362,16 +362,19 @@ def lower(ir, target):
             st["impl"] = "ref_%s" % (nd["params"].get("type") or "generic")
 
         elif op == "estimate":
-            # 自环发射（有 ofdm_modulate、但没有 ofdm_demodulate）时，阶段实现
-            # 在 estimate 内部做接收 FFT；计划必须把这份阵列工作算进去。
-            has_demod = any(n["op"] == "ofdm_demodulate" and n["id"] < nd["id"]
-                            for n in ir["nodes"])
-            has_mod = any(n["op"] == "ofdm_modulate" and n["id"] < nd["id"]
-                          for n in ir["nodes"])
-            has_td = any(n["op"] == "received"
-                         and str(n["params"].get("form") or "") in ("td", "td2", "td4")
-                         and n["id"] < nd["id"] for n in ir["nodes"])
-            if (not has_demod) and (has_mod or has_td) and need is not None:
+            # 这个动词是否内含一次接收 FFT，由 IR 的 params.includes_fft 声明
+            # （语义归 wlbench）。旧 IR 没这个字段时才退回图上推断。
+            flag = nd["params"].get("includes_fft")
+            if flag is None:
+                has_demod = any(n["op"] == "ofdm_demodulate" and n["id"] < nd["id"]
+                                for n in ir["nodes"])
+                has_mod = any(n["op"] == "ofdm_modulate" and n["id"] < nd["id"]
+                              for n in ir["nodes"])
+                has_td = any(n["op"] == "received"
+                             and str(n["params"].get("form") or "") in ("td", "td2", "td4")
+                             and n["id"] < nd["id"] for n in ir["nodes"])
+                flag = (not has_demod) and (has_mod or has_td)
+            if flag and need is not None:
                 cand, cands = fft_candidates(need, cp_len)
                 if cand is None:
                     st["where"] = "control-core"

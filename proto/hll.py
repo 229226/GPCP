@@ -25,6 +25,12 @@ def _derive(cfg):
     bw = cfg.get("bw_mhz")
     scs = cfg.get("scs_khz")
     d = {}
+    # oversample：传输带宽配置可以按 1/2/4 倍最小 FFT 采样。这是协议参数
+    # （20 MHz@15 kHz 最少 2048 点，2 倍过采样即 4096 点 / 30.72 Msps），
+    # 不是"因为某套镜像只有 4096 点"——那样等于把硬件抄进协议。
+    ov = int(cfg.get("oversample", 1) or 1)
+    if ov not in (1, 2, 4):
+        raise ValueError("cfg: oversample 只支持 1/2/4")
     # WiFi（802.11be）直接给 FFT 点数/CP/数据子载波：这些是协议 numerology，
     # 不是芯片参数；不在 3GPP 的带宽表里。
     if "fft_points" in cfg:
@@ -45,9 +51,11 @@ def _derive(cfg):
         n = 1
         while n < need:
             n <<= 1
-        d["n_fft_min"] = n
-        # 常规 CP ≈ 7% 符号（本工程算子库按 288/4096 的口径）
-        d["cp_len"] = int(round(n * 0.0703125))
+        d["n_fft_min"] = n * ov
+        # 常规 CP ≈ 7% 符号；过采样时 CP 同步放大
+        d["cp_len"] = int(round(n * 0.0703125)) * ov
+    if ov != 1:
+        d["oversample"] = ov
     for k in ("n_id", "n_rnti", "qm", "al", "reg", "e_bits", "a_bits"):
         if k in cfg:
             d[k] = cfg[k]
@@ -152,8 +160,19 @@ class Scenario:
     def channel(self, wave, model="awgn", **kw):
         return self._node("channel", [wave], "y", model=model, **kw)
 
-    def estimate(self, y, ref):
-        return self._node("estimate", [y, ref], "h")
+    def estimate(self, y, ref, includes_fft=None):
+        """信道估计。`includes_fft` 写进 IR：输入是时域样本时，本动词内部
+        含一次接收 FFT。语义由场景声明，后端不再从图上推断。"""
+        if includes_fft is None:
+            includes_fft = not any(n["op"] == "ofdm_demodulate" for n in self.nodes)
+        return self._node("estimate", [y, ref], "h",
+                          includes_fft=bool(includes_fft))
+
+    def sym_len(self, nsym=1, extra=0):
+        """nsym 个 OFDM 符号的时域样本数（I/Q 交织的 32-bit 字数）。"""
+        d = self.derived
+        return (2 * int(nsym) * (int(d.get("cp_len", 0)) + int(d.get("n_fft_min", 0)))
+                + int(extra))
 
     def equalise_demap(self, y, h, qm=None):
         return self._node("equalise_demap", [y, h], "llr",

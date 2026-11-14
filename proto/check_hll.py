@@ -25,7 +25,11 @@ VERBS = {
     "ofdm_demodulate", "channel", "estimate", "equalise_demap", "mimo_equalise",
     "decode", "expect", "budget",
 }
-ALLOWED_CALLS = {"scenario"} | VERBS
+ALLOWED_CALLS = {"scenario", "sym_len"} | VERBS
+
+# 波形尺寸只能由 derived 决定（S.sym_len）；写死就等于把某个后端已有的
+# FFT 镜像抄进协议。PRACH/PSS 这类短序列有自己的长度，不受限。
+HW_LITERALS = {4096, 2048, 1024, 288, 144}
 ALLOWED_BUILTINS = {"len", "min", "max", "range", "int", "bool", "float", "str"}
 
 ALLOWED_STMT = (ast.Assign, ast.For, ast.If, ast.Expr, ast.Pass)
@@ -98,6 +102,15 @@ class Checker(ast.NodeVisitor):
             name = None
         if name and name not in ALLOWED_CALLS and name not in ALLOWED_BUILTINS:
             self.err(node, "不允许调用 %s()（可用动词见 docs/20 §2）" % name)
+        if name == "received":
+            import ast as _ast
+            for kw in node.keywords:
+                for lit in _ast.walk(kw.value):
+                    if isinstance(lit, _ast.Constant) and lit.value in HW_LITERALS:
+                        self.err(node, "received() 里写死了 %r：波形尺寸必须由 "
+                                       "cfg/oversample 推导，用 S.sym_len(...)"
+                                 % (lit.value,))
+                        break
         self.generic_visit(node)
 
     # ------------------------------------------------------------ 标识符

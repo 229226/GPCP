@@ -7,17 +7,17 @@ from proto.hll import scenario
 
 S = scenario("nr_pdsch_harq", rat="nr", direction="dl")
 
-S.cfg(bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
+S.cfg(oversample=2, bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
       a_bits=80, e_bits=720, qm=2, rv=(0, 2), harq_tx=2, nsym=2)
 S.traffic(arrival="periodic", jobs_per_slot=1, slots=40, util=1.0)
 
-w0 = S.received(form="td", length=2 * (288 + 4096) * 2)
+w0 = S.received(form="td", length=S.sym_len(2))
 ref = S.dmrs(type="type1", n_id=1, l=2)
 g0 = S.ofdm_demodulate(w0)
 h0 = S.estimate(g0, ref)
 l0 = S.equalise_demap(g0, h0, qm=2)
 
-w1 = S.received(form="td", length=2 * (288 + 4096) * 2)
+w1 = S.received(form="td", length=S.sym_len(2))
 g1 = S.ofdm_demodulate(w1)
 h1 = S.estimate(g1, ref)
 l1 = S.equalise_demap(g1, h1, qm=2)

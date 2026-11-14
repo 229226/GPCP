@@ -3,11 +3,11 @@ from proto.hll import scenario
 
 S = scenario("nr_pusch", rat="nr", direction="ul")
 
-S.cfg(bw_mhz=20, scs_khz=15, n_id=0x1234, n_rnti=0x1234, a_bits=80, e_bits=720,
+S.cfg(oversample=2, bw_mhz=20, scs_khz=15, n_id=0x1234, n_rnti=0x1234, a_bits=80, e_bits=720,
       qm=2, rv=0, nsym=2, snr_db=20, seed=1)
 S.traffic(arrival="periodic", jobs_per_slot=1, slots=40, util=1.0)
 
-wave = S.received(form="td", length=2 * 2 * (288 + 4096) + 1)
+wave = S.received(form="td", length=S.sym_len(2, 1))
 ref = S.dmrs(type="pusch", n_id=0x1234, l=0)
 grid = S.ofdm_demodulate(wave)
 h = S.estimate(grid, ref)

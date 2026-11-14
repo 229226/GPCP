@@ -7,11 +7,11 @@ from proto.hll import scenario
 
 S = scenario("nr_csi", rat="nr", direction="dl")
 
-S.cfg(bw_mhz=20, scs_khz=15, n_id=1, csi_density=3, n_csi_rs=80,
+S.cfg(oversample=2, bw_mhz=20, scs_khz=15, n_id=1, csi_density=3, n_csi_rs=80,
       snr_db=20, seed=1)
 S.traffic(arrival="periodic", jobs_per_slot=1, slots=40, util=1.0)
 
-wave = S.received(form="td", length=2 * (288 + 4096))
+wave = S.received(form="td", length=S.sym_len(1))
 ref = S.dmrs(type="csi_rs", n_id=1, l=0, density=3)
 grid = S.ofdm_demodulate(wave)
 report = S.measure(grid, ref, report="cqi")
