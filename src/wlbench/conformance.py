@@ -13,6 +13,7 @@ import glob
 import json
 import os
 import re
+import sys
 import tempfile
 
 from wlbench import load as LOAD
@@ -102,6 +103,19 @@ def run(root=ROOT):
                          if r["timeline"] else "no timeline"))
     import shutil
     shutil.rmtree(d, ignore_errors=True)
+
+    demo = os.path.join(root, "examples", "reference_backend.py")
+    if os.path.exists(demo):
+        import subprocess
+        r = subprocess.run([sys.executable, demo, "--scenario", "nr_mimo"],
+                           capture_output=True, text=True)
+        lines = (r.stdout or r.stderr).strip().splitlines()
+        checks.append(_check("demo backend attaches through metrics contract",
+                             r.returncode == 0,
+                             lines[-1] if lines else "no output"))
+    else:
+        checks.append(_check("demo backend attaches through metrics contract",
+                             False, "examples/reference_backend.py missing"))
 
     return checks
 

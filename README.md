@@ -32,6 +32,7 @@ python3 -m wlbench.cli evaluate \
 python3 -m wlbench.cli sweep --scenario mmse_scalable \
   --set layers=2,4,8 --set rx=2,4,8
 python3 -m unittest discover -s tests -v
+make ci                                  # everything above, one command
 ```
 
 If `~/.local/bin` is on PATH, the `wlbench` console script can be used instead
@@ -54,6 +55,12 @@ src/wlbench/
   conformance.py    backend conformance suite
   sweep.py          parameter matrix + stale-golden detection
   cli.py            build / verify / evaluate / conformance / sweep
+docs/
+  CONTRACT.md       bundle / metrics / evaluation schemas + boundary rules
+  INTEGRATION.md    how a new backend attaches, checklist, common mistakes
+examples/
+  reference_backend.py   ~60-line demo backend (synthetic cycles, interface only)
+scripts/ci.sh       build / verify / conformance / tests / sweep / demo
 regression/
   lock.json         frozen sha256 of all 17 scenarios' artifacts
   baseline/         the exact bytes the current GPCP toolchain produces
@@ -76,7 +83,14 @@ The frozen 2x2 `nr_mimo` model is **not** parameterised (its channel and data
 sizes are hard-coded). Sweeping MIMO size therefore uses `mmse_scalable`,
 a separate workload. No existing scenario or reference model was modified.
 
-- GPCP is untouched. It will consume these bundles via `backend/gpcp/` in P4.
+- **P4** GPCP consumed the bundles via a separate `backend/gpcp/` adapter
+  (69/69 frozen checks, no existing GPCP file modified).
+- **P5** contract + integration docs, a demo backend proving a third
+  architecture attaches through the metrics contract alone, and a one-command
+  CI (`make ci`). Conformance now has 7 checks.
+
+GPCP consumption lives in that repository's `backend/gpcp/` and is not part of
+this package.
 - `mmse_scalable` is intentionally outside `regression/lock.json` (it is a new
   workload, not one of the 17 frozen ones); `verify` only checks the frozen set.
 
@@ -92,5 +106,7 @@ workload semantics changed.
 
 ## Next
 
-P4 (GPCP adapter with full regression), P5 (CI and docs), P6 (protocol-process
-extension: HARQ / multi-user / time-varying channel, new RAT tables).
+P6 (protocol-process extension: HARQ / multi-user / time-varying channel, new
+RAT tables). Separately, the GPCP proto dumps can be re-run to refresh the
+frozen ledger - that changes the historical numbers in `docs/22` and `docs/24`
+and needs an explicit decision.
