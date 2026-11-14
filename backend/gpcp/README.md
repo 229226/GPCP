@@ -57,7 +57,9 @@ python3 backend/gpcp/adapter.py regress                     # 冻结回归
 python3 backend/gpcp/adapter.py collect   --scenario nr_mimo --backend gpcp-cgra
 python3 backend/gpcp/adapter.py evaluate  --scenario nr_mimo --backend gpcp-cgra
 python3 backend/gpcp/run.py     --bundle <bundle> [--backend ...]
+python3 backend/gpcp/adapter.py capabilities [--json] [--strict]
 make -C backend/gpcp regress
+make -C backend/gpcp ci        # regress + capabilities + 真跑一个 bundle + evaluate
 ```
 
 ## 回归口径
@@ -76,7 +78,9 @@ make -C backend/gpcp regress
 
 - **算子覆盖**：执行仍需要 `sw/soc/<场景>_ops.inc`——把算子序列翻译成 MMIO/
   DMA/微码调用的 C 实现。wlbench 的 17 个冻结场景都有；`mmse_scalable`
-  这类新 workload 目前只能 lowering，跑不了（`run` 会明确报出来）。
+  这类新 workload 目前只能 lowering，跑不了。
+  `adapter.py capabilities` 会逐个 bundle 报出能否执行与原因（当前 17/18），
+  `--strict` 在有不可执行项时返回 1。
 - **多规模 MMSE**：`mmse_full` 现在按 2 层写死；`layers=4/8` 的 sweep 点
   需要参数化微码，属 W4。
 - `plan.h` 的注释仍写着 `proto/emit.py`，是**刻意保留**的：它保证生成物与

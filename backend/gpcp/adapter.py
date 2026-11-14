@@ -50,6 +50,16 @@ def _cstr(s):
 
 
 def scenarios():
+    """bundle 目录说了算；目录不可用时才退回 wlbench 的冻结清单。
+
+    后端不该依赖 wlbench 的 lock 才能知道自己要服务哪些 workload——
+    lock 是回归用的，不是服务清单。
+    """
+    root = BUNDLES
+    if root.exists():
+        found = sorted(p.name for p in root.iterdir() if (p / "ir.json").exists())
+        if found:
+            return found
     with open(LOCK, encoding="utf-8") as f:
         return sorted(json.load(f)["scenarios"])
 
@@ -144,8 +154,14 @@ def evaluate(name, backend):
 
 
 def regress():
-    """Full P4 regression: bundles, plan.h, per-stage cycles, ledger."""
-    names = scenarios()
+    """Full P4 regression: bundles, plan.h, per-stage cycles, ledger.
+
+    比对只针对 GPCP 真正构建过的场景（有 build/proto/<n>/plan.h）；
+    wlbench 独有的 bundle（例如 mmse_scalable）只做能力报告，不算回归失败。
+    """
+    all_names = scenarios()
+    names = [n for n in all_names if (PROTO / n / "plan.h").exists()]
+    extra = [n for n in all_names if n not in names]
     checks, failures = [], []
 
     def record(label, ok):
@@ -203,6 +219,9 @@ def regress():
                 print("  e.g. %s/%d ledger=%d dump=%d" % (n, sid, old, new))
     if cgra_diffs or cpu_diffs:
         print("  ledger is older than the dumps; adapter reports CURRENT cycles")
+    if extra:
+        print("bundles with no GPCP build (capabilities only): %s"
+              % ", ".join(extra))
     return 0 if not failures else 1
 
 
@@ -221,6 +240,10 @@ def main(argv=None):
     e.add_argument("--scenario", required=True)
     e.add_argument("--backend", choices=sorted(BACKENDS), default="gpcp-cgra")
     e.add_argument("--out")
+
+    c2 = sub.add_parser("capabilities",
+                        help="which bundles can run on this backend, and why not")
+    c2.add_argument("--json", action="store_true")
 
     v = sub.add_parser("verify-bundle", help="compare one bundle with GPCP artifacts")
     v.add_argument("--scenario", required=True)
@@ -250,6 +273,10 @@ def main(argv=None):
             print("timeline: %d slots, on_time_rate=%.2f, late=%d" %
                   (t["slots"], t["on_time_rate"], t["late_slots"]))
         return 0
+    if a.cmd == "capabilities":
+        import capabilities as C
+        return C.main(["--json"] if a.json else [])
+
     if a.cmd == "verify-bundle":
         for k, ok in verify_bundle(a.scenario).items():
             print("  %-16s %s" % (k, "OK" if ok else "MISMATCH"))
