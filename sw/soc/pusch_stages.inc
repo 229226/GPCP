@@ -421,6 +421,87 @@ static int us_estimate(void)
 }
 
 /* ---- 阶段 4：均衡 + 软解调（LLR → 解交织 → 解扰 → Chase 合并 → 解速率匹配） */
+#if defined(TP) && HARQ_TX == 1
+/* 节点粒度拆分：均衡 / IDFT / 解调 三段各自独立，`where` 才能各自唯一。
+ * 只覆盖 TP + 单次传输；其余配置保留下面的合并实现（见 #else）。 */
+static int32_t us_eq_re[E_BITS / 2], us_eq_im[E_BITS / 2];
+
+static int us_equalise(void)
+{
+    int32_t *y = yw_tx[0];
+    int32_t *hre = us_hre[0], *him = us_him[0];
+    int m = 0;
+
+    for (int s = 0; s < NSYM; s++)
+        for (int r = 0; r < NRE; r++) {
+            if (r % 4 == 0) continue;          /* DMRS RE */
+            int32_t yr = y[(s * NRE + r) * 2 + 0];
+            int32_t yi = y[(s * NRE + r) * 2 + 1];
+            int64_t er = (int64_t)yr * hre[s] + (int64_t)yi * him[s];
+            int64_t ei = (int64_t)yi * hre[s] - (int64_t)yr * him[s];
+            us_eq_re[m] = (int32_t)er;
+            us_eq_im[m] = (int32_t)ei;
+            m++;
+        }
+    return 0;
+}
+
+static int us_transform(void)
+{
+#ifdef PROTO_CPU_ONLY
+    idft360(us_eq_re, us_eq_im, llr_e);
+#else
+    dft_bluestein_inv(us_eq_re, us_eq_im, llr_e);
+#endif
+    return 0;
+}
+
+static int us_demap(void)
+{
+    for (int q = 0; q < USABLE; q++)
+        rbuf[q] = 0;
+
+    for (int q = 0; q < 8; q++) us_raw0[q] = llr_e[q];
+
+    /* 38.212 5.4.2.2 de-interleave (Qm=2, 360 rows) */
+    {
+        int rows = E_BITS / QM;
+        for (int q = 0; q < rows; q++)
+            for (int c = 0; c < QM; c++)
+                llr_i[c * rows + q] = llr_e[QM * q + c];
+    }
+
+    /* descramble (38.211 7.3.3.1, c_init = n_RNTI << 15) */
+    gold_init(N_RNTI << 15);
+    for (int q = 0; q < E_BITS; q++)
+        if (gold_bit((uint32_t)q)) llr_i[q] = -llr_i[q];
+    for (int q = 0; q < 8; q++) us_descr0[q] = llr_i[q];
+
+    /* Chase combining in circular-buffer coordinates */
+    {
+        uint32_t rv_word = *(volatile uint32_t *)(TD_RAM
+                           + (uint32_t)NSYM * SYM_WORDS * 4u);
+        us_k0 = rv_word * (USABLE / 4u);
+        for (int q = 0; q < E_BITS; q++)
+            rbuf[(us_k0 + (uint32_t)q) % USABLE] += llr_i[q];
+    }
+
+    /* rate de-match: combined LLRs -> 1040 coded LLRs */
+    for (int q = 0; q < PUNCT; q++) dem[q] = 0;
+    {
+        int u = 0;
+        for (int q = 0; q < NCODED - PUNCT; q++) {
+            if (q >= FILLER0 && q < FILLER0 + FILLER_N) dem[PUNCT + q] = 0;
+            else                                        dem[PUNCT + q] = rbuf[u++];
+        }
+    }
+
+    for (uint32_t b = 0; b < BG2_COLS; b++)
+        for (uint32_t q = 0; q < ZC; q++)
+            llr[b][q] = dem[b * ZC + q] >> LLR_SHIFT;
+    return 0;
+}
+#else
 static int us_equalise_demap(void)
 {
     for (int i = 0; i < USABLE; i++)
@@ -517,6 +598,7 @@ static int us_equalise_demap(void)
             llr[b][i] = dem[b * ZC + i] >> LLR_SHIFT;
     return 0;
 }
+#endif
 
 /* ---------------- 阶段 5：LDPC 译码 [array]（8 次 min-sum）+ CRC24A */
 static int us_decode(void)

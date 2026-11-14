@@ -178,6 +178,22 @@ class Scenario:
         return self._node("equalise_demap", [y, h], "llr",
                           qm=qm, length=self.derived.get("e_bits", 0))
 
+    def equalise(self, y, h, qm=None):
+        """均衡：每个 RE 出一组软符号（匹配滤波 / MMSE 求解）。"""
+        return self._node("equalise", [y, h], "eq", qm=qm,
+                          length=self.derived.get("e_bits", 0))
+
+    def transform(self, x, form="dft", size=0, inverse=False):
+        """显式变换： DFT/IDFT/FFT。不再藏在其他动词内部。"""
+        n = int(size) if size else int(self.derived.get("n_fft_min", 0))
+        return self._node("transform", [x], "spec", form=form, size=n,
+                          inverse=bool(inverse), length=2 * n)
+
+    def demap(self, x, qm=None):
+        """解交织 + 解扰 + 软解调，输出 LLR。"""
+        return self._node("demap", [x], "llr", qm=qm,
+                          length=self.derived.get("e_bits", 0))
+
     def mimo_equalise(self, y, h, qm=None, layers=2, rx=2, bits=None):
         """多天线均衡（MMSE）后硬判：每层每 RE 出 Qm 个比特。"""
         n = bits if bits is not None else self.derived.get("e_bits", 0)

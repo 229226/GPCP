@@ -340,6 +340,22 @@ def lower(ir, target):
                 st["array_runs"] = int(nd["params"].get("hypotheses", 1))
                 st["notes"].append("%d 个候选假设，每个一次阵列运行" % st["array_runs"])
 
+        elif op == "transform":
+            # 显式变换：FFT/DFT/IDFT 一律走阵列（点数由参数给定，不再是隐藏步）。
+            n = int(nd["params"].get("size") or need or 0)
+            # Bluestein：补零到 m >= 2n-1 的 2 次幂，正/反各一次 m 点 FFT。
+            m = 1
+            while m < 2 * n - 1:
+                m <<= 1
+            runs = 2 * fft_runs_per_symbol(m) if n else 0
+            st["where"] = "array"
+            st["impl"] = "dft%d_bluestein" % n if n else "dft_bluestein"
+            st["array_runs"] = runs
+            st["notes"].append("%d 点 Bluestein → %d 点 FFT ×2，共 %d 次阵列运行"
+                               % (n, m, runs))
+            st["notes"].append("%d 点 %s（显式 transform 节点）"
+                               % (n, "IDFT" if nd["params"].get("inverse") else "DFT"))
+
         elif op == "mimo_equalise":
             # 每层每 RE 出 qm 个硬判比特；mmse_full 一次算 n_pes 个 RE 且同时
             # 覆盖两层（y 压连续后一层一半 PE），所以运行数 = ceil(RE/n_pes)
@@ -404,7 +420,8 @@ def lower(ir, target):
             else:
                 st["where"] = "control-core"
 
-        elif op in ("channel", "equalise_demap", "extract", "received", "measure"):
+        elif op in ("channel", "equalise_demap", "equalise", "demap",
+                     "extract", "received", "measure"):
             st["where"] = "control-core"
 
         # 新增镜像的显式落点开关（默认关闭，见文件头的取舍说明）。
