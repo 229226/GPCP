@@ -186,9 +186,15 @@ def lower(ir, target):
                                    "blocks": 4},
                     })
                 best = min(cands, key=lambda c: (c["est_ops"], c["buffer_words"]))
-                st["where"] = "control-core"
+                # 选中 *_cgra 镜像就是真的在阵列上跑：落点和运行次数都要如实写，
+                # 否则"标 CPU 却更快"（wifi 1.68x）这种账永远对不上。
+                on_array = str(best["impl"]).endswith("_cgra")
+                st["where"] = "array" if on_array else "control-core"
                 st["impl"] = best["impl"]
-                st["array_runs"] = 0
+                st["array_runs"] = (
+                    (int(best["tiling"].get("stages", 0))
+                     + int(best["tiling"].get("blocks", 0))) * nsym
+                    if on_array else 0)
                 st["tiling"] = best["tiling"]
                 st["buffer_words"] = best["buffer_words"]
                 st["search"] = {
