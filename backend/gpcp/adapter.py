@@ -34,6 +34,8 @@ import lower as LOWER  # noqa: E402
 import emit as EMIT  # noqa: E402
 
 STAGE_WORD = 10
+HASH_WORD = 8          # 结果区 [8]：params_hash
+DONE_WORD = 9          # 结果区 [9]：完成标志 0x600D
 ARTIFACTS = ("ir.json", "stimulus.bin", "golden.json")
 _WHERE = {"control-core": "PROTO_WHERE_CPU",
           "array": "PROTO_WHERE_ARRAY",
@@ -130,20 +132,68 @@ def stage_cycles(name, backend):
     return {"total": total, "per": per, "ops": ops, "correct": correct}
 
 
+def bundle_golden(name, bundle=None):
+    b = Path(bundle) if bundle else bundle_dir(name)
+    with open(b / "golden.json", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def local_golden(name):
+    """GPCP 自己那份 golden（旧流水线产物）；新 bundle 可能没有。"""
+    p = PROTO / name / "golden.json"
+    if not p.exists():
+        return None
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def verify_golden(name, backend, bundle=None):
+    """这次运行与 *bundle 的* golden 对账。
+
+    分三层，任何一层不过都算错：
+      1. 绑定：结果区 [8] 的 params_hash 必须等于 bundle golden 的；
+      2. 完成：结果区 [9] 必须是 0x600D，运行器自报 errors == 0；
+      3. 期望值同源：GPCP 内嵌的期望 bits/anchors 必须与 bundle golden 的
+         逐字段相同——这样"运行器自校验通过"才等价于"对 bundle 的答案通过"。
+    """
+    st, w = dump_words(name, backend)
+    g = bundle_golden(name, bundle)
+    want = int(str(g.get("params_hash", "0x0")), 16)
+    got = w[HASH_WORD]
+    loc = local_golden(name)
+    same_bits = None
+    if loc is not None:
+        same_bits = (loc.get("bits") == g.get("bits")
+                     and loc.get("anchors") == g.get("anchors"))
+    return {
+        "params_hash_expected": "0x%08x" % want,
+        "params_hash_got": "0x%08x" % got,
+        "params_hash_ok": got == want,
+        "done_ok": w[DONE_WORD] == 0x600D,
+        "runner_errors": w[1],
+        "runner_ok": w[1] == 0,
+        "expected_same_as_bundle": same_bits,
+        "ok": (got == want and w[DONE_WORD] == 0x600D and w[1] == 0
+               and same_bits is not False),
+    }
+
+
 def collect_metrics(name, backend):
     """Backend reports only generic quantities: clock_hz, cycles, correct."""
     with open(CLOCKS, encoding="utf-8") as f:
         clock = json.load(f)[backend]
     r = stage_cycles(name, backend)
-    stages = [{"id": sid, "op": r["ops"].get(sid, "?"), "cycles": cyc,
-               "correct": True}
+    v = verify_golden(name, backend)
+    # 逐 stage 的对错在 dump 里不可观测（运行器只报一个汇总 errors），
+    # 所以不写 stages[].correct，而不是硬写 True。
+    stages = [{"id": sid, "op": r["ops"].get(sid, "?"), "cycles": cyc}
               for sid, cyc in sorted(r["per"].items())]
     return {
         "backend": backend,
         "clock_hz": clock["clock_hz"],
         "clock_source": clock["clock_source"],
         "total_cycles": r["total"],
-        "correct": r["correct"],
+        "correct": bool(v["ok"]),
         "stages": stages,
     }
 
@@ -245,6 +295,11 @@ def main(argv=None):
                         help="which bundles can run on this backend, and why not")
     c2.add_argument("--json", action="store_true")
 
+    g = sub.add_parser("verify-golden",
+                       help="check this run against the bundle's own golden.json")
+    g.add_argument("--scenario", required=True)
+    g.add_argument("--backend", choices=sorted(BACKENDS), default="gpcp-cgra")
+
     v = sub.add_parser("verify-bundle", help="compare one bundle with GPCP artifacts")
     v.add_argument("--scenario", required=True)
 
@@ -276,6 +331,11 @@ def main(argv=None):
     if a.cmd == "capabilities":
         import capabilities as C
         return C.main(["--json"] if a.json else [])
+
+    if a.cmd == "verify-golden":
+        rep = verify_golden(a.scenario, a.backend)
+        print(json.dumps(rep, indent=2, ensure_ascii=False))
+        return 0 if rep["ok"] else 1
 
     if a.cmd == "verify-bundle":
         for k, ok in verify_bundle(a.scenario).items():
