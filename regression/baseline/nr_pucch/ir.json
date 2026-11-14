@@ -1,0 +1,80 @@
+{
+ "budget": {
+  "on_time": null,
+  "slot_ms": 1.0
+ },
+ "cfg": {
+  "ack": 1,
+  "bw_mhz": 20,
+  "l_ra": 139,
+  "m_cs": 2,
+  "n_id": 1,
+  "scs_khz": 15,
+  "seed": 1,
+  "snr_db": 6,
+  "taps": 127
+ },
+ "derived": {
+  "cp_len": 144,
+  "n_fft_min": 2048,
+  "n_id": 1,
+  "n_rb": 106,
+  "n_subcarriers": 1272
+ },
+ "direction": "ul",
+ "golden": [
+  {
+   "ack": "tx.bit",
+   "energies": "model.exact",
+   "winner": "model.cand"
+  }
+ ],
+ "nodes": [
+  {
+   "id": 0,
+   "in": [],
+   "length": 278,
+   "op": "received",
+   "out": "wave",
+   "params": {
+    "form": "zc"
+   }
+  },
+  {
+   "id": 1,
+   "in": [],
+   "length": 0,
+   "op": "dmrs",
+   "out": "ref",
+   "params": {
+    "l": 0,
+    "n_id": 1,
+    "type": "pucch_zc"
+   }
+  },
+  {
+   "id": 2,
+   "in": [
+    "wave",
+    "ref"
+   ],
+   "length": 2,
+   "op": "correlate",
+   "out": "corr",
+   "params": {
+    "hypotheses": 2,
+    "metric": "energy",
+    "seq": "zc"
+   }
+  }
+ ],
+ "rat": "nr",
+ "scenario": "nr_pucch",
+ "schema": "gpcp-proto-ir/1",
+ "traffic": {
+  "arrival": "periodic",
+  "jobs_per_slot": 1,
+  "slots": 40,
+  "util": 1.0
+ }
+}

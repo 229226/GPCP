@@ -1,0 +1,14 @@
+{
+  "backend": "gpcp-cgra",
+  "clock_hz": 1053000000,
+  "clock_source": "estimated-pre-layout",
+  "total_cycles": 408874,
+  "correct": true,
+  "stages": [
+    {"id": 0, "op": "received", "cycles": 41, "correct": true},
+    {"id": 1, "op": "dmrs", "cycles": 73562, "correct": true},
+    {"id": 2, "op": "ofdm_demodulate", "cycles": 293559, "correct": true},
+    {"id": 3, "op": "estimate", "cycles": 13312, "correct": true},
+    {"id": 4, "op": "mimo_equalise", "cycles": 23440, "correct": true}
+  ]
+}

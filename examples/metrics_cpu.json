@@ -1,0 +1,7 @@
+{
+  "backend": "cva6-scalar",
+  "clock_hz": 264000000,
+  "clock_source": "estimated-pre-layout",
+  "total_cycles": 9169306,
+  "correct": true
+}

@@ -1,0 +1,113 @@
+{
+ "budget": {
+  "on_time": null,
+  "slot_ms": 1.0
+ },
+ "cfg": {
+  "a_bits": 324,
+  "bw_mhz": 20,
+  "cp_len": 16,
+  "e_bits": 648,
+  "fft_points": 256,
+  "mcs": 0,
+  "n_data_subcarriers": 234,
+  "nsym": 7,
+  "qm": 2
+ },
+ "derived": {
+  "a_bits": 324,
+  "cp_len": 16,
+  "e_bits": 648,
+  "n_fft_min": 256,
+  "n_subcarriers": 234,
+  "qm": 2
+ },
+ "direction": "dl",
+ "golden": [
+  {
+   "data_bits": "tx.data",
+   "ldpc": "N648_Z27_R12",
+   "signal_bits": "tx.sig"
+  }
+ ],
+ "nodes": [
+  {
+   "id": 0,
+   "in": [],
+   "length": 3808,
+   "op": "received",
+   "out": "wave",
+   "params": {
+    "form": "td"
+   }
+  },
+  {
+   "id": 1,
+   "in": [],
+   "length": 0,
+   "op": "dmrs",
+   "out": "ref",
+   "params": {
+    "l": 0,
+    "n_id": 0,
+    "type": "wifi_ltf"
+   }
+  },
+  {
+   "id": 2,
+   "in": [
+    "wave"
+   ],
+   "length": 0,
+   "op": "ofdm_demodulate",
+   "out": "grid",
+   "params": {}
+  },
+  {
+   "id": 3,
+   "in": [
+    "grid",
+    "ref"
+   ],
+   "length": 0,
+   "op": "estimate",
+   "out": "h",
+   "params": {}
+  },
+  {
+   "id": 4,
+   "in": [
+    "grid",
+    "h"
+   ],
+   "length": 648,
+   "op": "equalise_demap",
+   "out": "llr",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 5,
+   "in": [
+    "llr"
+   ],
+   "length": 324,
+   "op": "decode",
+   "out": "hard",
+   "params": {
+    "max_iter": 10,
+    "scheme": "ldpc_wifi"
+   }
+  }
+ ],
+ "rat": "wifi",
+ "scenario": "wifi_11be",
+ "schema": "gpcp-proto-ir/1",
+ "traffic": {
+  "arrival": "periodic",
+  "jobs_per_slot": 1,
+  "slots": 40,
+  "util": 1.0
+ }
+}

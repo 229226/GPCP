@@ -1,0 +1,121 @@
+{
+ "budget": {
+  "on_time": null,
+  "slot_ms": 1.0
+ },
+ "cfg": {
+  "a_bits": 80,
+  "bw_mhz": 20,
+  "e_bits": 720,
+  "n_id": 4660,
+  "n_rnti": 4660,
+  "nsym": 2,
+  "qm": 2,
+  "rv": 0,
+  "scs_khz": 15,
+  "seed": 1,
+  "snr_db": 20,
+  "tp": 1
+ },
+ "derived": {
+  "a_bits": 80,
+  "cp_len": 144,
+  "e_bits": 720,
+  "n_fft_min": 2048,
+  "n_id": 4660,
+  "n_rb": 106,
+  "n_rnti": 4660,
+  "n_subcarriers": 1272,
+  "qm": 2
+ },
+ "direction": "ul",
+ "golden": [
+  {
+   "crc": "crc24a",
+   "hard_eq": "tx.codeword",
+   "k0": 0,
+   "tb_eq": "tx.tb",
+   "tp": 1
+  }
+ ],
+ "nodes": [
+  {
+   "id": 0,
+   "in": [],
+   "length": 17537,
+   "op": "received",
+   "out": "wave",
+   "params": {
+    "form": "td"
+   }
+  },
+  {
+   "id": 1,
+   "in": [],
+   "length": 0,
+   "op": "dmrs",
+   "out": "ref",
+   "params": {
+    "l": 0,
+    "n_id": 4660,
+    "type": "pusch"
+   }
+  },
+  {
+   "id": 2,
+   "in": [
+    "wave"
+   ],
+   "length": 0,
+   "op": "ofdm_demodulate",
+   "out": "grid",
+   "params": {}
+  },
+  {
+   "id": 3,
+   "in": [
+    "grid",
+    "ref"
+   ],
+   "length": 0,
+   "op": "estimate",
+   "out": "h",
+   "params": {}
+  },
+  {
+   "id": 4,
+   "in": [
+    "grid",
+    "h"
+   ],
+   "length": 720,
+   "op": "equalise_demap",
+   "out": "llr",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 5,
+   "in": [
+    "llr"
+   ],
+   "length": 80,
+   "op": "decode",
+   "out": "hard",
+   "params": {
+    "max_iter": 8,
+    "scheme": "ldpc"
+   }
+  }
+ ],
+ "rat": "nr",
+ "scenario": "nr_pusch_tp",
+ "schema": "gpcp-proto-ir/1",
+ "traffic": {
+  "arrival": "periodic",
+  "jobs_per_slot": 1,
+  "slots": 40,
+  "util": 1.0
+ }
+}

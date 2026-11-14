@@ -1,0 +1,176 @@
+{
+ "budget": {
+  "on_time": null,
+  "slot_ms": 1.0
+ },
+ "cfg": {
+  "a_bits": 80,
+  "bw_mhz": 20,
+  "e_bits": 800,
+  "n_id": 1,
+  "n_rnti": 4660,
+  "nsym": 2,
+  "qm": 2,
+  "scs_khz": 15,
+  "tp": 1
+ },
+ "derived": {
+  "a_bits": 80,
+  "cp_len": 144,
+  "e_bits": 800,
+  "n_fft_min": 2048,
+  "n_id": 1,
+  "n_rb": 106,
+  "n_rnti": 4660,
+  "n_subcarriers": 1272,
+  "qm": 2
+ },
+ "direction": "ul",
+ "golden": [
+  {
+   "crc": "crc24a",
+   "hard_eq": "tx.info",
+   "tb_eq": "tx.tb",
+   "tp": 1
+  }
+ ],
+ "nodes": [
+  {
+   "id": 0,
+   "in": [],
+   "length": 80,
+   "op": "transport_block",
+   "out": "tb",
+   "params": {
+    "rnti": 4660
+   }
+  },
+  {
+   "id": 1,
+   "in": [
+    "tb"
+   ],
+   "length": 104,
+   "op": "encode",
+   "out": "cw",
+   "params": {
+    "scheme": "turbo"
+   }
+  },
+  {
+   "id": 2,
+   "in": [
+    "cw"
+   ],
+   "length": 52,
+   "op": "modulate",
+   "out": "sym",
+   "params": {
+    "qm": 2,
+    "scrambler": "gold"
+   }
+  },
+  {
+   "id": 3,
+   "in": [],
+   "length": 0,
+   "op": "dmrs",
+   "out": "ref",
+   "params": {
+    "l": 0,
+    "n_id": 1,
+    "type": "pusch"
+   }
+  },
+  {
+   "id": 4,
+   "in": [
+    "sym",
+    "ref"
+   ],
+   "length": 1272,
+   "op": "map_to_grid",
+   "out": "grid",
+   "params": {}
+  },
+  {
+   "id": 5,
+   "in": [
+    "grid"
+   ],
+   "length": 4384,
+   "op": "ofdm_modulate",
+   "out": "wave",
+   "params": {}
+  },
+  {
+   "id": 6,
+   "in": [
+    "wave"
+   ],
+   "length": 0,
+   "op": "channel",
+   "out": "y",
+   "params": {
+    "model": "awgn",
+    "snr_db": 20
+   }
+  },
+  {
+   "id": 7,
+   "in": [
+    "y"
+   ],
+   "length": 0,
+   "op": "ofdm_demodulate",
+   "out": "grid",
+   "params": {}
+  },
+  {
+   "id": 8,
+   "in": [
+    "grid",
+    "ref"
+   ],
+   "length": 0,
+   "op": "estimate",
+   "out": "h",
+   "params": {}
+  },
+  {
+   "id": 9,
+   "in": [
+    "grid",
+    "h"
+   ],
+   "length": 800,
+   "op": "equalise_demap",
+   "out": "llr",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 10,
+   "in": [
+    "llr"
+   ],
+   "length": 80,
+   "op": "decode",
+   "out": "hard",
+   "params": {
+    "max_iter": 8,
+    "scheme": "turbo"
+   }
+  }
+ ],
+ "rat": "lte",
+ "scenario": "lte_pusch",
+ "schema": "gpcp-proto-ir/1",
+ "traffic": {
+  "arrival": "periodic",
+  "jobs_per_slot": 1,
+  "slots": 40,
+  "util": 1.0
+ }
+}
