@@ -267,10 +267,17 @@ def lower(ir, target):
             st["notes"].append("K=7 BCC (0o133/0o171)")
 
         elif op in ("encode", "decode") and nd["params"].get("scheme") == "turbo":
-            # 36.212 Turbo（1/3、QPP）：标量实现，跑在控制核上；不占阵列。
-            st["where"] = "control-core"
-            st["impl"] = "turbo_k104"
-            st["notes"].append("36.212 Turbo 1/3 + 速率匹配（K=104）")
+            # 36.212 Turbo（1/3、QPP）：译码的 alpha/beta 递推走粗粒度阵列微码，
+            # 编码与 LLR 后处理仍在控制核。
+            if op == "decode":
+                st["where"] = "array"
+                st["impl"] = "turbo_seq"
+                st["array_runs"] = 128
+                st["notes"].append("32/11 步一块：4 块 × 2 向 × 2 SISO × 8 迭代")
+            else:
+                st["where"] = "control-core"
+                st["impl"] = "turbo_k104"
+                st["notes"].append("36.212 Turbo 1/3 + 速率匹配（K=104，编码留 CPU）")
 
         elif op in ("encode", "decode") and nd["params"].get("scheme") == "ldpc":
             # 38.212：BG2 的码字长 N = 52*Zc，信息位 K = Kb*Zc（K<=640 时 Kb=6）。
@@ -334,16 +341,17 @@ def lower(ir, target):
                 st["notes"].append("%d 个候选假设，每个一次阵列运行" % st["array_runs"])
 
         elif op == "mimo_equalise":
-            # 每层每 RE 出 qm 个硬判比特；mmse_2x1 tile 一次算 n_pes 个 RE、
-            # 一次运行只做一个层，所以运行数 = ceil(RE/n_pes) * 层数。
+            # 每层每 RE 出 qm 个硬判比特；mmse_full 一次算 n_pes 个 RE 且同时
+            # 覆盖两层（y 压连续后一层一半 PE），所以运行数 = ceil(RE/n_pes)
+            # * ceil(层数/2)。
             qm = int(nd["params"].get("qm") or 2)
             layers = int(nd["params"].get("layers", 2))
             nbits = nd.get("length") or 0
             nre = max(1, nbits // max(1, qm * layers))
             tiles = (nre + target["n_pes"] - 1) // target["n_pes"]
             st["where"] = "array"
-            st["impl"] = "mmse_2x1"
-            st["array_runs"] = tiles * layers
+            st["impl"] = "mmse_full"
+            st["array_runs"] = tiles * ((layers + 1) // 2)
             st["notes"].append("%d 个数据 RE / %d 层，tile 每次 %d 个 RE"
                                % (nre, layers, target["n_pes"]))
 

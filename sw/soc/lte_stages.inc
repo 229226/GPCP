@@ -21,7 +21,11 @@
 
 #define NPES          16
 #define RING_DEPTH    1024
-#define DESC_BASE     0x80020000ul
+/* 描述符/环区放在 .bss 之上：Turbo 粗粒度微码加入后 .bss 变大，
+ * 0x80020000 会与 e_bits/e_sc 重叠（FFT 状态字 0xC0DE_xxxx 写坏加扰码字）。 */
+#ifndef DESC_BASE
+#define DESC_BASE     0x80040000ul
+#endif
 #define TD_RAM        0x80400000ul
 
 #define NSYM          2
@@ -74,6 +78,12 @@ static void wait_desc(uint32_t want)
 #include "ssb_fft.inc"          /* fft4096() + rev4() */
 #ifdef PROTO_CPU_ONLY
 #include "fft_cpu.inc"
+#else
+#include "turbo_seq_map.h"
+#include "turbo_fwd32_prog.h"
+#include "turbo_fwd11_prog.h"
+#include "turbo_bwd32_prog.h"
+#include "turbo_bwd11_prog.h"
 #endif
 
 /* --------------------------------------------------------------- 小工具 */
@@ -515,6 +525,149 @@ static void siso(const int32_t *sys, const int32_t *par, const int32_t *apr,
     }
 }
 
+#ifndef PROTO_CPU_ONLY
+/* ---- 粗粒度 Turbo：32 步/11 步一块，alpha/beta 递推整块跑阵列 ---------- */
+static int32_t t_alpha_h[NPOL + 1][8], t_beta_h[NPOL + 1][8];
+
+static inline void tspad_w(uint32_t flat, int32_t v)
+{
+    mmio_w(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(flat), (uint32_t)v);
+}
+static inline int32_t tspad_r(uint32_t flat)
+{
+    return (int32_t)mmio_r(CGRA_BASE + GPCP_SPAD_FLAT_ADDR(flat));
+}
+
+static int32_t t_pack[96];
+
+static void turbo_pack_metrics(const int32_t *sys, const int32_t *apr,
+                               const int32_t *par, int t0, int len)
+{
+    for (int i = 0; i < len; i++) {
+        t_pack[i] = sys[t0 + i];
+        t_pack[32 + i] = apr[t0 + i];
+        t_pack[64 + i] = par[t0 + i];
+    }
+    rt_dma_run(CGRA_BASE, (uintptr_t)t_pack, TURBO_SEQ_SYS(0),
+               (uint32_t)len, 0, 0, 0, 0);
+    rt_dma_run(CGRA_BASE, (uintptr_t)(t_pack + 32), TURBO_SEQ_APR(0),
+               (uint32_t)len, 0, 0, 0, 0);
+    rt_dma_run(CGRA_BASE, (uintptr_t)(t_pack + 64), TURBO_SEQ_PAR(0),
+               (uint32_t)len, 0, 0, 0, 0);
+}
+
+static void turbo_load(const uint32_t *prog, uint32_t cycles)
+{
+    if (gpcp_cgra_imem_load(CGRA_BASE, prog, cycles * NPES))
+        errs++;
+}
+
+static void turbo_run(uint32_t cycles)
+{
+    if (rt_array_run(CGRA_BASE, 0, cycles))
+        errs++;
+    runs++;
+}
+
+static void turbo_fwd(const int32_t *sys, const int32_t *apr,
+                      const int32_t *par, int n)
+{
+    int t0 = 0, loaded = -1;
+
+    tspad_w(TURBO_SEQ_ZERO, 0);
+    for (int s = 0; s < 8; s++)
+        tspad_w(TURBO_SEQ_ALPHA(0, s), s == 0 ? 0 : TURBO_NEG);
+
+    while (t0 < n) {
+        int len = n - t0;
+        if (len > TURBO_SEQ_MAX_STEPS)
+            len = TURBO_SEQ_MAX_STEPS;
+        int need = (len == TURBO_SEQ_MAX_STEPS) ? 0 : 1;
+        if (loaded != need) {
+            if (need)
+                turbo_load(turbo_fwd11_prog, TURBO_FWD11_PROG_CYCLES);
+            else
+                turbo_load(turbo_fwd32_prog, TURBO_FWD32_PROG_CYCLES);
+            loaded = need;
+        }
+        turbo_pack_metrics(sys, apr, par, t0, len);
+        turbo_run(need ? TURBO_FWD11_PROG_CYCLES : TURBO_FWD32_PROG_CYCLES);
+        rt_dma_run(CGRA_BASE, (uintptr_t)&t_alpha_h[t0][0], 0u,
+                   8u * (uint32_t)(len + 1), 0, 1, 0, 0);
+        if (t0 + len < n)
+            for (int s = 0; s < 8; s++)
+                tspad_w(TURBO_SEQ_ALPHA(0, s),
+                        tspad_r(TURBO_SEQ_ALPHA(len, s)));
+        t0 += len;
+    }
+}
+
+static void turbo_bwd(const int32_t *sys, const int32_t *apr,
+                      const int32_t *par, int n, int end_zero)
+{
+    int t0 = n, loaded = -1;
+    int len0 = n < TURBO_SEQ_MAX_STEPS ? n : TURBO_SEQ_MAX_STEPS;
+
+    tspad_w(TURBO_SEQ_ZERO, 0);
+    for (int s = 0; s < 8; s++)
+        tspad_w(TURBO_SEQ_ALPHA(len0, s),
+                (!end_zero || s == 0) ? 0 : TURBO_NEG);
+
+    while (t0 > 0) {
+        int len = t0 < TURBO_SEQ_MAX_STEPS ? t0 : TURBO_SEQ_MAX_STEPS;
+        t0 -= len;
+        int need = (len == TURBO_SEQ_MAX_STEPS) ? 0 : 1;
+        if (loaded != need) {
+            if (need)
+                turbo_load(turbo_bwd11_prog, TURBO_BWD11_PROG_CYCLES);
+            else
+                turbo_load(turbo_bwd32_prog, TURBO_BWD32_PROG_CYCLES);
+            loaded = need;
+        }
+        turbo_pack_metrics(sys, apr, par, t0, len);
+        turbo_run(need ? TURBO_BWD11_PROG_CYCLES : TURBO_BWD32_PROG_CYCLES);
+        rt_dma_run(CGRA_BASE, (uintptr_t)&t_beta_h[t0][0], 0u,
+                   8u * (uint32_t)(len + 1), 0, 1, 0, 0);
+        if (t0 > 0) {
+            int len_next = t0 < TURBO_SEQ_MAX_STEPS ? t0 : TURBO_SEQ_MAX_STEPS;
+            for (int s = 0; s < 8; s++)
+                tspad_w(TURBO_SEQ_ALPHA(len_next, s),
+                        tspad_r(TURBO_SEQ_ALPHA(0, s)));
+        }
+    }
+}
+
+static void siso_hw(const int32_t *sys, const int32_t *par, const int32_t *apr,
+                    int n, int end_zero, int32_t *ext, uint8_t *hard)
+{
+    turbo_fwd(sys, apr, par, n);
+    turbo_bwd(sys, apr, par, n, end_zero);
+    rt_dcache_flush();          /* 引擎写 RAM，CPU 读 alpha/beta 前必须失效 D$ */
+    for (int k = 0; k < n; k++) {
+        int32_t b[2] = { TURBO_NEG, TURBO_NEG };
+        for (int s = 0; s < 8; s++) {
+            if (t_alpha_h[k][s] == TURBO_NEG)
+                continue;
+            for (uint32_t u = 0; u < 2; u++) {
+                uint32_t pk, ns = rsc_step((uint32_t)s, u, &pk);
+                int32_t v = t_alpha_h[k][s] + t_beta_h[k + 1][ns]
+                          + (u ? 1 : -1) * (sys[k] + apr[k])
+                          + (int32_t)(pk ? 1 : -1) * par[k];
+                if (v > b[u]) b[u] = v;
+            }
+        }
+        int32_t post = b[1] - b[0];
+        hard[k] = post > 0 ? 1 : 0;
+        ext[k] = post - (sys[k] + apr[k]);
+        if (ext[k] > 2000000) ext[k] = 2000000;
+        if (ext[k] < -2000000) ext[k] = -2000000;
+    }
+}
+#define SISO_FN siso_hw
+#else
+#define SISO_FN siso
+#endif
+
 static int lte_decode(void)
 {
     static int32_t L[NPOL], par1[NPOL], par2[NPOL], e1[NPOL], e2[NPOL];
@@ -530,13 +683,13 @@ static int lte_decode(void)
     for (int it = 0; it < ITERS; it++) {
         static int32_t apr2[NPOL], sys2[NPOL], ext_d[NPOL], zero[NPOL];
         for (int i = 0; i < NPOL; i++) zero[i] = 0;
-        siso(L, par1, zero, n, 1, e1, hard);
+        SISO_FN(L, par1, zero, n, 1, e1, hard);
         for (int i = 0; i < K_INFO; i++) {
             apr2[i] = e1[qpp((uint32_t)i)];
             sys2[i] = L[qpp((uint32_t)i)];
         }
         for (int i = K_INFO; i < n; i++) { apr2[i] = 0; sys2[i] = L[i]; }
-        siso(sys2, par2, apr2, n, 0, e2, hard);
+        SISO_FN(sys2, par2, apr2, n, 0, e2, hard);
         for (int i = 0; i < K_INFO; i++)
             ext_d[qpp((uint32_t)i)] = e2[i];
         for (int i = 0; i < K_INFO; i++)

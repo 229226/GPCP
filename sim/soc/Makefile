@@ -831,7 +831,7 @@ run-proto-cpu-$(PROTO): all
 		--max-cycles 40000000
 	python3 $(ROOT)/proto/proto_eval.py --scenario $(PROTO) --cpu-only \
 		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_cpu_dump.txt
-	@cp $(PROTO_DIR)/report.md $(PROTO_DIR)/report_cpu.md
+	# proto_eval 在 --cpu-only 下直接写 report_cpu.md，不再覆盖 CGRA 的 report.md
 
 .PHONY: $(PROTO_CPU_GOALS)
 

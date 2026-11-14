@@ -61,7 +61,9 @@ static uint32_t dft_input_shift(const int32_t *ar, const int32_t *ai)
         if ((uint32_t)x > mx) mx = (uint32_t)x;
         if ((uint32_t)y > mx) mx = (uint32_t)y;
     }
-    while (sh < 29u && (mx >> (sh - 15u)) > 30000u)
+    /* CGRA 的 MUL 是 sx16(a)*sx16(b)：radix-4 蝶形先做 4 路求和，
+     * 求和结果必须仍能放进 int16，所以输入上限取 32767/4 ≈ 8000。 */
+    while (sh < 29u && (mx >> (sh - 15u)) > 7000u)
         sh++;
     return sh;
 }
@@ -111,9 +113,10 @@ static void dft_bluestein_raw(const int32_t *ar, const int32_t *ai,
             if (pr > maxp) maxp = pr;
             if (pi > maxp) maxp = pi;
         }
-        while (shp > 0 && (maxp >> shp) < 20000)
+        /* 同上：点乘结果也要先缩到 int16 安全区，再送第二次 FFT。 */
+        while (shp > 0 && (maxp >> shp) < 4000)
             shp--;
-        while ((maxp >> shp) > 30000)
+        while ((maxp >> shp) > 7500)
             shp++;
         for (p = 0; p < DFT_M; p++) {
             int64_t ar_ = dft_a[2 * p], ai_ = dft_a[2 * p + 1];
@@ -234,10 +237,12 @@ static void dft_bluestein_setup(void)
 
     for (m = 0; m < 2u * DFT_M; m++)
         dft_bp[m] = dft_bn[m] = 0;
-    dft_bp[0] = dft_bn[0] = 32767;
+    /* B 表的 FFT 也走 int16 蝶形：chirp 先缩 1/4，保证 4 路求和
+     * 仍在 int16 内（比例由后面的冲激校准自动补回）。 */
+    dft_bp[0] = dft_bn[0] = 32767 >> 2;
 
     for (m = 1; m < DFT_N; m++) {
-        int32_t c = co[m], s = si[m];
+        int32_t c = co[m] >> 2, s = si[m] >> 2;
         dft_bp[2 * m] = c;
         dft_bp[2 * m + 1] = s;
         dft_bn[2 * m] = c;

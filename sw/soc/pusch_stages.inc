@@ -117,6 +117,9 @@ static int32_t us_raw0[8], us_descr0[8];
 static int32_t us_dbg_spec_re, us_dbg_spec_im, us_dbg_yw_re, us_dbg_yw_im;
 static int32_t us_hard[BG2_COLS][ZC] __attribute__((aligned(8)));
 
+#if defined(TP) && !defined(PROTO_CPU_ONLY)
+static void dft_bluestein_setup(void);      /* dft_bluestein.inc，下方 include */
+#endif
 /* 激励是裸的 2 符号时域样本 + 尾部一个 rv 字（没有 magic 头）。 */
 static int us_setup(const uint32_t *par)
 {
@@ -125,6 +128,9 @@ static int us_setup(const uint32_t *par)
     us_crc_ok = us_k0 = 0;
     us_dbg_spec_re = us_dbg_spec_im = us_dbg_yw_re = us_dbg_yw_im = 0;
     for (int i = 0; i < 8; i++) { us_raw0[i] = 0; us_descr0[i] = 0; }
+#if defined(TP) && !defined(PROTO_CPU_ONLY)
+    dft_bluestein_setup();      /* 360 点 Bluestein 的 B 表/比例，计在 setup 之外 */
+#endif
     return 0;
 }
 
@@ -132,20 +138,32 @@ static int us_setup(const uint32_t *par)
 #ifdef PROTO_CPU_ONLY
 #include "fft_cpu.inc"
 #endif
+#if defined(TP) && !defined(PROTO_CPU_ONLY)
+#define DFT_N 360
+#include "dft_bluestein.inc"    /* 360 点 IDFT：Bluestein，复用 1024 点 FFT 引擎 */
+#endif
 
 #ifdef TP
 /* 360-point IDFT of the equalised data REs (DFT-s-OFDM deprecoding).
    Q20 cosine table; sin(x) = cos(x - 90 deg).  Integer only. */
-static void idft360(const int32_t *ar, const int32_t *ai, int32_t *out_iq)
+static void __attribute__((unused))
+idft360(const int32_t *ar, const int32_t *ai, int32_t *out_iq)
 {
     for (int m = 0; m < IDFT_N; m++) {
         int64_t sr = 0, si = 0;
+        uint32_t idx = 0;            /* (m*k) % IDFT_N，增量递推 */
+        uint32_t sidx = 270;         /* (idx + 270) % IDFT_N */
         for (int k = 0; k < IDFT_N; k++) {
-            int idx = (int)(((int64_t)m * k) % IDFT_N);
             int64_t c = idft_cos[idx];
-            int64_t s = idft_cos[(idx + 270) % IDFT_N];
+            int64_t s = idft_cos[sidx];
             sr += (int64_t)ar[k] * c - (int64_t)ai[k] * s;
             si += (int64_t)ar[k] * s + (int64_t)ai[k] * c;
+            idx += (uint32_t)m;
+            if (idx >= (uint32_t)IDFT_N)
+                idx -= (uint32_t)IDFT_N;
+            sidx = idx + 270u;
+            if (sidx >= (uint32_t)IDFT_N)
+                sidx -= (uint32_t)IDFT_N;
         }
         out_iq[2 * m + 0] = (int32_t)(sr / ((int64_t)IDFT_N * IDFT_SCALE));
         out_iq[2 * m + 1] = (int32_t)(si / ((int64_t)IDFT_N * IDFT_SCALE));
@@ -429,7 +447,11 @@ static int us_equalise_demap(void)
                     ai[m] = (int32_t)ei;
                     m++;
                 }
+#ifdef PROTO_CPU_ONLY
             idft360(ar, ai, llr_e);
+#else
+            dft_bluestein_inv(ar, ai, llr_e);
+#endif
         }
 #else
         {

@@ -595,7 +595,10 @@ def main(argv):
         if rs.get("runs") is not None:
             rep.eq("参照阵列运行数", r[rs["runs"]], w[3])
 
-    report = os.path.join(pdir, "report.md")
+    # CPU 对照路径（docs/22）不能覆盖 CGRA 路径的 report.md：perf_report.py
+    # 只读 report.md，一旦被覆盖，报告里这个场景就变成"全是 CPU"。
+    report = os.path.join(pdir, "report_cpu.md" if getattr(a, "cpu_only", False)
+                          else "report.md")
     plan = dict(plan)
     plan["params_hash"] = gold.get("params_hash", "?")
     write_report(report, a.scenario, plan, ir, rep, stages, ref_rows, cycles, budget,

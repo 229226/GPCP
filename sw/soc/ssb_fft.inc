@@ -14,6 +14,7 @@
 #define FFT_TAIL_WORDS   128
 #include "fft_stage_prog.h"   /* 编译器 image：与 fft_bm.c 共用 */
 #include "fft_block_prog.h"
+#include "rev4_lut.h"         /* 4096 点 base-4 位反序查表（编译期常量） */
 #define FFT_LUT_4096     3456ul
 #define FFT_LUT_1024     384ul
 #define FFT_LUT_256      0ul
@@ -46,13 +47,17 @@ static void fe_load(uint32_t which)
 static void fe_dsc(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
                    uint32_t out, uint32_t stride, uint32_t row)
 {
-    uint32_t *d = desc[f_ndesc];
-    d[0] = ram;
-    d[1] = (spad & 0xFFFFu) | (page ? GPCP_DMA_DESC_PAGE1 : 0u) |
-           (out ? GPCP_DMA_DESC_OUT : 0u);
-    d[2] = len & 0xFFFFu;
-    d[3] = (stride & 0xFFFFu) | ((row & 0xFFFFu) << 16);
-    d[4] = 0; d[5] = 0; d[6] = 0; d[7] = 0;
+    /* 描述符按 4 个 64-bit 字写：8 次 32-bit 存储减半，字段布局不变。
+     * DESC_BASE 与 32B 步进都 8 字节对齐，可以安全用 64-bit 存。 */
+    typedef uint64_t __attribute__((may_alias)) fe_u64;
+    fe_u64 *d = (fe_u64 *)desc[f_ndesc];
+    uint64_t w1 = (spad & 0xFFFFu) | (page ? GPCP_DMA_DESC_PAGE1 : 0u) |
+                  (out ? GPCP_DMA_DESC_OUT : 0u);
+    uint64_t w3 = (stride & 0xFFFFu) | ((row & 0xFFFFu) << 16);
+    d[0] = (uint64_t)ram | (w1 << 32);
+    d[1] = (uint64_t)(len & 0xFFFFu) | (w3 << 32);
+    d[2] = 0;
+    d[3] = 0;
     f_ndesc++;
 }
 
@@ -178,7 +183,9 @@ static uint32_t rev4n(uint32_t v, uint32_t digits)
     return r;
 }
 
+/* rev4 在 ofdm_modulate / estimate / demodulate 的内层每符号调用数千次；
+ * 查表把 6 次移位/或换成 1 次 load。表是编译期常量，不再占阶段周期。 */
 static uint32_t rev4(uint32_t v)
 {
-    return rev4n(v, 6);
+    return rev4_lut[v & 0xFFFu];
 }

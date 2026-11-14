@@ -192,6 +192,14 @@ mmse_2x1_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.p
 fft_butterfly_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/fft_butterfly.yaml
 	python3 ../../cgra/tools/gen_kernel_prog.py --spec ../../cgra/kernels/fft_butterfly.yaml
 
+# Turbo 粗粒度微码：一次生成 4 张镜像 + 1 张 spad 布局表（cgra/tools/turbo_seq.py）。
+turbo_seq_map.h turbo_fwd32_prog.h turbo_fwd11_prog.h turbo_bwd32_prog.h turbo_bwd11_prog.h &: ../../cgra/tools/turbo_seq.py
+	python3 ../../cgra/tools/turbo_seq.py
+
+# 4096 点 base-4 位反序常量表（ssb_fft.inc 的 rev4 查表）。
+rev4_lut.h: ../../cgra/tools/gen_rev4_lut.py
+	python3 ../../cgra/tools/gen_rev4_lut.py
+
 $(BUILD)/mimo_bm.elf: mmse_2x1_prog.h mimo_stages.inc
 
 # ---- docs/20：协议基准（场景 -> plan.h -> 通用运行器）------------------------
@@ -231,7 +239,9 @@ $(BUILD)/proto_runner_$(PROTO)$(PROTO_SUF).elf: proto_runner.c start.S link.ld \
 		lte_ul_stages.inc lte_ul_dft200_tab.h lte_cell_stages.inc lte_pss_tab.h \
 		wifi_stages.inc wifi_cos256_tab.h wifi_ldpc_648_r12.h \
 		pusch_stages.inc fft_cpu.inc dft_bluestein.inc dft_bluestein_tab.h \
-		prach_corr_prog.h prach_corr_layout.h mmse_2x1_prog.h ssb_fft.inc \
+		turbo_seq_map.h turbo_fwd32_prog.h turbo_fwd11_prog.h \
+		turbo_bwd32_prog.h turbo_bwd11_prog.h \
+		prach_corr_prog.h prach_corr_layout.h mmse_2x1_prog.h ssb_fft.inc rev4_lut.h \
 		pss_corr_prog.h pss_corr_layout.h ../../tools/ssb_fid_luts.h \
 		fft_stage_prog.h fft_block_prog.h | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(PROTO_FLAGS) -I$(PROTO_DIR) -I../../tools \
