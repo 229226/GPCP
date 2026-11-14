@@ -8,7 +8,7 @@ KNOWN = {
     "a_bits", "bw_mhz", "cp_len", "csi_density", "e_bits", "fft_points",
     "i_ssb", "layers", "l_ra", "m_cs", "n_cs", "n_csi_rs",
     "n_data_subcarriers", "n_hf", "n_id", "n_id1", "n_id2",
-    "n_id_1", "n_id_2", "n_rnti", "qm", "reg", "rx",
+    "n_id_1", "n_id_2", "n_rnti", "oversample", "qm", "reg", "rx",
     "scs_khz", "seed", "snr_db", "taps", "nsym", "mcs",
     "ack", "aggregation_level", "arrival", "form", "harq_tx",
     "jobs_per_slot", "length", "preamble", "pss", "reg_per_cce",

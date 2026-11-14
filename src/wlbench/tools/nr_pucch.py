@@ -14,8 +14,8 @@ This module makes the same detection *hardware-exact*:
   * the correlation is the 127-tap integer sum of the already-verified
     ``prach_corr`` reference kernel (reference kernels/prach_corr.yaml -> prach_corr_prog.h),
     reused here for only NCAND = 2 candidate shifts;
-  * the 16 PE partial sums are butterfly-reduced inside the array, and the CPU
-    cross-checks the array's own reduction bit-for-bit.
+  * the correlation is reported as a total; an implementation may split the
+    sum across its own lanes, but the reference value stays the total.
 
 So ``run-pucch`` shares the PRACH kernel and adds the RRC-era control-plane
 channel to the SoC without inventing new reference kernel.
@@ -59,7 +59,7 @@ DEFAULT_SEED = 1
 
 # ---------------------------------------------------------------- sequences
 def zc_chips(u=ROOT_U, n=L_RA):
-    """Quantised ZC root, same integer taps the CGRA correlates against."""
+    """Quantised ZC root: the same integer taps the reference kernel uses."""
     return [(int(round(c.real * CHIP_SCALE)), int(round(c.imag * CHIP_SCALE)))
             for c in UL.zc_root(u, n)]
 
@@ -162,7 +162,7 @@ def selftest():
         print("  SNR %4.1f dB : %d/16 bits correct, %d/16 agree with nr_ul.py %s"
               % (snr, hits, consistent, "[OK]" if good else "[FAIL]"))
 
-    # correlation values are the exact integer sums the CGRA computes
+    # correlation values are the exact integer sums of the reference kernel
     g = golden(1, DEFAULT_SNR, DEFAULT_SEED)
     y, refs = g["y"], g["ref"]
     manual = []

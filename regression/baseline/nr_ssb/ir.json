@@ -12,16 +12,18 @@
   "n_id1": 200,
   "n_id2": 1,
   "nsym": 4,
+  "oversample": 2,
   "scs_khz": 15,
   "snr_db": null
  },
  "derived": {
   "a_bits": 32,
-  "cp_len": 144,
-  "n_fft_min": 2048,
+  "cp_len": 288,
+  "n_fft_min": 4096,
   "n_id": 1,
   "n_rb": 106,
-  "n_subcarriers": 1272
+  "n_subcarriers": 1272,
+  "oversample": 2
  },
  "direction": "dl",
  "golden": [
@@ -129,7 +131,9 @@
    "length": 0,
    "op": "estimate",
    "out": "h",
-   "params": {}
+   "params": {
+    "includes_fft": false
+   }
   },
   {
    "id": 8,

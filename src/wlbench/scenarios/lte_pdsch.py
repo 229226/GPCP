@@ -7,7 +7,7 @@ from wlbench.hll import scenario
 
 S = scenario("lte_pdsch", rat="lte", direction="dl")
 
-S.cfg(bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
+S.cfg(oversample=2, bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
       a_bits=80, e_bits=800, qm=2, nsym=2)
 S.traffic(arrival="periodic", jobs_per_slot=1, slots=40, util=1.0)
 

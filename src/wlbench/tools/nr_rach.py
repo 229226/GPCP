@@ -136,7 +136,7 @@ def tc_rnti_of(preamble):
 
 # --------------------------------------------------------- Msg1 transmit / detect
 def zc_chips(u=ROOT_U, n=L_RA):
-    """Quantised ZC root: the integer taps the CGRA correlates against."""
+    """Quantised ZC root: the integer taps the reference kernel correlates."""
     return [(int(round(c.real * CHIP_SCALE)), int(round(c.imag * CHIP_SCALE)))
             for c in UL.zc_root(u, n)]
 
@@ -169,7 +169,7 @@ def msg1_correlations(y, chips, taps=PRACH_TAPS):
 
 
 def msg1_detect(y, chips, n_cs, taps=PRACH_TAPS):
-    """Integer cyclic-shift search -- the exact arithmetic of the CGRA kernel.
+    """Integer cyclic-shift search -- the exact arithmetic of the reference kernel.
 
     For candidate shift d the array computes
 

@@ -8,6 +8,7 @@
   "bw_mhz": 20,
   "layers": 2,
   "n_id": 1,
+  "oversample": 2,
   "qm": 2,
   "rx": 2,
   "scs_khz": 15,
@@ -16,11 +17,12 @@
  },
  "derived": {
   "a_bits": 720,
-  "cp_len": 144,
-  "n_fft_min": 2048,
+  "cp_len": 288,
+  "n_fft_min": 4096,
   "n_id": 1,
   "n_rb": 106,
   "n_subcarriers": 1272,
+  "oversample": 2,
   "qm": 2
  },
  "direction": "dl",
@@ -73,7 +75,9 @@
    "length": 0,
    "op": "estimate",
    "out": "h",
-   "params": {}
+   "params": {
+    "includes_fft": false
+   }
   },
   {
    "id": 4,

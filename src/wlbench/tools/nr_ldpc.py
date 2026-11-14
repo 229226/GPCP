@@ -23,7 +23,6 @@ import sys
 import ldpc5g as L
 import ldpc_nr as NR
 
-PES = 16                      # CGRA array width
 # ldpc5g carries the i_LS = 2 table, so only set-2 lifting sizes can be
 # cross-checked against it.  Zc=64 is i_LS=0: it has its own gates
 # (run-pdsch-zc64 / run-pdsch-bg1-zc64) and is exercised below via ldpc_nr.
@@ -56,16 +55,6 @@ def channel_llr(cw, snr_db, seed=9, sigma=0.5, bg=2):
     for i in range(PUNCT_ZC * zc, len(llr)):
         llr[i] += int(rnd.gauss(0, sigma))
     return llr
-
-
-def paging_split(vec, zc):
-    """Split a Zc-long edge message into Zc/16 pages of 16 PE words."""
-    assert zc % PES == 0 and len(vec) == zc
-    return [vec[p * PES:(p + 1) * PES] for p in range(zc // PES)]
-
-
-def paging_join(pages):
-    return [v for page in pages for v in page]
 
 
 def layered_decode(llr, zc, iters=8, scale=0.75, bg=2):
@@ -168,34 +157,25 @@ def dump_enc(path, bg=2, zc=20, kb_used=None, seed=5):
 
 
 def main():
-    print("QC-LDPC extension: BG2 graph, Zc list %s, PE width %d" % (ZC_LIST, PES))
+    print("QC-LDPC extension: BG2 graph, Zc list %s" % (ZC_LIST,))
     ok = True
     for zc in ZC_LIST:
         info, cw = make_codeword(zc)
-        if zc % PES == 0:
-            probe = list(range(zc))
-            paging_ok = paging_join(paging_split(probe, zc)) == probe
-            tag = "%d pages x %d PE" % (zc // PES, PES)
-        else:
-            paging_ok = True                 # not PE-aligned, paging N/A
-            tag = "Zc%%16=%d (not pageable)" % (zc % PES)
         llr = channel_llr(cw, 3.0)
         bits_f, sw_f = L.decode(llr, zc, iters=8)
         bits_l, sw_l = layered_decode(llr, zc, iters=8)
         info_ok = bits_l[:KB * zc] == info[:KB * zc]
-        print("  Zc=%2d : %s, syndrome(flood)=%d syn(layer)=%d, info %s" % (
-            zc, tag, sw_f, sw_l, "OK" if info_ok else "BAD"))
-        ok &= paging_ok and info_ok
+        print("  Zc=%2d : syndrome(flood)=%d syn(layer)=%d, info %s" % (
+            zc, sw_f, sw_l, "OK" if info_ok else "BAD"))
+        ok &= info_ok
 
     # Zc = 64 is i_LS = 0: both sides go through ldpc_nr so the same table is used
-    probe = list(range(64))
-    assert paging_join(paging_split(probe, 64)) == probe
     _, cw = make_codeword(64, 5, 2)
     llr = channel_llr(cw, 3.0)
     for it in (1, 2, 4, 8):
         bits_l, sw_l = layered_decode(llr, 64, iters=it)
         print("  iters=%d : Zc=64 (i_LS=0) layered syndrome=%d" % (it, sw_l))
-    print("[ %s ] Zc=64 paging + layered scheduling" % ("OK" if ok else "FAIL"))
+    print("[ %s ] Zc=64 layered scheduling" % ("OK" if ok else "FAIL"))
     return 0 if ok else 1
 
 

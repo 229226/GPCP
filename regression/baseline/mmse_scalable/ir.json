@@ -1,0 +1,105 @@
+{
+ "budget": {
+  "on_time": null,
+  "slot_ms": 1.0
+ },
+ "cfg": {
+  "a_bits": 720,
+  "bw_mhz": 20,
+  "layers": 2,
+  "oversample": 2,
+  "qm": 2,
+  "rx": 2,
+  "scs_khz": 15,
+  "seed": 1,
+  "snr_db": 25
+ },
+ "derived": {
+  "a_bits": 720,
+  "cp_len": 288,
+  "n_fft_min": 4096,
+  "n_rb": 106,
+  "n_subcarriers": 1272,
+  "oversample": 2,
+  "qm": 2
+ },
+ "direction": "dl",
+ "golden": [
+  {
+   "coeff": "model.h",
+   "data_re": 180,
+   "hard_bits": "model.mmse"
+  }
+ ],
+ "nodes": [
+  {
+   "id": 0,
+   "in": [],
+   "length": 17536,
+   "op": "received",
+   "out": "wave",
+   "params": {
+    "form": "td"
+   }
+  },
+  {
+   "id": 1,
+   "in": [],
+   "length": 0,
+   "op": "dmrs",
+   "out": "ref",
+   "params": {
+    "l": 0,
+    "n_id": 1,
+    "type": "mimo_csi"
+   }
+  },
+  {
+   "id": 2,
+   "in": [
+    "wave"
+   ],
+   "length": 0,
+   "op": "ofdm_demodulate",
+   "out": "grid",
+   "params": {}
+  },
+  {
+   "id": 3,
+   "in": [
+    "grid",
+    "ref"
+   ],
+   "length": 0,
+   "op": "estimate",
+   "out": "h",
+   "params": {
+    "includes_fft": false
+   }
+  },
+  {
+   "id": 4,
+   "in": [
+    "grid",
+    "h"
+   ],
+   "length": 720,
+   "op": "mimo_equalise",
+   "out": "hard",
+   "params": {
+    "layers": 2,
+    "qm": 2,
+    "rx": 2
+   }
+  }
+ ],
+ "rat": "nr",
+ "scenario": "mmse_scalable",
+ "schema": "gpcp-proto-ir/1",
+ "traffic": {
+  "arrival": "periodic",
+  "jobs_per_slot": 1,
+  "slots": 40,
+  "util": 1.0
+ }
+}

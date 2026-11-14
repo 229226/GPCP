@@ -56,6 +56,18 @@ channel / estimate / equalise_demap / mimo_equalise / decode / expect / budget`�
 **后端只应读取 `nodes` 的 `op / params / length` 来安排执行**，不得依赖
 `golden` 里的期望值。
 
+两条与"语义诚实"有关的约定（2026-11-14 起）：
+
+- **`derived` 必须写真实波形。** `n_fft_min / cp_len` 是**实际采样**的点数与
+  CP，包含过采样：20 MHz NR @15 kHz 最少 2048 点，`cfg(oversample=2)` 后
+  `derived.n_fft_min = 4096`、`cp_len = 288`。不允许出现"derived 写 2048、
+  激励却是 4096 点"这种不一致——后端会按 derived 分配缓冲。
+- **`estimate.params.includes_fft`**：为 `true` 时表示该动词内部含一次接收
+  FFT（输入是时域样本、前面没有 `ofdm_demodulate`）。由场景显式声明，后端
+  不再从图上推断。
+- **场景里不许写死波形点数**（4096/2048/1024/288/144）：`check_hll` 会拦，
+  请用 `S.sym_len(nsym, extra=0)`，它按 `derived` 现算。
+
 ### 2.3 `golden.json`
 
 ```json
@@ -120,6 +132,10 @@ worst_backlog`；`primary_on_time` 取 `on_time_rate >= 1.0`。
 规范，换后端后预算会错而 `ir_sha` 不变，极难排查。
 
 ## 5. 边界
+
+`oversample` 属于 **wlbench**（协议参数），`n_fft_min` 是它的派生量；
+"用哪套 FFT 镜像"属于后端。"波形点数写死成某个镜像的尺寸"是两者的混淆，
+由 `check_hll` 的 `HW_LITERALS` 规则拦住。
 
 | 属于 wlbench | 属于后端 | 禁止进 wlbench |
 |---|---|---|

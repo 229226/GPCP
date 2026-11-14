@@ -72,7 +72,9 @@
    "length": 0,
    "op": "estimate",
    "out": "h",
-   "params": {}
+   "params": {
+    "includes_fft": false
+   }
   },
   {
    "id": 4,

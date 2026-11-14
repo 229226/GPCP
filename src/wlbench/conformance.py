@@ -43,8 +43,13 @@ def run(root=ROOT):
     lock = os.path.join(root, "regression", "lock.json")
     bundles = os.path.join(root, "build", "bundles")
     rows, failures = V.verify(lock, bundles)
+    # 每场景 3 个产物 + 1 份账本；数量跟着场景数走，不写死 52。
+    import json as _json
+    with open(lock, encoding="utf-8") as f:
+        n_scen = len(_json.load(f)["scenarios"])
+    expected = 3 * n_scen + 1
     checks.append(_check("frozen bundles byte-identical",
-                         not failures and len(rows) == 52,
+                         not failures and len(rows) == expected,
                          "%d/%d artifacts" % (len(rows) - len(failures), len(rows))))
 
     nr = os.path.join(bundles, "nr_mimo")

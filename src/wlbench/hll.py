@@ -123,8 +123,27 @@ class Scenario:
     def channel(self, wave, model="awgn", **kw):
         return self._node("channel", [wave], "y", model=model, **kw)
 
-    def estimate(self, y, ref):
-        return self._node("estimate", [y, ref], "h")
+    def estimate(self, y, ref, includes_fft=None):
+        """信道估计。
+
+        `includes_fft` 写进 IR：输入是时域样本（前面没有 ofdm_demodulate）时，
+        这个动词内部要补一次接收 FFT。以前这件事靠后端从图上猜，现在由场景
+        明确声明——语义归 wlbench，后端不再推断。
+        """
+        if includes_fft is None:
+            includes_fft = not any(n["op"] == "ofdm_demodulate" for n in self.nodes)
+        return self._node("estimate", [y, ref], "h",
+                          includes_fft=bool(includes_fft))
+
+    def sym_len(self, nsym=1, extra=0):
+        """nsym 个 OFDM 符号的时域样本数（I/Q 交织的 32-bit 字数）。
+
+        场景用它算 `received.length`，不要把 4096/288 这类点数写死——那等于
+        把某一套 FFT 镜像的尺寸抄进协议里。
+        """
+        d = self.derived
+        return (2 * int(nsym) * (int(d.get("cp_len", 0)) + int(d.get("n_fft_min", 0)))
+                + int(extra))
 
     def equalise_demap(self, y, h, qm=None):
         return self._node("equalise_demap", [y, h], "llr",

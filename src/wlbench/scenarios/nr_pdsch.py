@@ -9,7 +9,7 @@ S = scenario("nr_pdsch", rat="nr", direction="dl")
 
 # 20 MHz / 15 kHz 与现有接收链同口径；n_id=1 是 38.211 7.4.1.1 的 DMRS 种子，
 # RNTI 0x1234 与 tools/nr_dl_mod.py 的默认激励一致。
-S.cfg(bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
+S.cfg(oversample=2, bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
       a_bits=80, e_bits=720, qm=2, layers=1, nsym=2)
 
 # 阶段 1 的负载：每格 1 个 TB（L1 轻档），跑 40 格。

@@ -4,15 +4,27 @@ This is the single place where protocol tables live.  Adding a new RAT means
 adding a table module and extending derive(); workload scenarios never see
 hardware numbers.  The v1 derivation is kept byte-identical to the original
 hll._derive so the frozen regression lock still holds.
+
+`oversample` is a *protocol* knob, not a hardware one: a transmission
+bandwidth configuration may be sampled at 1x, 2x or 4x the minimum FFT size
+(e.g. 20 MHz NR at 15 kHz needs 2048 points; 2x oversampling gives 4096 points
+and 30.72 Msps).  It is recorded in `derived` so the IR states the real
+waveform instead of leaving the backend to guess.
 """
 from .nr import CP_RATIO, N_RB
 from .lte import LTE_NOTE
 from .wifi import WIFI_CP_RATIO
 
+OVERSAMPLE = (1, 2, 4)
+
 
 def derive(cfg):
     """Waveform-level derivation (schema v1, frozen)."""
     d = {}
+    ov = int(cfg.get("oversample", 1) or 1)
+    if ov not in OVERSAMPLE:
+        raise ValueError("cfg: oversample 只支持 %s" % (OVERSAMPLE,))
+
     if "fft_points" in cfg:
         n = int(cfg["fft_points"])
         d["n_fft_min"] = n
@@ -32,8 +44,10 @@ def derive(cfg):
         n = 1
         while n < need:
             n <<= 1
-        d["n_fft_min"] = n
-        d["cp_len"] = int(round(n * CP_RATIO))
+        d["n_fft_min"] = n * ov
+        d["cp_len"] = int(round(n * CP_RATIO)) * ov
+    if ov != 1:
+        d["oversample"] = ov
     for k in ("n_id", "n_rnti", "qm", "al", "reg", "e_bits", "a_bits"):
         if k in cfg:
             d[k] = cfg[k]

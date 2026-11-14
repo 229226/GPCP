@@ -10,18 +10,20 @@
   "n_id": 1,
   "n_rnti": 4660,
   "nsym": 2,
+  "oversample": 2,
   "qm": 2,
   "scs_khz": 15
  },
  "derived": {
   "a_bits": 80,
-  "cp_len": 144,
+  "cp_len": 288,
   "e_bits": 800,
-  "n_fft_min": 2048,
+  "n_fft_min": 4096,
   "n_id": 1,
   "n_rb": 106,
   "n_rnti": 4660,
   "n_subcarriers": 1272,
+  "oversample": 2,
   "qm": 2
  },
  "direction": "dl",
@@ -96,7 +98,7 @@
    "in": [
     "grid"
    ],
-   "length": 4384,
+   "length": 8768,
    "op": "ofdm_modulate",
    "out": "wave",
    "params": {}
@@ -133,7 +135,9 @@
    "length": 0,
    "op": "estimate",
    "out": "h",
-   "params": {}
+   "params": {
+    "includes_fft": false
+   }
   },
   {
    "id": 9,

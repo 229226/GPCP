@@ -11,18 +11,20 @@
   "n_id": 1,
   "n_rnti": 4660,
   "nsym": 2,
+  "oversample": 2,
   "qm": 4,
   "scs_khz": 15
  },
  "derived": {
   "a_bits": 80,
-  "cp_len": 144,
+  "cp_len": 288,
   "e_bits": 720,
-  "n_fft_min": 2048,
+  "n_fft_min": 4096,
   "n_id": 1,
   "n_rb": 106,
   "n_rnti": 4660,
   "n_subcarriers": 1272,
+  "oversample": 2,
   "qm": 4
  },
  "direction": "dl",
@@ -66,7 +68,9 @@
    "length": 0,
    "op": "estimate",
    "out": "h",
-   "params": {}
+   "params": {
+    "includes_fft": true
+   }
   },
   {
    "id": 3,
