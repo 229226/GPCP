@@ -23,9 +23,9 @@ protocol specification.
 
 ```bash
 pip install -e .
-wlbench build --all                      # -> build/bundles/<scenario>/
-wlbench verify                           # check against regression/lock.json
-wlbench evaluate \
+python3 -m wlbench.cli build --all                      # -> build/bundles/<scenario>/
+python3 -m wlbench.cli verify                           # check against regression/lock.json
+python3 -m wlbench.cli evaluate \
   --bundle build/bundles/nr_mimo \
   --metrics examples/metrics_cgra.json   # timing verdict
 python3 -m unittest discover -s tests -v
@@ -73,3 +73,5 @@ semantics changed.
 
 P2 (conformance + sweep), P3 (cfg schema, numerology plugins, MIMO sweeps),
 P4 (GPCP adapter with full regression), P5 (CI and docs).
+
+If ~/.local/bin is on PATH, the `wlbench` console script can be used instead of `python3 -m wlbench.cli`.
