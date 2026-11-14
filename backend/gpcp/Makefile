@@ -1,8 +1,11 @@
 # GPCP backend adapter targets.  Does not touch the top-level build.
 PY := python3
 ADAPTER := adapter.py
+RUNNER := run.py
+BUNDLE ?= /home/zzq/wlbench/build/bundles/nr_mimo
+BACKEND ?= gpcp-cgra
 
-.PHONY: regress collect evaluate verify-bundle clean
+.PHONY: regress collect evaluate run verify-bundle clean
 
 regress:
 	$(PY) $(ADAPTER) regress
@@ -20,3 +23,7 @@ verify-bundle:
 
 clean:
 	rm -rf build __pycache__
+
+run:
+	$(PY) $(RUNNER) --bundle $(BUNDLE) --backend $(BACKEND) \
+		--out build/metrics_$(BACKEND).json

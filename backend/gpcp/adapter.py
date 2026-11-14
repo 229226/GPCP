@@ -25,9 +25,13 @@ DUMPS = GPCP / "sim" / "soc" / "build"
 LOCK = Path("/home/zzq/wlbench/regression/lock.json")
 LEDGER = PROTO / "compare_all.csv"
 CLOCKS = HERE / "clocks.json"
+TARGET_YAML = GPCP / "cgra" / "target.yaml"
 
 sys.path.insert(0, str(GPCP / "tools"))
 from checklib import parse_dump, words32  # noqa: E402
+
+import lower as LOWER  # noqa: E402
+import emit as EMIT  # noqa: E402
 
 STAGE_WORD = 10
 ARTIFACTS = ("ir.json", "stimulus.bin", "golden.json")
@@ -63,62 +67,33 @@ def verify_bundle(name):
     return out
 
 
-def build_plan_h(name):
-    """Rebuild plan.h from the *bundle* IR plus GPCP's target geometry."""
-    ir_bytes = (bundle_dir(name) / "ir.json").read_bytes()
+def target():
+    """GPCP 的阵列几何与仿真时钟；唯一来源是 cgra/target.yaml。"""
+    return LOWER.read_target(str(TARGET_YAML))
+
+
+def plan_for(name, bundle=None):
+    """把 *bundle* 的 IR 落到 GPCP 目标上（不再读 plan-base.json）。
+
+    这是 W1 的关键：落点是后端算的，输入只有 bundle 的 ir.json + 自己的
+    target.yaml，所以任何 wlbench 新造的 workload 也能落，不依赖 GPCP 的
+    场景流水线产物。bundle 省略时用 wlbench 的标准 bundle 目录。
+    """
+    b = Path(bundle) if bundle else bundle_dir(name)
+    ir_bytes = (b / "ir.json").read_bytes()
     ir = json.loads(ir_bytes.decode("utf-8"))
-    with open(PROTO / name / "plan-base.json", encoding="utf-8") as f:
-        plan = json.load(f)
-    stim = (bundle_dir(name) / "stimulus.bin").read_bytes()
+    plan, ok = LOWER.lower(ir, target())
+    if not ok:
+        raise SystemExit("[FAIL] %s: 目标不可行 %s" % (name, plan.get("needs")))
+    return ir, ir_bytes, plan
 
-    params_hash = int(hashlib.sha256(ir_bytes + stim).hexdigest()[:8], 16)
-    tgt = plan["target"]
-    budget = ir.get("budget") or {}
-    slot_ms = float(budget.get("slot_ms", 0.0))
-    clock_hz = int(tgt.get("clock_hz", 0))
-    budget_cycles = int(round(slot_ms * clock_hz / 1000.0)) if slot_ms and clock_hz else 0
-    stim_magic = struct.unpack("<I", stim[:4])[0] if len(stim) >= 4 else 0
 
-    lines = [
-        "/* 生成物：proto/emit.py 从 ir.json + plan-base.json 生成，勿手改。",
-        " * 场景 %s（%s/%s），目标 %s（%dx%d = %d PE，%d bank x %d 字）。"
-        % (name, ir.get("rat"), ir.get("direction"), tgt.get("source", "?"),
-           tgt["rows"], tgt["cols"], tgt["n_pes"], tgt["banks"],
-           tgt["words_per_bank"]),
-        " * 改场景 / 换目标后重跑 `make proto PROTO=%s`。" % name,
-        " */",
-        "#ifndef PROTO_PLAN_H",
-        "#define PROTO_PLAN_H",
-        "",
-        '#define PROTO_SCENARIO     "%s"' % name,
-        "#define PROTO_PARAMS_HASH  0x%08xul" % params_hash,
-        "#define PROTO_N_STAGES     %d" % len(plan["stages"]),
-        "#define PROTO_CLOCK_HZ     %dul" % clock_hz,
-        "#define PROTO_SLOT_MS      %.3f" % slot_ms,
-        "#define PROTO_BUDGET_CYCLES %dul" % budget_cycles,
-        "#define PROTO_STIM_MAGIC   0x%08xul" % stim_magic,
-        "#define PROTO_STIM_WORDS   %d" % (len(stim) // 4),
-        "",
-        "typedef enum { PROTO_WHERE_CPU = 0, PROTO_WHERE_ARRAY = 1,",
-        "               PROTO_WHERE_DMA = 2 } proto_where_t;",
-        "",
-        "typedef struct {",
-        "    uint8_t     id;            /* 语义图节点号（docs/20 §2 的顺序） */",
-        "    uint8_t     where;         /* 落点：CPU / 阵列 / DMA */",
-        "    uint16_t    planned_runs;  /* 计划里的阵列运行次数（0 = 纯标量） */",
-        "    const char *op;            /* 协议动词 */",
-        "    const char *impl;          /* 编译器选的实现（诊断用） */",
-        "} proto_stage_t;",
-        "",
-        "static const proto_stage_t proto_stages[PROTO_N_STAGES] = {",
-    ]
-    for st in plan["stages"]:
-        where = _WHERE.get(st["where"], "PROTO_WHERE_CPU")
-        lines.append("    { %2d, %-18s %3d, %-18s %s },"
-                     % (st["id"], where + ",", int(st.get("array_runs", 0)),
-                        _cstr(st["op"]) + ",", _cstr(st.get("impl") or "")))
-    lines += ["};", "", "#endif /* PROTO_PLAN_H */", ""]
-    return "\n".join(lines)
+def build_plan_h(name, bundle=None):
+    """Rebuild plan.h from the bundle IR via backend lowering."""
+    ir, ir_bytes, plan = plan_for(name, bundle=bundle)
+    b = Path(bundle) if bundle else bundle_dir(name)
+    stim = (b / "stimulus.bin").read_bytes()
+    return EMIT.plan_h(name, ir, ir_bytes, stim, plan, target())
 
 
 def dump_words(name, backend):
@@ -134,11 +109,10 @@ def dump_words(name, backend):
 
 def stage_cycles(name, backend):
     st, w = dump_words(name, backend)
-    with open(PROTO / name / "plan-base.json", encoding="utf-8") as f:
-        stages = json.load(f)["stages"]
-    ops = {s["id"]: s["op"] for s in stages}
+    plan = plan_for(name)[2]
+    ops = {s["id"]: s["op"] for s in plan["stages"]}
     per = {}
-    for i in range(len(stages)):
+    for i in range(len(plan["stages"])):
         sid = w[STAGE_WORD + 3 * i]
         per[sid] = w[STAGE_WORD + 3 * i + 1]
     total = w[2]
@@ -185,6 +159,10 @@ def regress():
         existing = (PROTO / n / "plan.h").read_text(encoding="utf-8")
         record("%s/plan.h regenerated from bundle" % n,
                build_plan_h(n) == existing)
+        with open(PROTO / n / "plan-base.json", encoding="utf-8") as f:
+            legacy = json.load(f)["stages"]
+        record("%s/lowering matches plan-base.json" % n,
+               plan_for(n)[2]["stages"] == legacy)
 
     cgra_diffs, cpu_diffs = [], []
     with open(LEDGER, encoding="utf-8", newline="") as f:
