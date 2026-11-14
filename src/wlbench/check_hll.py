@@ -24,6 +24,7 @@ VERBS = {
     "correlate", "map_to_grid", "extract", "measure", "ofdm_modulate",
     "ofdm_demodulate", "channel", "estimate", "equalise_demap", "mimo_equalise",
     "decode", "expect", "budget",
+    "equalise", "transform", "demap",
 }
 ALLOWED_CALLS = {"scenario", "sym_len"} | VERBS
 

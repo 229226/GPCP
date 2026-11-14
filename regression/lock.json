@@ -1,9 +1,9 @@
 {
  "ledger": {
-  "bytes": 7085,
-  "data_rows": 131,
+  "bytes": 7199,
+  "data_rows": 133,
   "scenario_count": 17,
-  "sha256": "eddf2d42356a09bfe9df127a93e802fa76ee2d7c3113ae04822283788c1a74c0",
+  "sha256": "f4aa4d97f44a03496129fc89d3be64e7b6296d4d183f11c5c6da81cfe3196738",
   "totals": {
    "lte_cell_search": {
     "cgra_cycles": 1822652,
@@ -76,9 +76,9 @@
     "ratio": "5.618"
    },
    "nr_pusch_tp": {
-    "cgra_cycles": 2851278,
-    "cpu_cycles": 18408813,
-    "ratio": "6.456"
+    "cgra_cycles": 2854488,
+    "cpu_cycles": 18791149,
+    "ratio": "6.583"
    },
    "nr_ssb": {
     "cgra_cycles": 3173094,
@@ -321,8 +321,8 @@
   },
   "nr_pusch_tp": {
    "ir.json": {
-    "bytes": 1656,
-    "sha256": "c13a96628a24002095df03f3a004ea041583aa898935f5458c537569900cd861"
+    "bytes": 1964,
+    "sha256": "6d1725b89141a399a0225d581805202073e71d38712ba1e6fcd162db4b9db7e6"
    },
    "stimulus.bin": {
     "bytes": 70148,
@@ -330,9 +330,9 @@
    },
    "golden.json": {
     "bytes": 6537,
-    "sha256": "a0d77a3d2d7153b82f68df77299e2567e7ba202960cf0319f37ce80f1d5b9ad1"
+    "sha256": "b6aeb5f8f5dba558df3b28f1007221cea11fbf1f17d215556f6283d096d9694c"
    },
-   "ir_sha16": "c13a96628a240020"
+   "ir_sha16": "6d1725b89141a399"
   },
   "nr_ssb": {
    "ir.json": {

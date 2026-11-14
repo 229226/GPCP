@@ -93,14 +93,40 @@
     "h"
    ],
    "length": 720,
-   "op": "equalise_demap",
-   "out": "llr",
+   "op": "equalise",
+   "out": "eq",
    "params": {
     "qm": 2
    }
   },
   {
    "id": 5,
+   "in": [
+    "eq"
+   ],
+   "length": 720,
+   "op": "transform",
+   "out": "spec",
+   "params": {
+    "form": "dft",
+    "inverse": true,
+    "size": 360
+   }
+  },
+  {
+   "id": 6,
+   "in": [
+    "spec"
+   ],
+   "length": 720,
+   "op": "demap",
+   "out": "llr",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 7,
    "in": [
     "llr"
    ],
