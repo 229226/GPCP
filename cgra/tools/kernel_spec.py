@@ -284,8 +284,8 @@ def validate(spec):
         return ["spec 顶层必须是映射"]
     shift = int(spec.get("shift", spec.get("base_offset", 0)))
     kind = spec.get("kind", "dfg")
-    if kind not in ("bn", "cn", "dfg"):
-        errs.append(f"未知 kind: {kind!r}（应为 bn/cn/dfg）")
+    if kind not in ("bn", "cn", "cn_wb", "bn_rot", "dfg"):
+        errs.append(f"未知 kind: {kind!r}（应为 bn/cn/cn_wb/bn_rot/dfg）")
     if kind == "dfg" and "ops" not in spec:
         errs.append("dfg 类型必须含 ops")
 

@@ -1,0 +1,5 @@
+name: bn_rot
+kind: bn_rot
+desc: "24 槽变量节点：消息 bank 的 LD/ST 走每 bank 循环旋转（去掉 CPU scatter）"
+out: sw/soc/pdsch_bn_rot_prog.h
+rows: 20

@@ -30,7 +30,7 @@
 static Vcgra_axi_lite* dut = nullptr;
 static std::vector<uint32_t> g_din;
 static bool g_stream = false;
-static std::vector<uint32_t> g_dma_mem(1024, 0);   // copy-engine backing store (standalone, 32-bit words)
+static std::vector<uint32_t> g_dma_mem(2048, 0);   // copy-engine backing store (8 KiB, allows 4 KiB crossing tests)
 
 // ---------------------------------------------------------------------------
 // Tiny AXI4 slave for the copy-engine master: one outstanding INCR burst,
@@ -44,7 +44,7 @@ struct AxiSlave {
     bool     b_pending = false;
 } g_slv;
 
-static uint32_t mem_w(uint32_t byte_addr) { return (byte_addr >> 2) & 0x3FF; }
+static uint32_t mem_w(uint32_t byte_addr) { return (byte_addr >> 2) & 0x7FF; }
 
 static uint64_t mem_ld64(uint32_t byte_addr) {
     return (uint64_t)g_dma_mem[mem_w(byte_addr)] |
@@ -177,6 +177,8 @@ int main(int argc, char** argv) {
     int cycles = 0;
     uint32_t spad_start = 0;
     int spad_count = 0;
+    bool desc64 = false;               // ring uses 64-byte composite descriptors
+    bool no_start = false;             // ring already ran the array; skip the trailing RUN
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -194,6 +196,8 @@ int main(int argc, char** argv) {
         else if (a == "--ring-desc") ring_path = next();
         else if (a == "--ring-base") ring_base = (uint32_t)strtoul(next().c_str(), nullptr, 0);
         else if (a == "--ring-size") ring_size = (uint32_t)strtoul(next().c_str(), nullptr, 0);
+        else if (a == "--desc64") desc64 = true;
+        else if (a == "--no-start") no_start = true;
         else if (a == "--buf-page") buf_page = std::atoi(next().c_str());
         else if (a == "--cycles") cycles = std::atoi(next().c_str());
         else if (a == "--spad-dump") {
@@ -277,23 +281,25 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 3c. descriptor ring: each line holds one 32-byte descriptor (8 words).
-    //     Descriptors are placed at --ring-base inside the slave memory model,
-    //     the ring is then walked by the engine exactly as the SoC does it.
+    // 3c. descriptor ring: each line holds one descriptor (8 words = 32 B,
+    //     or 16 words = 64 B with --desc64).  Descriptors are placed at
+    //     --ring-base inside the slave memory model, the ring is then walked
+    //     by the engine exactly as the SoC does it.
     if (!ring_path.empty()) {
+        const size_t dw = desc64 ? 16 : 8;
         std::ifstream f(ring_path);
-        std::vector<std::array<uint32_t, 8>> descs;
+        std::vector<std::array<uint32_t, 16>> descs;
         std::string line;
         while (std::getline(f, line)) {
             std::istringstream ss(line);
-            std::array<uint32_t, 8> d{};
+            std::array<uint32_t, 16> d{};
             std::string tok;
             size_t n = 0;
             while (ss >> tok) {
                 if (n < d.size()) d[n] = (uint32_t)strtoul(tok.c_str(), nullptr, 0);
                 n++;
             }
-            if (n >= d.size()) descs.push_back(d);
+            if (n >= dw) descs.push_back(d);
         }
         if (descs.empty()) {
             std::fprintf(stderr, "no descriptors in %s\n", ring_path.c_str());
@@ -301,8 +307,9 @@ int main(int argc, char** argv) {
         }
         uint32_t base_w = mem_w(ring_base);
         for (size_t i = 0; i < descs.size(); i++)
-            for (size_t k = 0; k < 8; k++)
-                g_dma_mem[(base_w + (uint32_t)(i * 8 + k)) & 0x3FF] = descs[i][k];
+            for (size_t k = 0; k < dw; k++)
+                g_dma_mem[(base_w + (uint32_t)(i * dw + k)) & 0x3FF] = descs[i][k];
+        if (desc64) axil_wr(0x0064, 1);   // 64-byte composite descriptor mode
         axil_wr(0x0048, ring_base);
         axil_wr(0x004C, ring_size);
         axil_wr(0x0050, 0);
@@ -317,13 +324,15 @@ int main(int argc, char** argv) {
     }
     axil_wr(0x0020, (uint32_t)buf_page);  // array page
 
-    // 4. run
-    axil_wr(0x0004, (uint32_t)cycles);  // NUM_CYCLES
-    axil_wr(0x0000, 0x1);               // CTRL.start
+    // 4. run (unless the ring already started the array through a composite descriptor)
+    if (!no_start) {
+        axil_wr(0x0004, (uint32_t)cycles);  // NUM_CYCLES
+        axil_wr(0x0000, 0x1);               // CTRL.start
+    }
 
     int guard = 0;
-    while (dut->o_busy && guard++ < 100000000) tick();
-    if (dut->o_busy) {
+    while (!no_start && dut->o_busy && guard++ < 100000000) tick();
+    if (!no_start && dut->o_busy) {
         std::fprintf(stderr, "timeout waiting for CGRA done\n");
         return 5;
     }

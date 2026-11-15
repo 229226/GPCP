@@ -114,6 +114,17 @@ package cgra_pkg;
   localparam logic [15:0] REG_DBG_STATE = 16'h0060; // R: engine FSM state (debug)
   localparam logic [15:0] REG_DESC_MODE = 16'h0064; // W: [0] 1 = 64B 复合描述符
 
+  // ---------------- 每 bank 的循环旋转表（LDPC 的 CN/BN 视图转置） ----------------
+  // 32 个条目，每个 7 bit：rot[4:0] / invalid[5] / keep[6]。
+  // 只有指令 imm[15]=1 的 LD/ST 参与：addr = (word + rot[bank]) mod ZC。
+  //   invalid=1：该 bank 的 LD 返回 0（BN 的缺失边）；
+  //   keep=1   ：该 bank 的 ST 被丢弃（CN 的哨兵边，保持 +32767 不被 m' 覆盖）。
+  // 表可以逐字写（REG_ROT_BASE），也可以由 ring 的「表装载描述符」
+  // （word0[51]=1，32 个 32-bit 条目从 RAM 搬入）批量装载。
+  localparam logic [15:0] REG_ROT_ZC   = 16'h006C; // W/R: ZC（0 视为 32）
+  localparam logic [15:0] REG_ROT_BASE = 16'h0080; // 0x80 + bank*4
+  localparam int          ROT_ENTRIES  = 32;
+
   // ---------------- performance counters (read-only, 32-bit each) ----------------
   // W: REG_PERF_CTRL[0] = clear all counters (single-cycle pulse).
   // R: REG_PERF_BASE + 4*index, index见 cgra_top 的 perf_counters 映射。

@@ -364,10 +364,10 @@ def simulate(mc, spad, n=4):
                 raise SystemExit(f"仿真器不支持源 {s}")
 
             if op == "st":
-                spad[imm] = regs[pe][a]
+                spad[imm & 0x3FF] = regs[pe][a]
                 continue
             if op == "ld":
-                v = spad.get(imm, 0)
+                v = spad.get(imm & 0x3FF, 0)
             else:
                 x, y = val(a), val(b)
                 if op == "mov":
@@ -403,7 +403,7 @@ def simulate(mc, spad, n=4):
 BN_GROUPS = ((0, 6), (6, 12), (12, 18), (18, 24))
 BN_SPLIT_CYC = 31          # 一个 pass（4 行）的拍数（6 条消息/PE）
 
-def schedule_bn_split(rows=20, nmsg=24):
+def schedule_bn_split(rows=20, nmsg=24, rot=False):
     """k=4 的 BN 调度：一行拆到 4 个**横向相邻**的 PE，消息常驻寄存器，
     部分和与 acc 走 link（1 跳 1 拍，不碰 spad）。每 4 行一个 pass，每 pass 31 拍。
 
@@ -422,6 +422,10 @@ def schedule_bn_split(rows=20, nmsg=24):
     """
     if nmsg != 24:
         raise SystemExit("schedule_bn_split 目前只支持 24 个消息槽（= 23 + 1 个补零）")
+    # rot=True：消息 bank（0..23）的 LD/ST 带上旋转标志，由每 bank 旋转表把
+    # CN 索引 word 换成变量节点索引 (word - sh)。LLR（24）与硬判决（25）不动。
+    def msg_idx(bank, word):
+        return spad_rot(bank, word) if (rot and bank < 24) else spad_idx(bank, word)
     mc = Microcode()
     size = BN_GROUPS[0][1] - BN_GROUPS[0][0]
     se = 2 * size - 1                     # 最后一个 ADD 的拍
@@ -432,7 +436,7 @@ def schedule_bn_split(rows=20, nmsg=24):
         for j, (lo, hi) in enumerate(BN_GROUPS):
             pe = pr * 4 + j
             for i, k in enumerate(range(lo, hi)):
-                mc.put(base + i, pe, "ld", dst=1 + i, imm=spad_idx(k, r))
+                mc.put(base + i, pe, "ld", dst=1 + i, imm=msg_idx(k, r))
             mc.put(base + size, pe, "mov", a=1, dst=0)
             for i in range(1, size):
                 mc.put(base + size + i, pe, "add", a=0, b=1 + i, dst=0)
@@ -453,7 +457,7 @@ def schedule_bn_split(rows=20, nmsg=24):
             accr, dstr = (0, 7) if j == 0 else (7, 0)
             for i, k in enumerate(range(lo, hi)):
                 mc.put(base + start[j] + 2 * i, pe, "sub", a=accr, b=1 + i, dst=dstr)
-                mc.put(base + start[j] + 2 * i + 1, pe, "st", a=dstr, imm=spad_idx(k, r))
+                mc.put(base + start[j] + 2 * i + 1, pe, "st", a=dstr, imm=msg_idx(k, r))
     return mc
 
 
@@ -470,10 +474,17 @@ CN_EDGES = 10            # BG2 最大检查节点度数（不足补 sentinel）
 CN_SENTINEL_BANK = 30
 CN_CYC_HALF = 86         # 3 初始化 + 10 边 × 8 拍 + 3 写回 = 86
 CN_CYC_TOTAL = 2 * CN_CYC_HALF
+CN_ROT_FLAG = 0x8000     # imm[15]：该 LD/ST 参与每 bank 循环旋转 / keep 检查
+
+
+def spad_rot(bank, word):
+    """带旋转标志的 spad 地址（imm[15]=1，低 10 位仍是 bank/word）。"""
+    return spad_idx(bank, word) | CN_ROT_FLAG
+
 
 
 def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK,
-                res_banks=(10, 11, 12)):
+                res_banks=(10, 11, 12), writeback=False):
     """一次程序跑完 20 个提升行（PE0..15 处理 0..15，PE0..3 处理 16..19）。
 
     每个 PE / 提升行：对 10 条边（不足补 +32767）算 min1、min2、sign。
@@ -482,14 +493,21 @@ def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK,
     先算出来，**并不省指令**（插入 (min1,min2) 本身就要 4 拍）—— 真正省的是
     "20 行一次跑完、程序只装一次"（见 docs/10 §13）。
     寄存器：r3=min1, r4=min2, r5=sign；r0/r1/r2 与 r6/r7 是两条边的临时量。
+
+    writeback=True 时追加一趟 m' 回写（用于去掉 CPU 的 reconstruct_gather）：
+        m'[w] = sign(x) ^ total_sign ? -(mag) : mag,
+        mag = (|x| == min1) ? min2 : min1
+    每条边 14 拍；ST 带旋转标志，由硬件的 keep 位阻止覆盖哨兵边。
     """
     if edges % 2:
         raise SystemExit("schedule_cn 要求偶数条边（成对处理）")
     # 每半镜像：3 拍初始化 + 每条边 8 拍 + 3 拍写回（CN_CYC_HALF 是 edges=10 的值）
     cyc_half = 3 + edges * 8 + 3
+    wb_half = edges * 14
+    step = cyc_half + (wb_half if writeback else 0)
     mc = Microcode()
     for half, (npe, word_base) in enumerate(((16, 0), (4, 16))):
-        base = half * cyc_half
+        base = half * step
         for pe in range(npe):
             w = word_base + pe
             cyc = base
@@ -520,6 +538,26 @@ def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK,
             mc.put(cyc, pe, "st", a=3, imm=spad_idx(res_banks[0], w)); cyc += 1
             mc.put(cyc, pe, "st", a=4, imm=spad_idx(res_banks[1], w)); cyc += 1
             mc.put(cyc, pe, "st", a=5, imm=spad_idx(res_banks[2], w)); cyc += 1
+
+            if not writeback:
+                continue
+            # ---- 第二趟：按边回写 m'（min1/min2/sign 已在 r3/r4/r5）----
+            cyc = base + cyc_half
+            for k in range(edges):
+                mc.put(cyc, pe, "ld", dst=0, imm=spad_idx(k, w)); cyc += 1
+                mc.put(cyc, pe, "shr", a=0, dst=1, imm=31); cyc += 1          # sign(x)
+                mc.put(cyc, pe, "xor", a=0, b=1, dst=2); cyc += 1             # x ^ sign
+                mc.put(cyc, pe, "sub", a=2, b=1, dst=2); cyc += 1             # |x|
+                mc.put(cyc, pe, "sub", a=2, b=3, dst=7); cyc += 1             # d=|x|-min1
+                mc.put(cyc, pe, "sub", a=7, b="imm", dst=7, imm=1); cyc += 1  # d-1
+                mc.put(cyc, pe, "shr", a=7, dst=7, imm=31); cyc += 1          # mask
+                mc.put(cyc, pe, "sub", a=4, b=3, dst=0); cyc += 1             # min2-min1
+                mc.put(cyc, pe, "and", a=0, b=7, dst=0); cyc += 1
+                mc.put(cyc, pe, "add", a=0, b=3, dst=0); cyc += 1             # mag
+                mc.put(cyc, pe, "xor", a=1, b=5, dst=1); cyc += 1             # sign
+                mc.put(cyc, pe, "xor", a=0, b=1, dst=0); cyc += 1
+                mc.put(cyc, pe, "sub", a=0, b=1, dst=0); cyc += 1             # signed
+                mc.put(cyc, pe, "st", a=0, imm=spad_rot(k, w)); cyc += 1
     return mc
 
 
@@ -548,6 +586,33 @@ def check_cn(mc, rows=20, seed=99, edges=CN_EDGES,
     simulate(mc, spad)
     errs = [(i, spad.get(i), w) for i, w in exp.items() if spad.get(i) != w]
     return errs, len(exp)
+
+
+def check_cn_wb(mc, rows=20, seed=99, edges=CN_EDGES,
+                sentinel_bank=CN_SENTINEL_BANK, res_banks=(10, 11, 12)):
+    """带 m' 回写的 CN 自检：min1/min2/sign 与每条边的 m' 都要逐值一致。"""
+    spad, exp = cn_case(rows=rows, seed=seed, edges=edges,
+                        sentinel_bank=sentinel_bank, res_banks=res_banks)
+    src = dict(spad)
+    simulate(mc, spad)
+    errs = [(i, spad.get(i), w) for i, w in exp.items() if spad.get(i) != w]
+    nvals = len(exp)
+    for w in range(rows):
+        col = [_s32(src[spad_idx(k, w)]) for k in range(edges)]
+        ab = sorted(abs(x) for x in col)
+        m1, m2 = ab[0], ab[1]
+        neg = sum(1 for x in col if x < 0)
+        sg = -1 if (neg % 2) else 0
+        for k, x in enumerate(col):
+            am = -1 if x < 0 else 0
+            mag = m2 if abs(x) == m1 else m1
+            nm = am ^ sg
+            want = _s32((mag ^ nm) - nm) & 0xFFFFFFFF
+            got = spad.get(spad_idx(k, w))
+            nvals += 1
+            if got != want:
+                errs.append((spad_idx(k, w), got, want))
+    return errs, nvals
 
 
 def bn_case(rows=16, nmsg=23, seed=1234):

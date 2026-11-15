@@ -173,8 +173,12 @@ module cgra_top #(
   logic [15:0] dma_row_cnt;
   logic [15:0] dma_idx;      // word index inside the transfer
   logic        dma_busy, dma_done, dma_dir, dma_irq_evt;
-  logic        dma_tgt;      // 1 = write IMEM instead of the scratchpad
+  logic [1:0]  dma_tgt;      // 0 = scratchpad, 1 = IMEM, 2 = 循环旋转表
   logic        buf_page, dma_page;
+
+  // 每 bank 的循环旋转表（由 ring 描述符或主机逐字装载）
+  logic [31:0][6:0] rot_tbl;
+  logic [5:0]       rot_zc;
 
   // descriptor ring: descriptors live in SoC RAM (32 bytes each)
   logic [31:0] ring_base;
@@ -302,10 +306,10 @@ module cgra_top #(
   // the beat is consumed only on the handshake (valid && ready), never on valid alone
   // dma_tgt = IMEM: the same beat stream feeds the instruction memory instead of
   // the scratchpad (bulk program load; see docs/02 §3.1).
-  assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && !dma_tgt;
+  assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && (dma_tgt == 2'd0);
   assign spad_dma_addr0  = dma_cur[9:0];
   assign spad_dma_wdata0 = m_axi_rdata[31:0];
-  assign spad_dma_we1    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && !dma_tgt && !dma_last_odd;
+  assign spad_dma_we1    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && (dma_tgt == 2'd0) && !dma_last_odd;
   assign spad_dma_addr1  = dma_nxt_cur[9:0];
   assign spad_dma_wdata1 = m_axi_rdata[63:32];
   assign spad_rd_addr0   = dma_cur[9:0];
@@ -314,9 +318,13 @@ module cgra_top #(
   // IMEM side of the copy engine: one 8-byte beat carries two instruction words
   logic        dma_imem_we;
   logic [15:0] dma_imem_idx, dma_imem_nidx;
-  assign dma_imem_we   = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && dma_tgt;
+  assign dma_imem_we   = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && (dma_tgt == 2'd1);
   assign dma_imem_idx  = dma_cur;       // word index 0..8191 (row = idx>>4)
   assign dma_imem_nidx = dma_nxt_cur;
+
+  // 旋转表 side：一个 64-bit beat 装两个 7-bit 条目（低字在前）
+  logic        dma_tbl_we;
+  assign dma_tbl_we = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && (dma_tgt == 2'd2);
 
   // ---------------- AXI4 master ----------------
   always_comb begin
@@ -358,7 +366,7 @@ module cgra_top #(
       dma_busy    <= 1'b0;
       dma_done    <= 1'b0;
       dma_irq_evt <= 1'b0;
-      dma_tgt     <= 1'b0;
+      dma_tgt     <= 2'd0;
       dma_idx     <= 16'd0;
       dma_src     <= 32'b0;
       dma_dst     <= 16'b0;
@@ -378,6 +386,9 @@ module cgra_top #(
       dma_beat    <= 2'd0;
       dma_bcnt    <= 8'd0;
       dma_page    <= 1'b0;
+      dma_tgt     <= 2'd0;
+      rot_zc      <= 6'd32;
+      for (int i = 0; i < ROT_ENTRIES; i++) rot_tbl[i] <= 7'd0;
       ring_base   <= 32'b0;
       ring_size   <= 16'd0;
       ring_head   <= 16'd0;
@@ -440,10 +451,11 @@ module cgra_top #(
           dma_page       <= desc_buf[0][48];
           dma_dir        <= desc_buf[0][49];
           desc_irq       <= desc_buf[0][50];
-          /* 描述符发起的传输一律写 scratchpad：dma_tgt 只由寄存器 START 的
-           * CTRL[3] 置位，若不清，前面跑过 gpcp_cgra_imem_load（IMEM 目标）的
-           * 程序会把之后所有 DMA 静默改道去写 IMEM，阵列只看到旧 spad 数据。 */
-          dma_tgt        <= 1'b0;
+          /* 描述符发起的传输默认写 scratchpad；word0[51] 置位时改为装旋转表。
+           * dma_tgt 只由寄存器 START 的 CTRL[3] 置位，若不清，前面跑过
+           * gpcp_cgra_imem_load（IMEM 目标）的程序会把之后所有 DMA 静默改道
+           * 去写 IMEM，阵列只看到旧 spad 数据。 */
+          dma_tgt        <= desc_buf[0][51] ? 2'd2 : 2'd0;
           desc_addr      <= ring_base + (desc64 ? {ring_head, 6'b0}
                                                  : {ring_head, 5'b0});
           in_len_q       <= desc_buf[1][15:0];
@@ -525,13 +537,13 @@ module cgra_top #(
               // completion status of a ring descriptor
               wr_status <= 1'b0;
               if (desc_irq) dma_irq_evt <= 1'b1;
-              // 复合描述符：这一笔传输还要再跑一次阵列，跑完才退休
-              if (arr_en_q) begin
-                arr_en_q <= 1'b0;
-                dstate   <= D_ARR;
-              end else begin
-                dstate   <= D_RETIRE;
-              end
+              /* 复合描述符的「搬入 → 阵列 → 搬出」已经在 D_NEXT/D_ARR 里走完，
+               * 这里状态字也写完了，直接退休。
+               * 以前这里还会看 arr_en_q 再进一次 D_ARR：D_NEXT 进阵列时并不清
+               * arr_en_q，于是同一条描述符会把阵列跑第二遍（PERF_ARRAY_BUSY
+               * 恰好是软件预期的 2 倍，白烧一半阵列周期）。 */
+              arr_en_q <= 1'b0;
+              dstate   <= D_RETIRE;
             end else begin
               dma_idx <= dma_nidx;
               dma_wleft_q    <= dma_wleft_q - dma_bw;
@@ -632,7 +644,13 @@ module cgra_top #(
         default: dstate <= D_IDLE;
       endcase
     if (wr_en) begin
+      if ((wr_addr >= REG_ROT_BASE) &&
+          (wr_addr < (REG_ROT_BASE + 16'(ROT_ENTRIES * 4)))) begin
+        if (wr_addr[1:0] == 2'b00)
+          rot_tbl[(wr_addr - REG_ROT_BASE) >> 2] <= wr_data[6:0];
+      end else begin
       case (wr_addr)
+        REG_ROT_ZC:     rot_zc     <= (wr_data[5:0] > 6'd32) ? 6'd32 : wr_data[5:0];
         REG_DESC_MODE:  desc64     <= wr_data[0];
         REG_DMA_SRC:    dma_src    <= wr_data;
         REG_DMA_DST:    dma_dst    <= wr_data[15:0];
@@ -657,7 +675,7 @@ module cgra_top #(
             dma_beat   <= 2'd0;
             dma_bcnt   <= 8'd0;
             dma_dir    <= wr_data[1];
-            dma_tgt    <= wr_data[3];   // [3] = 1: 目标是 IMEM（批量装程序）
+            dma_tgt    <= wr_data[3] ? 2'd1 : 2'd0;   // [3] = 1: 目标是 IMEM（批量装程序）
             ring_mode  <= 1'b0;
             rd_desc    <= 1'b0;
             wr_status  <= 1'b0;
@@ -673,6 +691,7 @@ module cgra_top #(
         end
         default: ;
       endcase
+      end
     end
     end
   end
@@ -733,6 +752,10 @@ module cgra_top #(
         imem[dma_imem_idx[12:4]][dma_imem_idx[3:0]] <= m_axi_rdata[31:0];
         if (!dma_last_odd)
           imem[dma_imem_nidx[12:4]][dma_imem_nidx[3:0]] <= m_axi_rdata[63:32];
+      end else if (dma_tbl_we) begin
+        // 一个 8B beat 装两个 7-bit 旋转条目（低字 = 偶数下标）
+        rot_tbl[dma_cur[4:0]]     <= m_axi_rdata[6:0];
+        rot_tbl[dma_nxt_cur[4:0]] <= m_axi_rdata[38:32];
       end else if (arr_req && !busy && (arr_cycles_q != 16'd0)) begin
         // 描述符驱动的阵列运行：拍数/page 来自描述符，不走寄存器写入
         num_cycles <= arr_cycles_q;
@@ -765,6 +788,8 @@ module cgra_top #(
       .rd_addr(rd_addr),
       .rd_data(pe_rd),
       .din    (din),
+      .rot_tbl(rot_tbl),
+      .rot_zc (rot_zc),
       .buf_page (buf_page),
       .dma_page (dma_page),
       .dma_we0   (spad_dma_we0),
@@ -843,7 +868,10 @@ module cgra_top #(
             ((dstate == D_AW) && !m_axi_awready) ||
             ((dstate == D_BRESP) && !m_axi_bvalid) ||
             ((dstate == D_SIN) && !m_axi_rvalid) ||
-            ((dstate == D_SOUT) && !m_axi_wready))
+            ((dstate == D_SOUT) && !m_axi_wready) ||
+            /* 描述符取指也走同一个 AXI 主口：CPU 正在抢总线时这里会长时间
+             * 等 rvalid，以前没计入等待，账本上表现为「DMA 传输」变慢。 */
+            ((dstate == D_RDESC) && !m_axi_rvalid))
           perf_state_dma_wait <= perf_state_dma_wait + 32'd1;
       end else if (!busy && !dma_busy) begin
         perf_state_cpu <= perf_state_cpu + 32'd1;
@@ -858,6 +886,7 @@ module cgra_top #(
       if ((dstate == D_BRESP) && !m_axi_bvalid)
         perf_dma_b_wait <= perf_dma_b_wait + 32'd1;
       if (((dstate == D_SIN) && !m_axi_rvalid) ||
+          ((dstate == D_RDESC) && !m_axi_rvalid) ||
           ((dstate == D_SOUT) && !m_axi_wready))
         perf_dma_data_wait <= perf_dma_data_wait + 32'd1;
       busy_q <= busy;
@@ -904,7 +933,12 @@ module cgra_top #(
   // ---------------- host read mux ----------------
   always_comb begin
     rd_data = 32'b0;
-    if (rd_addr < 16'h0100) begin
+    if ((rd_addr >= REG_ROT_BASE) &&
+        (rd_addr < (REG_ROT_BASE + 16'(ROT_ENTRIES * 4)))) begin
+      rd_data = {25'b0, rot_tbl[(rd_addr - REG_ROT_BASE) >> 2]};
+    end else if (rd_addr == REG_ROT_ZC) begin
+      rd_data = {26'b0, rot_zc};
+    end else if (rd_addr < 16'h0100) begin
       case (rd_addr[7:0])
         6'h00: rd_data = {cycle_cnt, 13'b0, 1'b0, done, busy};
         6'h04: rd_data = {16'b0, num_cycles};

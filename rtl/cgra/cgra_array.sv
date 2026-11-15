@@ -28,6 +28,9 @@ module cgra_array (
     output logic [31:0]                          rd_data,
     // streaming input into the array
     input  logic [31:0]                          din,
+    // 每 bank 的循环旋转表：{keep, valid, rot[4:0]}（仅 imm[15]=1 的 LD/ST 使用）
+    input  logic [31:0][6:0]                     rot_tbl,
+    input  logic [5:0]                           rot_zc,
     // double buffering: array page / copy-engine page
     input  logic                                 buf_page,
     input  logic                                 dma_page,
@@ -79,6 +82,30 @@ module cgra_array (
   logic        pe_we [0:NPES-1];
   logic [9:0]  pe_waddr [0:NPES-1];
   logic [31:0] pe_wdata [0:NPES-1];
+  logic        pe_rot [0:NPES-1];
+  logic [9:0]  pe_raddr_eff [0:NPES-1];
+  logic [9:0]  pe_waddr_eff [0:NPES-1];
+  logic        pe_we_eff [0:NPES-1];
+
+  // 旋转后的有效地址：word = (word + rot[bank]) mod ZC。
+  // word<=31、rot<=31、ZC<=32，所以一次减法足够。
+  logic [5:0]  rot_zc_eff;
+  assign rot_zc_eff = (rot_zc == 6'd0) ? 6'd32 : rot_zc;
+
+  // 旋转只对“带旋转标志且该 bank 的 rot!=0”的访问生效，其余访问保持原地址。
+  always_comb begin
+    for (int p = 0; p < NPES; p++) begin
+      automatic logic [4:0] rb = pe_raddr[p][9:5];
+      automatic logic [4:0] wb = pe_waddr[p][9:5];
+      automatic logic [5:0] rs = {1'b0, pe_raddr[p][4:0]} + {1'b0, rot_tbl[rb][4:0]};
+      automatic logic [5:0] ws = {1'b0, pe_waddr[p][4:0]} + {1'b0, rot_tbl[wb][4:0]};
+      automatic logic [4:0] rw = (rs >= rot_zc_eff) ? (rs - rot_zc_eff) : rs[4:0];
+      automatic logic [4:0] ww = (ws >= rot_zc_eff) ? (ws - rot_zc_eff) : ws[4:0];
+      pe_raddr_eff[p] = (pe_rot[p] && (rot_tbl[rb][4:0] != 5'd0)) ? {rb, rw} : pe_raddr[p];
+      pe_waddr_eff[p] = (pe_rot[p] && (rot_tbl[wb][4:0] != 5'd0)) ? {wb, ww} : pe_waddr[p];
+      pe_we_eff[p]    = pe_we[p] && !(pe_rot[p] && rot_tbl[wb][6]);
+    end
+  end
 
   // ---------------- performance counters ----------------
   // 每个 array run 周期统计 PE 指令组合、显式 LD/ST 与同拍多写冲突。
@@ -109,10 +136,10 @@ module cgra_array (
     word_conflict = 1'b0;
     for (int p = 0; p < NPES; p++)
       for (int q = p + 1; q < NPES; q++)
-        if (en && pe_we[p] && pe_we[q]) begin
-          if (pe_waddr[p][9:5] == pe_waddr[q][9:5])
+        if (en && pe_we_eff[p] && pe_we_eff[q]) begin
+          if (pe_waddr_eff[p][9:5] == pe_waddr_eff[q][9:5])
             bank_conflict = 1'b1;
-          if (pe_waddr[p] == pe_waddr[q])
+          if (pe_waddr_eff[p] == pe_waddr_eff[q])
             word_conflict = 1'b1;
         end
   end
@@ -208,8 +235,8 @@ module cgra_array (
           spad[b][dma_addr0[4:0]] <= dma_wdata0;
         else begin
           for (int p = 0; p < NPES; p++)
-            if (en && pe_we[p] && (pe_waddr[p][9:5] == b[4:0]) && (buf_page == b[5]))
-              spad[b][pe_waddr[p][4:0]] <= pe_wdata[p];
+            if (en && pe_we_eff[p] && (pe_waddr_eff[p][9:5] == b[4:0]) && (buf_page == b[5]))
+              spad[b][pe_waddr_eff[p][4:0]] <= pe_wdata[p];
         end
       end
       // second copy-engine port: the two words of a 64-bit beat are distinct
@@ -286,6 +313,7 @@ module cgra_array (
             .host_wdata(wr_data),
             .host_raddr(rd_reg),
             .host_rdata(pe_rdata[PE_ID]),
+            .spad_rot  (pe_rot[PE_ID]),
             .spad_raddr(pe_raddr[PE_ID]),
             .spad_rdata(pe_rdata_sp[PE_ID]),
             .spad_we   (pe_we[PE_ID]),
@@ -295,8 +323,11 @@ module cgra_array (
         );
 
         // combinational scratchpad read (one read port per PE)
+        // bit5 = invalid：该 bank 的 LD 直接返回 0（BN 的缺失边），
+        // 不依赖软件清零，也不受 spad 里残留数据影响。
         assign pe_rdata_sp[PE_ID] =
-            spad[{buf_page, pe_raddr[PE_ID][9:5]}][pe_raddr[PE_ID][4:0]];
+            (pe_rot[PE_ID] && rot_tbl[pe_raddr_eff[PE_ID][9:5]][5]) ? 32'b0
+            : spad[{buf_page, pe_raddr_eff[PE_ID][9:5]}][pe_raddr_eff[PE_ID][4:0]];
       end
     end
   endgenerate

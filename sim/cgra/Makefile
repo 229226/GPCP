@@ -27,9 +27,12 @@ VFLAGS := \
 	-Wno-fatal -Wno-WIDTH -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND \
 	-Wno-UNOPTFLAT -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM
 
-.PHONY: all clean
+.PHONY: all clean rot-test
 
 all: $(BIN)
+
+rot-test: $(BIN)
+	python3 rot_test.py
 
 $(BIN): tb_cgra.cpp $(RTL_SRCS)
 	@mkdir -p $(OBJ_DIR)

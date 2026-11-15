@@ -30,6 +30,7 @@ module cgra_pe (
     input  logic [3:0]  host_raddr,      // 0..7 = r0..r7, 8 = acc
     output logic [31:0] host_rdata,
     // scratchpad interface (bank/word address in imm[9:0])
+    output logic        spad_rot,        // imm[15]=1：本次 LD/ST 参与循环旋转
     output logic [9:0]  spad_raddr,
     input  logic [31:0] spad_rdata,
     output logic        spad_we,
@@ -50,6 +51,8 @@ module cgra_pe (
   logic [31:0] wval, acc_nxt, link_nxt;
 
   assign spad_raddr = imm[9:0];
+  // 只有显式访存指令把 imm[15] 当“参与旋转”标志；其它算子的 imm[15] 仍是立即数符号位
+  assign spad_rot   = ((op == OP_LD) || (op == OP_ST)) && imm[15];
 
   // ---------------- operand selection ----------------
   always_comb begin

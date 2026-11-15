@@ -69,6 +69,22 @@ def _write_bn(f, mc, nvals, rows):
     f.write("\n};\n\n#endif\n")
 
 
+def _write_bn_rot(f, mc, nvals, rows):
+    f.write("/* 由 cgra/tools/gen_kernel_prog.py 生成，勿手改。\n"
+            f" * BN（消息 bank 带循环旋转标志）：每行 4 个 PE，{rows} 行 = {rows // 4} pass，\n"
+            f" * 共 {mc.cycles} 拍 × {NPES} PE。\n"
+            f" * 消息 LD/ST 的 imm[15]=1，用硬件每 bank 旋转表把 CN 索引 word 换成\n"
+            f" * 变量节点索引 (word - sh) mod ZC；LLR（24）/硬判决（25）不旋转。\n"
+            f" * 自检：{nvals} 个 spad 值、0 差异（无旋转模型；RTL 旋转由协议门禁覆盖）。 */\n")
+    f.write("#ifndef PDSCH_BN_ROT_PROG_H\n#define PDSCH_BN_ROT_PROG_H\n\n")
+    f.write(f"#define BN_ROT_PROG_CYCLES {mc.cycles}\n")
+    f.write(f"#define BN_ROT_PROG_PES    {NPES}\n\n")
+    f.write(f"static const unsigned int bn_rot_prog[{mc.cycles} * {NPES}]\n"
+            f"    __attribute__((aligned(8))) = {{\n")
+    f.write(_fmt_words(mc.build()))
+    f.write("\n};\n\n#endif\n")
+
+
 def _write_cn(f, mc, nvals, edges=rm.CN_EDGES,
               sentinel_bank=rm.CN_SENTINEL_BANK, res_banks=(10, 11, 12)):
     f.write("/* 由 cgra/tools/gen_cn_prog.py 生成，勿手改。\n"
@@ -92,9 +108,26 @@ def _write_cn(f, mc, nvals, edges=rm.CN_EDGES,
     f.write("\n};\n\n#endif\n")
 
 
+def _write_cn_wb(f, mc, nvals, edges=rm.CN_EDGES,
+                 sentinel_bank=rm.CN_SENTINEL_BANK, res_banks=(10, 11, 12)):
+    f.write("/* 由 cgra/tools/gen_kernel_prog.py 生成，勿手改。\n"
+            f" * CN + m' 回写：20 个提升行一次跑完（16 + 4），共 {mc.cycles} 拍 × {NPES} PE。\n"
+            f" * 第一趟算 min1/min2/sign（bank {res_banks[0]}/{res_banks[1]}/{res_banks[2]}），\n"
+            f" * 第二趟按边回写 m' 到 bank 0..{edges - 1}（ST 带旋转标志，硬件 keep 位\n"
+            f" * 阻止覆盖哨兵边）。word = 提升行号。\n"
+            f" * 自检：{nvals} 个 spad 值、0 差异（模型）。 */\n")
+    f.write("#ifndef PDSCH_CN_WB_PROG_H\n#define PDSCH_CN_WB_PROG_H\n\n")
+    f.write(f"#define CN_WB_PROG_CYCLES {mc.cycles}\n")
+    f.write(f"#define CN_WB_PROG_PES    {NPES}\n")
+    f.write(f"#define CN_WB_EDGES       {edges}\n\n")
+    f.write(f"static const unsigned int cn_wb_prog[{mc.cycles} * {NPES}]\n"
+            f"    __attribute__((aligned(8))) = {{\n")
+    f.write(_fmt_words(mc.build()))
+    f.write("\n};\n\n#endif\n")
+
+
 def _sym(name):
     return re.sub(r"[^A-Za-z0-9]+", "_", name).upper()
-
 
 def _write_dfg(f, spec, mc, nvals, nops, nleaves, nsinks, instances,
                leaf_banks=None, sink_banks=None, addrs=None, sink_flat=None):
@@ -316,6 +349,40 @@ def run_spec(spec_path, out=None, rows=None, _variant=None):
             _write_cn(f, mc, nvals, edges, sentinel_bank, res_banks)
         lc.write_kernel(spec["name"], {}, hw.load(),
                         note="kind: cn，规则调度器布局见 gpcp_layout.h 命名区域")
+        print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
+              f"自检 {nvals} 值 0 差异")
+        return 0
+
+    if kind == "cn_wb":
+        edges = int(spec.get("edges", rm.CN_EDGES))
+        sentinel_bank = int(spec.get("sentinel_bank", rm.CN_SENTINEL_BANK))
+        res_banks = tuple(spec.get("res_banks", (10, 11, 12)))
+        mc = rm.schedule_cn(edges=edges, sentinel_bank=sentinel_bank,
+                            res_banks=res_banks, writeback=True)
+        e, nvals = rm.check_cn_wb(mc, edges=edges, sentinel_bank=sentinel_bank,
+                                  res_banks=res_banks)
+        if e:
+            print(f"[{spec_path}] 自检失败：{len(e)}/{nvals} 个值不同，拒绝生成", file=sys.stderr)
+            return 1
+        with open(out, "w", newline="\n") as f:
+            _write_cn_wb(f, mc, nvals, edges, sentinel_bank, res_banks)
+        lc.write_kernel(spec["name"], {}, hw.load(),
+                        note="kind: cn_wb，min-sum + 逐边 m' 回写")
+        print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
+              f"自检 {nvals} 值 0 差异")
+        return 0
+
+    if kind == "bn_rot":
+        rows = spec.get("rows", 20)
+        mc = rm.schedule_bn_split(rows=rows, rot=True)
+        e, nvals = rm.check_bn_split(mc, rows=rows)
+        if e:
+            print(f"[{spec_path}] 自检失败：{len(e)}/{nvals} 个值不同，拒绝生成", file=sys.stderr)
+            return 1
+        with open(out, "w", newline="\n") as f:
+            _write_bn_rot(f, mc, nvals, rows)
+        lc.write_kernel(spec["name"], {}, hw.load(),
+                        note="kind: bn_rot，消息 bank 走每 bank 循环旋转")
         print(f"wrote {out}: {mc.cycles} 拍 × {NPES} PE，{len(mc.build())} 字，"
               f"自检 {nvals} 值 0 差异")
         return 0
