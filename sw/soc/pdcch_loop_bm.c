@@ -83,8 +83,10 @@ int main(void)
     ps_map_to_grid();          /* 4. 频域映射（216 RE，共轭） */
     ps_ofdm_modulate();        /* 5. IFFT（阵列）+ CP -> 时域块 */
     ps_channel();              /* 6. 信道（自环 = 理想） */
-    ps_estimate();             /* 7. 接收 FFT（阵列）+ 216 RE 抽取 */
-    ps_equalise_demap();       /* 8. 逆 REG + 符号锚点 + 解扰 */
+    ps_transform();            /* 7a. 接收 FFT（阵列，节点拆分后独立成阶段） */
+    ps_estimate();             /* 7b. 216 RE 抽取 */
+    ps_equalise();             /* 8a. 逆 REG + 符号锚点 */
+    ps_demap();                /* 8b. 解扰 */
     ps_decode();               /* 9. 逆速率匹配 + polar SC（阵列）+ 盲检 */
 
     out[0] = 0xCAFEB4B1u;

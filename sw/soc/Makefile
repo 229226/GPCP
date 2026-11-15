@@ -120,10 +120,10 @@ $(BUILD)/ssb_fid_bm.elf: ssb_fid_bm.c start.S link.ld ssb_stages.inc | $(BUILD)
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/ssb_fid_bm.dis
 
 # PDSCH full receive chain: needs the generated CN/BN microcode headers
-$(BUILD)/pdsch_full_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h
+$(BUILD)/pdsch_full_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h pdsch_stages.inc
 # G2/B5 PDSCH self-loop: 收发两侧都在一个程序里（编码表 + CN/BN 微码 + FFT 镜像）
 $(BUILD)/pdsch_loop_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h ../include/ldpc_enc_tables.h \
-		fft_stage_prog.h fft_block_prog.h
+		fft_stage_prog.h fft_block_prog.h pdsch_stages.inc
 $(BUILD)/pusch_bm.elf: pdsch_cn_prog.h pdsch_bn_prog.h pusch_stages.inc
 
 # DFT-s-OFDM variant: 360-point IDFT deprecoding, integer Q20 table.
@@ -166,14 +166,14 @@ $(BUILD)/pdsch_64qam_bm.elf: pdsch_full_bm.c start.S link.ld pdsch_cn_prog.h pds
 pdcch_luts.h: ../../tools/gen_pdcch_luts.py ../../tools/gen_luts.py ../../tools/nr_pbch.py
 	python3 ../../tools/gen_pdcch_luts.py pdcch_luts.h
 
-$(BUILD)/pdcch_bm.elf: pdcch_luts.h
+$(BUILD)/pdcch_bm.elf: pdcch_luts.h polar_node_prog.h ssb_fft.inc ../include/gpcp_cgra.h
 
 # G2/B4 PDCCH 自环：发射链（polar 9 级）+ fft4096 IFFT + 接收链（polar SC）
 $(BUILD)/pdcch_loop_bm.elf: pdcch_luts.h polar_node_prog.h \
 		polar_inword_s0_prog.h polar_inword_s1_prog.h polar_inword_s2_prog.h \
 		polar_inword_s3_prog.h polar_inword_s4_prog.h \
 		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
-		polar_word_d8_prog.h fft_stage_prog.h fft_block_prog.h
+		polar_word_d8_prog.h fft_stage_prog.h fft_block_prog.h pdcch_stages.inc
 
 # link-e2e: PDCCH (polar) + PDSCH (LDPC) fused in one run -- needs both LUT sets
 $(BUILD)/link_e2e_bm.elf: pdcch_luts.h pdsch_cn_prog.h pdsch_bn_prog.h

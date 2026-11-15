@@ -19,6 +19,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import sys
 import struct
 import sys
 
@@ -130,6 +131,25 @@ def emit(scenario, outdir):
         f.write(stim)
     with open(os.path.join(outdir, "golden.json"), "w", encoding="utf-8") as f:
         json.dump(gold, f, indent=1, ensure_ascii=False)
+
+    # ---- TaskPlan：把 decode 的编排生成为 C（手写版保留，见 pdsch_stages.inc）
+    # 只有 LDPC BG2 的 decode 走生成；其余阶段仍是手写。
+    dec = [st for st in plan["stages"]
+           if st["op"] == "decode" and st.get("impl") == "ldpc_bg2_zc20"]
+    task_path = os.path.join(outdir, "task_decode.inc")
+    if dec:
+        sys.path.insert(0, os.path.join(_ROOT, "backend", "gpcp"))
+        from taskplan import decode_plan, validate
+        from emit_host import render
+        knob = os.environ.get("GPCP_TASK_IMEM", "iteration")
+        tp = decode_plan(imem_reload=knob)
+        bad = validate(tp)
+        if bad:
+            raise SystemExit("[FAIL] taskplan: " + "; ".join(bad))
+        with open(task_path, "w", encoding="utf-8") as f:
+            f.write(render(tp))
+    elif os.path.exists(task_path):
+        os.remove(task_path)          # 换场景时别留旧的生成物
 
     print("scenario   : %s" % scenario)
     print("params hash: 0x%08x  (%d 字节 IR + %d 字节激励)"

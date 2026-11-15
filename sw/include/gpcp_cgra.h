@@ -80,6 +80,7 @@
 #define GPCP_CGRA_RING_CTRL    0x0058u   /* W: [0] enable                     */
                                          /* R: [0] enabled [1] idle [2] busy  */
 #define GPCP_CGRA_RING_DONE    0x005Cu   /* R: descriptors completed so far   */
+#define GPCP_CGRA_DESC_MODE    0x0064u   /* W: [0] 1 = 64B 复合描述符 */
 #define GPCP_CGRA_DBG_STATE    0x0060u   /* R: engine FSM state (debug)       */
 #define GPCP_CGRA_RING_EN      (1u << 0)
 #define GPCP_CGRA_RING_IDLE    (1u << 1)

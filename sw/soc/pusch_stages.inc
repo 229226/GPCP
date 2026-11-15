@@ -501,6 +501,85 @@ static int us_demap(void)
             llr[b][q] = dem[b * ZC + q] >> LLR_SHIFT;
     return 0;
 }
+
+/* 兼容入口：老的单片调用路径（bm 程序）仍可用。 */
+static int us_equalise_demap(void)
+{
+    us_equalise();
+    us_transform();
+    return us_demap();
+}
+#elif HARQ_TX == 1
+/* 节点粒度（非 TP 单次传输）：匹配滤波与解调分离。 */
+static int us_equalise(void)
+{
+    int32_t *y = yw_tx[0];
+    int32_t *hre = us_hre[0], *him = us_him[0];
+    int m = 0;
+
+    for (int i = 0; i < USABLE; i++)
+        rbuf[i] = 0;
+
+    for (int s = 0; s < NSYM; s++)
+        for (int r = 0; r < NRE; r++) {
+            int32_t yr, yi;
+            int64_t er, ei;
+            if (r % 4 == 0) continue;          /* DMRS RE */
+            yr = y[(s * NRE + r) * 2 + 0];
+            yi = y[(s * NRE + r) * 2 + 1];
+            er = (int64_t)yr * hre[s] + (int64_t)yi * him[s];
+            ei = (int64_t)yi * hre[s] - (int64_t)yr * him[s];
+            llr_e[2 * m + 0] = (int32_t)er;
+            llr_e[2 * m + 1] = (int32_t)ei;
+            m++;
+        }
+    for (int i = 0; i < 8; i++) us_raw0[i] = llr_e[i];
+    return 0;
+}
+
+static int us_demap(void)
+{
+    {
+        int rows = E_BITS / QM;
+        for (int i = 0; i < rows; i++)
+            for (int j = 0; j < QM; j++)
+                llr_i[j * rows + i] = llr_e[QM * i + j];
+    }
+
+    gold_init(N_RNTI << 15);
+    for (int k = 0; k < E_BITS; k++)
+        if (gold_bit((uint32_t)k)) llr_i[k] = -llr_i[k];
+    for (int i = 0; i < 8; i++) us_descr0[i] = llr_i[i];
+
+    {
+        uint32_t rv_word = *(volatile uint32_t *)(TD_RAM
+                           + (uint32_t)NSYM * SYM_WORDS * 4u);
+        us_k0 = rv_word * (USABLE / 4u);
+        for (int k = 0; k < E_BITS; k++)
+            rbuf[(us_k0 + (uint32_t)k) % USABLE] += llr_i[k];
+    }
+
+    for (int j = 0; j < PUNCT; j++) dem[j] = 0;
+    {
+        int u = 0;
+        for (int i = 0; i < NCODED - PUNCT; i++) {
+            if (i >= FILLER0 && i < FILLER0 + FILLER_N) dem[PUNCT + i] = 0;
+            else                                        dem[PUNCT + i] = rbuf[u++];
+        }
+    }
+
+    for (uint32_t b = 0; b < BG2_COLS; b++)
+        for (uint32_t i = 0; i < ZC; i++)
+            llr[b][i] = dem[b * ZC + i] >> LLR_SHIFT;
+    return 0;
+}
+
+/* 兼容入口：老的单片调用路径仍可用。 */
+static int us_equalise_demap(void)
+{
+    us_equalise();
+    return us_demap();
+}
 #else
 static int us_equalise_demap(void)
 {

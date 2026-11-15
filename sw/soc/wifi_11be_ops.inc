@@ -8,7 +8,8 @@ static const proto_op_t proto_ops[] = {
     { "ofdm_demodulate", "dft256_radix2", wifi_ofdm_demodulate_fft },
     { "ofdm_demodulate", "dft256_cgra", wifi_ofdm_demodulate_cgra },
     { "estimate",        0, wifi_estimate },
-    { "equalise_demap",  0, wifi_equalise_demap },
+    { "equalise", 0, wifi_equalise },
+    { "demap", 0, wifi_demap },
     { "decode",          0, wifi_decode },
 };
 

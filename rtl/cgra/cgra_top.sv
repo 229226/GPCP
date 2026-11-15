@@ -181,6 +181,11 @@ module cgra_top #(
   logic [15:0] ring_size, ring_head, ring_tail, ring_done;
   logic        ring_en, ring_mode, desc_irq, rd_desc, wr_status;
   logic [31:0] desc_addr;
+  // 复合描述符：desc_buf[3] = {en<<31, page<<16, cycles}，传输完成后可选跑一次阵列
+  logic        arr_en_q, arr_req;
+  logic [1:0]  arr_phase;      // 0=发启动 1=等 busy 2=等 done
+  logic        arr_page_q;
+  logic [15:0] arr_cycles_q;
   // RING_TAIL may be programmed as "one past the last entry" == ring_size; that
   // is the same slot as 0, so comparisons must be made modulo the ring depth.
   // Without this, a head that wraps back to 0 never matches a tail of ring_size
@@ -190,9 +195,14 @@ module cgra_top #(
 
   // descriptor buffer: 4 beats = 32 bytes (the only buffering in the engine -
   // data beats are streamed straight into / out of the scratchpad)
-  localparam int DESC_BEATS = 4;
+  localparam int DESC_BEATS = 8;
   logic [63:0] desc_buf [0:DESC_BEATS-1];
-  logic [1:0]  dma_beat;      // descriptor beat during the fetch
+  logic [2:0]  dma_beat;      // descriptor beat during the fetch
+  logic        desc64;        // REG_DESC_MODE[0]：64 字节复合描述符
+  logic        out_en_q, arr_run_q, out_run_q, arr_en_desc_q;
+  logic [15:0] out_len_q, out_spad_q, out_step_q, in_step_q, rep_left, in_len_q;
+  logic        in_dir_q;
+  logic [31:0] out_dst_q, in_src_q;
   logic [7:0]  dma_nb;        // beats in the current data burst
   logic [7:0]  dma_bcnt;      // beat counter inside a data burst
 
@@ -231,7 +241,11 @@ module cgra_top #(
     D_SIN      = 4'd4,   // streaming in: each R beat goes straight into the spad
     D_AW       = 4'd5,   // issue the write address (AW)
     D_SOUT     = 4'd6,   // streaming out: each W beat comes straight from the spad
-    D_BRESP    = 4'd7    // wait for the write response
+    D_BRESP    = 4'd7,   // wait for the write response
+    D_ARR      = 4'd8,   // 复合描述符：传输完成后跑一次阵列
+    D_RETIRE   = 4'd9,   // 描述符退休（ring_done / ring_head 记账）
+    D_NEXT     = 4'd10,  // 复合描述符：决定下一步跑阵列、搬出还是收尾
+    D_OUT      = 4'd11   // 复合描述符：启动搬出
   } dstate_e;
   dstate_e dstate;
   logic [3:0]  dstate_q;
@@ -314,8 +328,10 @@ module cgra_top #(
     // payload never changes while a valid is waiting.
     m_axi_arvalid = (dstate == D_AR);
     m_axi_arid    = 4'd0;
-    m_axi_araddr  = rd_desc ? (ring_base + {ring_head, 5'b0}) : dma_baddr;
-    m_axi_arlen   = rd_desc ? 8'd3 : (dma_nb - 8'd1);
+    m_axi_araddr  = rd_desc ? (ring_base + (desc64 ? {ring_head, 6'b0}
+                                                          : {ring_head, 5'b0}))
+                                    : dma_baddr;
+    m_axi_arlen   = rd_desc ? (desc64 ? 8'd7 : 8'd3) : (dma_nb - 8'd1);
     m_axi_arsize  = 3'b011;      // 8 bytes per beat
     m_axi_arburst = 2'b01;       // INCR
     m_axi_rready  = (dstate == D_RDESC) || (dstate == D_SIN);
@@ -391,7 +407,7 @@ module cgra_top #(
           if (ring_en && !dma_busy && (ring_size != 16'd0) && (ring_head != ring_tail_n)) begin
             dma_busy  <= 1'b1;
             dma_done  <= 1'b0;
-            dma_beat  <= 2'd0;
+            dma_beat  <= 3'd0;
             dma_bcnt  <= 8'd0;
             ring_mode <= 1'b1;
             rd_desc   <= 1'b1;
@@ -401,7 +417,7 @@ module cgra_top #(
         D_AR: begin
           dma_last_q <= !rd_desc && (dma_wleft_q <= dma_bw);
           if (m_axi_arvalid && m_axi_arready) begin
-            dma_beat <= 2'd0;
+            dma_beat <= 3'd0;
             dma_bcnt <= 8'd0;
             dstate   <= rd_desc ? D_RDESC : D_SIN;
           end
@@ -410,7 +426,7 @@ module cgra_top #(
           if (m_axi_rvalid && m_axi_rready) begin
             desc_buf[dma_beat] <= m_axi_rdata;
             if (m_axi_rlast) dstate <= D_DESC_SET;
-            else             dma_beat <= dma_beat + 2'd1;
+            else             dma_beat <= dma_beat + 3'd1;
           end
         end
         D_DESC_SET: begin
@@ -428,7 +444,26 @@ module cgra_top #(
            * CTRL[3] 置位，若不清，前面跑过 gpcp_cgra_imem_load（IMEM 目标）的
            * 程序会把之后所有 DMA 静默改道去写 IMEM，阵列只看到旧 spad 数据。 */
           dma_tgt        <= 1'b0;
-          desc_addr      <= ring_base + {ring_head, 5'b0};
+          desc_addr      <= ring_base + (desc64 ? {ring_head, 6'b0}
+                                                 : {ring_head, 5'b0});
+          in_len_q       <= desc_buf[1][15:0];
+          in_src_q       <= desc_buf[0][31:0];
+          in_dir_q       <= desc_buf[0][49];
+          out_en_q       <= desc64 ? desc_buf[4][32]   : 1'b0;
+          out_len_q      <= desc64 ? desc_buf[4][15:0] : 16'd0;
+          out_spad_q     <= desc64 ? desc_buf[4][31:16]: 16'd0;
+          out_dst_q      <= desc64 ? desc_buf[5][31:0] : 32'd0;
+          rep_left       <= (desc64 && (desc_buf[6][15:0] != 16'd0))
+                          ? desc_buf[6][15:0] : 16'd1;
+          in_step_q      <= desc64 ? desc_buf[6][31:16] : 16'd0;
+          out_step_q     <= desc64 ? desc_buf[6][47:32] : 16'd0;
+          arr_run_q      <= 1'b0;
+          out_run_q      <= 1'b0;
+          arr_en_q       <= desc_buf[3][31];
+          arr_en_desc_q  <= desc_buf[3][31];
+          arr_page_q     <= desc_buf[3][16];
+          arr_cycles_q   <= (desc_buf[3][15:0] > MAXCYC) ? 16'(MAXCYC)
+                                                         : desc_buf[3][15:0];
           dma_idx        <= 16'd0;
           dma_row_cnt    <= 16'd0;
           dma_bcnt       <= 8'd0;
@@ -450,8 +485,8 @@ module cgra_top #(
               dma_baddr_lo_q <= (dma_baddr_lo_q + {4'b0, dma_bw[9:0], 2'b00}) & 12'hFFF;
               if (dma_last_q) begin
                 if (ring_mode) begin
-                  wr_status <= 1'b1;
-                  dstate    <= D_AW;
+                  if (arr_en_q || out_en_q) dstate <= D_NEXT;
+                  else begin wr_status <= 1'b1; dstate <= D_AW; end
                 end else begin
                   dma_busy    <= 1'b0;
                   dma_done    <= 1'b1;
@@ -490,16 +525,12 @@ module cgra_top #(
               // completion status of a ring descriptor
               wr_status <= 1'b0;
               if (desc_irq) dma_irq_evt <= 1'b1;
-              ring_done <= ring_done + 16'd1;
-              ring_head <= (ring_head + 16'd1 >= ring_size) ? 16'd0 : ring_head + 16'd1;
-              if (ring_en && (((ring_head + 16'd1 >= ring_size) ? 16'd0
-                                                             : ring_head + 16'd1) != ring_tail_n)) begin
-                dma_beat <= 2'd0;
-                rd_desc  <= 1'b1;
-                dstate   <= D_AR;
+              // 复合描述符：这一笔传输还要再跑一次阵列，跑完才退休
+              if (arr_en_q) begin
+                arr_en_q <= 1'b0;
+                dstate   <= D_ARR;
               end else begin
-                dma_busy <= 1'b0;
-                dstate   <= D_IDLE;
+                dstate   <= D_RETIRE;
               end
             end else begin
               dma_idx <= dma_nidx;
@@ -507,8 +538,8 @@ module cgra_top #(
               dma_baddr_lo_q <= (dma_baddr_lo_q + {4'b0, dma_bw[9:0], 2'b00}) & 12'hFFF;
               if (dma_last_q) begin
                 if (ring_mode) begin
-                  wr_status <= 1'b1;
-                  dstate    <= D_AW;
+                  if (arr_en_q || out_en_q) dstate <= D_NEXT;
+                  else begin wr_status <= 1'b1; dstate <= D_AW; end
                 end else begin
                   dma_busy    <= 1'b0;
                   dma_done    <= 1'b1;
@@ -521,10 +552,88 @@ module cgra_top #(
             end
           end
         end
+        D_ARR: begin
+          // 三段式：发启动 → 等 busy 起来（启动真的生效）→ 等 done。
+          // 不能直接看 done：上一次运行的 done 还是 1，会立刻误判完成。
+          case (arr_phase)
+            2'd0: begin
+              arr_req   <= 1'b1;
+              arr_phase <= 2'd1;
+            end
+            2'd1: begin
+              arr_req <= 1'b0;
+              if (busy) arr_phase <= 2'd2;
+            end
+            default: begin
+              if (done && !busy) begin
+                arr_phase <= 2'd0;
+                arr_run_q <= 1'b1;
+                dstate    <= D_NEXT;
+              end
+            end
+          endcase
+        end
+        D_NEXT: begin
+          // 复合描述符：搬入 → 阵列 → 搬出 → 写状态 → 退休/重复
+          if (arr_en_q && !arr_run_q)        dstate <= D_ARR;
+          else if (out_en_q && !out_run_q)   dstate <= D_OUT;
+          else if (rep_left > 16'd1)         dstate <= D_RETIRE;  // 中间轮次不写状态
+          else begin wr_status <= 1'b1; dstate <= D_AW; end
+        end
+        D_OUT: begin
+          // 启动搬出：spad 起点/长度来自 w4，RAM 目标来自 w5
+          dma_run_src    <= out_dst_q;
+          dma_cur        <= out_spad_q;
+          dma_run_len    <= out_len_q;
+          dma_wleft_q    <= out_len_q;
+          dma_baddr_lo_q <= out_dst_q[11:0];
+          dma_dir        <= 1'b1;
+          dma_idx        <= 16'd0;
+          dma_row_cnt    <= 16'd0;
+          dma_bcnt       <= 8'd0;
+          out_run_q      <= 1'b1;
+          dstate         <= D_AW;
+        end
+        D_RETIRE: begin
+          if (rep_left > 16'd1) begin
+            rep_left       <= rep_left - 16'd1;
+            /* D_OUT 会把 dma_run_src 改成搬出目标，所以搬入基址单独记在
+             * in_src_q；这里从它推进，不能从 dma_run_src 推。 */
+            in_src_q       <= in_src_q + {14'b0, in_step_q, 2'b00};
+            dma_run_src    <= in_src_q + {14'b0, in_step_q, 2'b00};
+            out_dst_q      <= out_dst_q + {14'b0, out_step_q, 2'b00};
+            dma_cur        <= desc_buf[0][47:32];
+            dma_row_cnt    <= 16'd0;
+            dma_idx        <= 16'd0;
+            dma_run_len    <= in_len_q;
+            dma_wleft_q    <= in_len_q;
+            dma_dir        <= in_dir_q;
+            dma_baddr_lo_q <= (in_src_q + {14'b0, in_step_q, 2'b00}) & 12'hFFF;
+            arr_run_q      <= 1'b0;
+            out_run_q      <= 1'b0;
+            /* D_BRESP 进阵列前会把 arr_en_q 清掉，repeat 必须重新武装，
+             * 否则第 2..N 轮只搬数据、阵列根本不跑。 */
+            arr_en_q       <= arr_en_desc_q;
+            dstate         <= in_dir_q ? D_AW : D_AR;
+          end else begin
+          ring_done <= ring_done + 16'd1;
+          ring_head <= (ring_head + 16'd1 >= ring_size) ? 16'd0 : ring_head + 16'd1;
+          if (ring_en && (((ring_head + 16'd1 >= ring_size) ? 16'd0
+                                                         : ring_head + 16'd1) != ring_tail_n)) begin
+            dma_beat <= 3'd0;
+            rd_desc  <= 1'b1;
+            dstate   <= D_AR;
+          end else begin
+            dma_busy <= 1'b0;
+            dstate   <= D_IDLE;
+          end
+          end
+        end
         default: dstate <= D_IDLE;
       endcase
     if (wr_en) begin
       case (wr_addr)
+        REG_DESC_MODE:  desc64     <= wr_data[0];
         REG_DMA_SRC:    dma_src    <= wr_data;
         REG_DMA_DST:    dma_dst    <= wr_data[15:0];
         REG_DMA_LEN:    dma_len    <= (wr_data[15:0] > 16'd1024) ? 16'd1024 : wr_data[15:0];
@@ -576,6 +685,14 @@ module cgra_top #(
       busy       <= 1'b0;
       done       <= 1'b0;
       buf_page   <= 1'b0;   // single driver: the copy engine never touches it
+      arr_en_q   <= 1'b0;
+      arr_req    <= 1'b0;
+      arr_phase  <= 2'd0;
+      desc64     <= 1'b0;
+      out_en_q   <= 1'b0;
+      arr_run_q  <= 1'b0;
+      out_run_q  <= 1'b0;
+      rep_left   <= 16'd1;
     end else begin
       if (wr_en) begin
         if (wr_addr == REG_CTRL) begin
@@ -616,6 +733,13 @@ module cgra_top #(
         imem[dma_imem_idx[12:4]][dma_imem_idx[3:0]] <= m_axi_rdata[31:0];
         if (!dma_last_odd)
           imem[dma_imem_nidx[12:4]][dma_imem_nidx[3:0]] <= m_axi_rdata[63:32];
+      end else if (arr_req && !busy && (arr_cycles_q != 16'd0)) begin
+        // 描述符驱动的阵列运行：拍数/page 来自描述符，不走寄存器写入
+        num_cycles <= arr_cycles_q;
+        busy       <= 1'b1;
+        done       <= 1'b0;
+        cycle_cnt  <= 16'd0;
+        buf_page   <= arr_page_q;
       end else if (busy) begin
         if (cycle_cnt == num_cycles - 16'd1) begin
           busy <= 1'b0;
@@ -706,7 +830,9 @@ module cgra_top #(
     end else begin
       perf_cycles <= perf_cycles + 32'd1;
       if (busy) perf_array_busy <= perf_array_busy + 32'd1;
-      if (busy && !busy_q) perf_array_runs <= perf_array_runs + 32'd1;
+      if (busy && !busy_q) begin
+        perf_array_runs <= perf_array_runs + 32'd1;
+      end
       if (dma_busy) perf_dma_busy <= perf_dma_busy + 32'd1;
       if (dma_busy && !dma_busy_q)
         perf_dma_starts <= perf_dma_starts + 32'd1;

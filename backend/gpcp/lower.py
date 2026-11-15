@@ -348,19 +348,45 @@ def lower(ir, target):
 
         elif op == "transform":
             # 显式变换：FFT/DFT/IDFT 一律走阵列（点数由参数给定，不再是隐藏步）。
+            # count 是链上独立的变换次数（每个 OFDM 符号一次），length=2*n*count。
             n = int(nd["params"].get("size") or need or 0)
-            # Bluestein：补零到 m >= 2n-1 的 2 次幂，正/反各一次 m 点 FFT。
-            m = 1
-            while m < 2 * n - 1:
-                m <<= 1
-            runs = 2 * fft_runs_per_symbol(m) if n else 0
-            st["where"] = "array"
-            st["impl"] = "dft%d_bluestein" % n if n else "dft_bluestein"
-            st["array_runs"] = runs
-            st["notes"].append("%d 点 Bluestein → %d 点 FFT ×2，共 %d 次阵列运行"
-                               % (n, m, runs))
-            st["notes"].append("%d 点 %s（显式 transform 节点）"
-                               % (n, "IDFT" if nd["params"].get("inverse") else "DFT"))
+            form = str(nd["params"].get("form") or "dft")
+            inv = bool(nd["params"].get("inverse"))
+            cnt = max(1, int(nd["params"].get("count", 1)))
+            if form == "fft":
+                cand, cands = fft_candidates(n, cp_len)
+                if cand is None:
+                    st["where"] = "control-core"
+                else:
+                    runs = cand["runs_per_symbol"] * cnt
+                    st["where"] = "array"
+                    st["impl"] = cand["impl"]
+                    st["array_runs"] = runs
+                    st["tiling"] = {"size": cand["size"], "symbols": cnt,
+                                    "tiles_per_symbol": cand["runs_per_symbol"],
+                                    "tiles_total": runs}
+                    st["buffer_words"] = cand["buffer_words_per_symbol"] * min(cnt, 2)
+                    st["search"] = {"candidates": [c["impl"] for c in cands],
+                                    "chosen": cand["impl"],
+                                    "rule": "min runs; tie min size"}
+                    st["notes"].append("%d 点 FFT ×%d（显式 transform 节点）"
+                                       % (n, cnt))
+                    plan["search"]["fft"].append(
+                        {"stage": nd["id"], "op": op, "need": n, "nsym": cnt,
+                         "candidates": cands, "chosen": cand["impl"],
+                         "runs": runs, "hidden": False})
+            else:
+                # Bluestein 固定 1024 点内核（DFT_M），正/反各一次。
+                per = 2 * fft_runs_per_symbol(1024)
+                runs = per * cnt if n else 0
+                st["where"] = "array"
+                st["impl"] = ("idft%d_bluestein" if inv else "dft%d_bluestein") % n \
+                    if n else "dft_bluestein"
+                st["array_runs"] = runs
+                st["notes"].append("%d 点 Bluestein（1024 点内核 ×2）×%d = %d 次阵列运行"
+                                   % (n, cnt, runs))
+                st["notes"].append("%d 点 %s（显式 transform 节点）"
+                                   % (n, "IDFT" if inv else "DFT"))
 
         elif op == "mimo_equalise":
             # 每层每 RE 出 qm 个硬判比特；mmse_full 一次算 n_pes 个 RE 且同时

@@ -31,7 +31,8 @@ static const proto_op_t proto_ops[] = {
     { "dmrs",           "ref_sss",  ss_noop            },
     { "dmrs",           "ref_pbch", ss_dmrs            },
     { "estimate",       0,          ss_estimate        },
-    { "equalise_demap", 0,          ss_equalise_demap  },
+    { "equalise", 0, ss_equalise },
+    { "demap", 0, ss_demap },
     { "decode",         0,          ss_decode          },
 };
 

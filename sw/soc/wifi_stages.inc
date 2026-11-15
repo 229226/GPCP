@@ -275,14 +275,30 @@ static int wifi_estimate(void)
     return 0;
 }
 
-static int wifi_equalise_demap(void)
+static int64_t wifi_eq[WIFI_NSYM][WIFI_NDATA];
+
+static int wifi_equalise(void)
 {
     for (int s = 0; s < WIFI_NSYM; s++)
-        for (int k = 0; k < WIFI_NDATA; k++) {
-            int64_t er = (int64_t)wifi_y[s][k][0] * wifi_h[k][0]
-                       + (int64_t)wifi_y[s][k][1] * wifi_h[k][1];
-            wifi_llr[s][k] = (int32_t)(er >> 4);      /* H_SCALE=16 */
-        }
+        for (int k = 0; k < WIFI_NDATA; k++)
+            wifi_eq[s][k] = (int64_t)wifi_y[s][k][0] * wifi_h[k][0]
+                          + (int64_t)wifi_y[s][k][1] * wifi_h[k][1];
+    return 0;
+}
+
+static int wifi_demap(void)
+{
+    for (int s = 0; s < WIFI_NSYM; s++)
+        for (int k = 0; k < WIFI_NDATA; k++)
+            wifi_llr[s][k] = (int32_t)(wifi_eq[s][k] >> 4);   /* H_SCALE=16 */
+    return 0;
+}
+
+/* 兼容入口：老的单片调用路径（bm 程序 / 逐阶段调试）仍可用。 */
+static int wifi_equalise_demap(void)
+{
+    wifi_equalise();
+    wifi_demap();
     return 0;
 }
 

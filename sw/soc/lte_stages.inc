@@ -467,6 +467,10 @@ static int lte_equalise_demap(void)
     return lte_descramble_dematch();
 }
 
+/* 节点粒度：均衡与解调拆成两个节点，各自落点唯一（docs/25）。 */
+static int lte_equalise(void) { return lte_equalise_demap_main(); }
+static int lte_demap(void) { return lte_descramble_dematch(); }
+
 /* ---------------- 阶段 10：Turbo 译码 [标量]（max-log-MAP × 8 次）+ CRC24A */
 #define TURBO_NEG (-(1 << 28))
 static int32_t t_alpha[NPOL][8], t_beta[NPOL][8];

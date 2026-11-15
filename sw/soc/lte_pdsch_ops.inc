@@ -20,7 +20,8 @@ static const proto_op_t proto_ops[] = {
     { "channel",        0, lte_channel              },
     { "ofdm_demodulate",0, lte_ofdm_demodulate      },
     { "estimate",       0, lte_estimate             },
-    { "equalise_demap", 0, lte_equalise_demap       },
+    { "equalise", 0, lte_equalise },
+    { "demap", 0, lte_demap },
     { "decode",         0, lte_decode               },
 };
 

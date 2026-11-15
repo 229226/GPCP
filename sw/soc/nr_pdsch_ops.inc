@@ -26,8 +26,10 @@ static const proto_op_t proto_ops[] = {
     { "map_to_grid", 0, qs_map_to_grid },
     { "ofdm_modulate", 0, qs_ofdm_modulate },
     { "channel", 0, qs_channel },
+    { "transform", "fft4096", qs_transform },
     { "estimate", 0, qs_estimate },
-    { "equalise_demap", 0, qs_equalise_demap },
+    { "equalise", 0, qs_equalise },
+    { "demap", 0, qs_demap },
     { "decode", 0, qs_decode },
 };
 

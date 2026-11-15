@@ -79,11 +79,13 @@ def scenario_stats(name, rows, total):
                if int(r["cgra_cycles"]) > int(r["cpu_cycles"]))
     # 剩余代价：阵列阶段自己也要花的时间（min(c,g) 的和）
     residual = sum(min(int(r["cpu_cycles"]), int(r["cgra_cycles"])) for r in arr)
-    # 标为 CPU、但 CGRA 路径明显更快的阶段：说明该阶段内部用了阵列（例如
-    # equalise_demap 里藏了一次 Bluestein），或者两条路径的 C 实现不同。
-    # 这部分收益不在"声明覆盖率"里，单独统计，避免把账算错。
+    # 标为 CPU、但 CGRA 路径明显更快的阶段：说明该阶段内部其实用了阵列
+    # （节点切分没到位），或者两条路径的 C 实现不同。这部分收益不在"声明
+    # 覆盖率"里，单独统计。切分完成后这里应该是 0；仍有命中就说明还有粗节点。
+    # 下限 1000 周期：几十拍的阶段比值纯属噪声，不该被当成结构问题。
     hidden = [r for r in rows
               if where.get(int(r["id"])) != "array"
+              and int(r["cpu_cycles"]) >= 1000
               and int(r["cgra_cycles"]) * 1.2 < int(r["cpu_cycles"])]
     hidden_gain = sum(int(r["cpu_cycles"]) - int(r["cgra_cycles"]) for r in hidden)
     cpu_end = int(total["cpu_cycles"]) if total else cpu

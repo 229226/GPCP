@@ -120,8 +120,12 @@ static int lu_dmrs(void)
 /* 加扰 + QPSK，然后逐符号 200 点 DFT（网格在 dmrs 之后由 map_to_grid 建）。 */
 static int lu_modulate(void)
 {
-    if (lte_modulate() != 0)
-        return 1;
+    return lte_modulate();
+}
+
+/* 节点粒度：200 点 DFT 扩频是独立变换节点，不再藏在 modulate 里。 */
+static int lu_tx_transform(void)
+{
     for (int s = 0; s < NSYM; s++) {
         int32_t ar[LU_N], ai[LU_N];
         for (int i = 0; i < LU_N; i++) {
@@ -181,9 +185,11 @@ static int lu_estimate(void)
     return 0;
 }
 
-static int lu_equalise_demap(void)
+static int32_t lu_eq_ar[NSYM][LU_N], lu_eq_ai[NSYM][LU_N];
+
+/* 节点粒度：匹配滤波（均衡）/ 200 点 IDFT（变换）/ 解调（解扰+解速率匹配）。 */
+static int lu_equalise(void)
 {
-    static int32_t ar[LU_N], ai[LU_N], soft[2 * LU_N];
     for (int s = 0; s < NSYM; s++) {
         int m = 0;
         for (int r = 0; r < NRE; r++) {
@@ -191,17 +197,30 @@ static int lu_equalise_demap(void)
                 continue;
             int64_t yr = (int64_t)yre[s][r] << 4;
             int64_t yi = (int64_t)yim[s][r] << 4;
-            ar[m] = (int32_t)(yr * lu_hre[s] + yi * lu_him[s]);
-            ai[m] = (int32_t)(yi * lu_hre[s] - yr * lu_him[s]);
+            lu_eq_ar[s][m] = (int32_t)(yr * lu_hre[s] + yi * lu_him[s]);
+            lu_eq_ai[s][m] = (int32_t)(yi * lu_hre[s] - yr * lu_him[s]);
             m++;
         }
-        lu_idft200(ar, ai, soft);
-        for (int i = 0; i < LU_N; i++) {
-            llr_buf[2 * (s * LU_N + i)] = soft[2 * i];
-            llr_buf[2 * (s * LU_N + i) + 1] = soft[2 * i + 1];
-        }
     }
-    return lte_descramble_dematch();
+    return 0;
+}
+
+static int lu_rx_transform(void)
+{
+    for (int s = 0; s < NSYM; s++)
+        lu_idft200(lu_eq_ar[s], lu_eq_ai[s], llr_buf + 2 * s * LU_N);
+    return 0;
+}
+
+static int lu_demap(void) { return lte_descramble_dematch(); }
+
+/* 兼容入口：老的单片调用路径（bm 程序 / 逐阶段调试）仍可用。 */
+static int lu_equalise_demap(void)
+{
+    lu_equalise();
+    lu_rx_transform();
+    lu_demap();
+    return 0;
 }
 
 static int lu_decode(void) { return lte_decode(); }

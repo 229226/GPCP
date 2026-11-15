@@ -96,9 +96,9 @@ static int harq_estimate(void)
     return 0;
 }
 
-static int harq_equalise_demap(void)
+static int harq_equalise(void)
 {
-    uint32_t s, r, i, k, rows = E_BITS / 2u;
+    uint32_t s, r;
 
     qs_mm = 0;
     for (s = 0; s < NSYM; s++)
@@ -117,6 +117,12 @@ static int harq_equalise_demap(void)
             llr_e[2 * qs_mm + 1] = (int32_t)ei;
             qs_mm++;
         }
+    return 0;
+}
+
+static int harq_demap(void)
+{
+    uint32_t i, k, rows = E_BITS / 2u;
 
     for (i = 0; i < rows; i++)
         for (k = 0; k < 2u; k++)
@@ -142,6 +148,14 @@ static int harq_equalise_demap(void)
         rbuf[(harq_k0[harq_q] + k) % USABLE] += llr_i[k];
 
     harq_q++;
+    return 0;
+}
+
+/* 兼容入口：老的单片调用路径（bm 程序 / 逐阶段调试）仍可用。 */
+static int harq_equalise_demap(void)
+{
+    harq_equalise();
+    harq_demap();
     return 0;
 }
 

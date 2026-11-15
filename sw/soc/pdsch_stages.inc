@@ -619,14 +619,11 @@ static int qs_ofdm_modulate(void)
 static int qs_channel(void) { return 0; }
 
 /* -------- 阶段 7：信道估计 [array]（每符号 FFT + RE 抽取 + 60 导频 LS） */
-static int qs_estimate(void)
+/* 节点粒度：接收 FFT 是独立变换节点，不再藏在 estimate 里。 */
+static int qs_transform(void)
 {
-    uint32_t s, r, i;
+    uint32_t s, r;
     int32_t *td = (int32_t *)TD_RAM;
-    int64_t den = (int64_t)NPILOT * 2 * QPSK * QPSK / H_SCALE;
-
-    for (i = 0; i < USABLE; i++)
-        rbuf[i] = 0;
 
     for (s = 0; s < NSYM; s++) {
         int32_t *sp = td + s * SYM_WORDS + 2 * CP_LEN;
@@ -642,6 +639,13 @@ static int qs_estimate(void)
             yw[(s * NRE + r) * 2 + 1] = sp[2 * idx + 1] << 4;
         }
     }
+    return 0;
+}
+
+static int qs_estimate(void)
+{
+    uint32_t s, r;
+    int64_t den = (int64_t)NPILOT * 2 * QPSK * QPSK / H_SCALE;
 
     for (s = 0; s < NSYM; s++) {
         int64_t accr = 0, acci = 0;
@@ -661,10 +665,9 @@ static int qs_estimate(void)
 }
 
 /* ---- 阶段 8：均衡 + 软解调（LLR → 解交织 → 符号锚点 → 解扰 → 解速率匹配） */
-static int qs_equalise_demap(void)
+static int qs_equalise(void)
 {
-    uint32_t s, r, i, k, rows = E_BITS / qs_qm;
-    uint32_t u;
+    uint32_t s, r, i, k;
 
     /* 均衡 + QAM 软 LLR（E_BITS 个，交织顺序） */
     qs_mm = 0;
@@ -694,6 +697,16 @@ static int qs_equalise_demap(void)
             qs_mm++;
         }
     }
+    return 0;
+}
+
+static int qs_demap(void)
+{
+    uint32_t i, k, rows = E_BITS / qs_qm;
+    uint32_t u;
+
+    for (i = 0; i < USABLE; i++)
+        rbuf[i] = 0;
 
     /* 38.212 5.4.2.2 解交织 */
     for (i = 0; i < rows; i++)
@@ -736,6 +749,162 @@ static int qs_equalise_demap(void)
             llr[b][i] = dem[b * ZC + i] >> LLR_SHIFT;
     return 0;
 }
+
+/* 兼容入口：老的单片调用路径（bm 程序 / 逐阶段调试）仍可用。 */
+static int qs_equalise_demap(void)
+{
+    qs_equalise();
+    qs_demap();
+    return 0;
+}
+
+
+/* ---------------------------------------------------------------------------
+ * 64 字节复合描述符：一条 = 搬入 → 阵列 → 搬出，可重复 N 次（repeat）。
+ *
+ *   w0  src | spad | page<<16 | dir<<17          w1  len | stride<<32 | row<<48
+ *   w2  status（引擎写）                          w3  cycles | page<<16 | en<<31
+ *   w4  out_len | out_spad<<16 | out_en<<32       w5  out_dst
+ *   w6  repeat | in_step<<16 | out_step<<32
+ *
+ * 打开方式：REG_DESC_MODE=1。旧的 32 字节格式不受影响。
+ * 一条 CN 描述符覆盖 42 行：CPU 只写 16 个字，硬件自己跑 42 遍。
+ * ------------------------------------------------------------------------- */
+#define QDSC_DEPTH   256u
+static uint32_t qn_desc, qn_arr, qn_busy;
+
+static void qdsc_tile(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
+                      uint32_t stride, uint32_t row,
+                      uint32_t cycles, uint32_t arr_page,
+                      uint32_t out_len, uint32_t out_spad, uint32_t out_dst,
+                      uint32_t repeat, uint32_t in_step, uint32_t out_step)
+{
+    uint32_t *d = (uint32_t *)DESC_BASE + 16u * qn_desc;   /* 64 字节 = 16 字 */
+    uint32_t rep = repeat ? repeat : 1u;
+    d[0]  = ram;
+    d[1]  = (spad & 0xFFFFu) | ((page & 1u) << 16);        /* 搬入方向 dir=0 */
+    d[2]  = len & 0xFFFFu;
+    d[3]  = (stride & 0xFFFFu) | ((row & 0xFFFFu) << 16);
+    d[4]  = 0;
+    d[5]  = 0;                                             /* 状态字，引擎写 */
+    d[6]  = cycles ? ((cycles & 0xFFFFu) | ((arr_page & 1u) << 16) | (1u << 31)) : 0u;
+    d[7]  = 0;
+    d[8]  = (out_len & 0xFFFFu) | ((out_spad & 0xFFFFu) << 16);
+    d[9]  = out_len ? 1u : 0u;                             /* out_en */
+    d[10] = out_dst;
+    d[11] = 0;
+    d[12] = (rep & 0xFFFFu) | ((in_step & 0xFFFFu) << 16);
+    d[13] = out_step & 0xFFFFu;
+    d[14] = 0;
+    d[15] = 0;
+    qn_desc++;
+    if (cycles) {
+        qn_arr  += rep;
+        qn_busy += cycles * rep;
+    }
+}
+
+/* 纯搬运（无阵列、无搬出）：末轮的硬判拷贝用它。 */
+static void qdsc_plain(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
+                       uint32_t out, uint32_t stride, uint32_t row)
+{
+    uint32_t *d = (uint32_t *)DESC_BASE + 16u * qn_desc;
+    d[0]  = ram;
+    d[1]  = (spad & 0xFFFFu) | ((page & 1u) << 16) | ((out & 1u) << 17);
+    d[2]  = len & 0xFFFFu;
+    d[3]  = (stride & 0xFFFFu) | ((row & 0xFFFFu) << 16);
+    d[4]  = 0; d[5] = 0; d[6] = 0; d[7] = 0;
+    d[8]  = 0; d[9] = 0; d[10] = 0; d[11] = 0;
+    d[12] = 1u; d[13] = 0; d[14] = 0; d[15] = 0;
+    qn_desc++;
+}
+
+static void qdsc_run(void)
+{
+    uint32_t done0 = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
+    uint32_t spins = 0;
+    /* 描述符是 CPU 经 D-cache 写的，引擎从 RAM 读：必须先写回 */
+    rt_dcache_flush();
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DESC_MODE, 1u);         /* 64 字节模式 */
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, DESC_BASE);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_SIZE, QDSC_DEPTH);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_HEAD, 0u);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, qn_desc);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
+    while (((mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE) - done0) & 0xFFFFu) < qn_desc) {
+        if (++spins > 8000000u) { errs++; break; }
+    }
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, 0u);
+    runs += qn_arr;
+    dmas += qn_desc;
+#ifdef PS_TRACK_STATS
+    busy += qn_busy;
+#endif
+}
+
+/* LDPC 的 8 次 min-sum 迭代：每轮 = CN(42 行，1 条描述符) + BN(52 列)。 */
+static int qs_decode_ring(void)
+{
+    uint32_t i, k, it;
+
+    for (i = 0; i < ZC; i++) {
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i),
+               (uint32_t)SENTINEL);
+    }
+
+    for (it = 0; it < qs_decode_iters; it++) {
+        /* CN 与 BN 两套微码交替驻留，每轮都要重装 CN */
+        if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CN_PROG_CYCLES * NPES))
+            errs++;
+        qn_desc = 0;
+        qn_arr = 0;
+        qn_busy = 0;
+        qdsc_tile((uint32_t)(uintptr_t)&msg[0][0][0], 0, MAXD * ZC, 0,
+                  GPCP_LAYOUT_WORDS, ZC, CN_PROG_CYCLES, 0,
+                  3 * ZC, GPCP_LAYOUT_REGION_MIN1 * GPCP_LAYOUT_WORDS,
+                  (uint32_t)(uintptr_t)&res_r[0][0][0],
+                  BG2_ROWS, MAXD * ZC, 3 * ZC);
+        qdsc_run();
+        rt_dcache_flush();
+        reconstruct_gather();
+
+        if (gpcp_cgra_imem_load(CGRA_BASE, bn_prog, BN_PROG_CYCLES * NPES))
+            errs++;
+        {
+            int want_hard = (it + 1u == qs_decode_iters);
+            qn_desc = 0;
+            qn_arr = 0;
+            qn_busy = 0;
+            for (k = 0; k < BG2_COLS; k++) {
+                uint32_t n = blk_n[k];
+                qdsc_tile((uint32_t)(uintptr_t)(g_all + k * GSPAD), 0, 25 * ZC, 0,
+                          GPCP_LAYOUT_WORDS, ZC, BN_PROG_CYCLES, 0,
+                          n * ZC, 0, (uint32_t)(uintptr_t)(b_all + k * GSPAD),
+                          1, 0, 0);
+                if (want_hard)
+                    qdsc_plain((uint32_t)(uintptr_t)(b_all + k * GSPAD + n * ZC),
+                               GPCP_SPAD_IDX(GPCP_LAYOUT_REGION_HARD, 0), ZC, 0, 1, 0, 0);
+            }
+            qdsc_run();
+            for (k = 0; k < BG2_COLS; k++)
+                bn_scatter(k, want_hard, qs_hard[k]);
+        }
+    }
+    return 0;
+}
+
+/* TaskPlan 生成物：proto/emit.py 写下 task_decode.inc（编排），这里只做包含。
+ * bm 程序没有该 include 路径，__has_include 为假，自动回落到手写实现。 */
+#define GPCP_RING_DECODE 1
+
+#if defined(__has_include)
+#  if __has_include("task_decode.inc")
+#    include "task_decode.inc"
+#    define GPCP_TASK_DECODE 1
+#  endif
+#endif
 
 /* ---- 阶段 9：LDPC 译码 [array]（8 次 min-sum）+ 硬判 + CRC24A ------- */
 static int qs_decode(void)
@@ -803,6 +972,11 @@ static int qs_decode(void)
         }
     }
 #else
+#if defined(GPCP_RING_DECODE)
+    qs_decode_ring();              /* 复合描述符环：CPU 一次提交，硬件逐块滚动 */
+#elif defined(GPCP_TASK_DECODE)
+    task_decode();                 /* 编排由 TaskPlan 生成（backend/gpcp/emit_host.py） */
+#else
     for (i = 0; i < ZC; i++) {
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i),
@@ -850,6 +1024,7 @@ static int qs_decode(void)
             }
         }
     }
+#endif /* GPCP_TASK_DECODE */
 #endif
 
     /* CRC24A：硬判前 104 位 = 80 TB + 24 CRC */

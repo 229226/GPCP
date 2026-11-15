@@ -16,8 +16,10 @@ static int qs_rx_received(void) { return 0; }
 static const proto_op_t proto_ops[] = {
     { "received",        0, qs_rx_received },
     { "dmrs",            0, qs_dmrs },
-    { "estimate",        0, qs_estimate },
-    { "equalise_demap",  0, qs_equalise_demap },
+    { "transform", "fft4096", qs_transform },
+    { "estimate", 0, qs_estimate },
+    { "equalise", 0, qs_equalise },
+    { "demap", 0, qs_demap },
     { "decode",          0, qs_decode },
 };
 

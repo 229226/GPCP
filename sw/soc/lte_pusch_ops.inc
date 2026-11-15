@@ -12,7 +12,10 @@ static const proto_op_t proto_ops[] = {
     { "channel",         0, lu_channel },
     { "ofdm_demodulate", 0, lu_ofdm_demodulate },
     { "estimate",        0, lu_estimate },
-    { "equalise_demap",  0, lu_equalise_demap },
+    { "equalise", 0, lu_equalise },
+    { "transform", "dft200_bluestein",  lu_tx_transform },
+    { "transform", "idft200_bluestein", lu_rx_transform },
+    { "demap", 0, lu_demap },
     { "decode",          0, lu_decode },
 };
 

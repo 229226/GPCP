@@ -112,6 +112,7 @@ package cgra_pkg;
                                                     // R: [0] enabled [1] idle [2] busy
   localparam logic [15:0] REG_RING_DONE = 16'h005C; // R: descriptors completed so far
   localparam logic [15:0] REG_DBG_STATE = 16'h0060; // R: engine FSM state (debug)
+  localparam logic [15:0] REG_DESC_MODE = 16'h0064; // W: [0] 1 = 64B 复合描述符
 
   // ---------------- performance counters (read-only, 32-bit each) ----------------
   // W: REG_PERF_CTRL[0] = clear all counters (single-cycle pulse).

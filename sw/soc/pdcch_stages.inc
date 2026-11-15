@@ -581,16 +581,25 @@ static int ps_channel(void) { return 0; }
 /* 场景里没有单独的 ofdm_demodulate 动词（docs/20 §2 有，但本场景未用），
  * 解调归到估计阶段的第一步：时域 -> 频域 -> 取 216 个 RE。<<4 是接收链
  * 既有的定点口径（与 run-pdcch 一致）。 */
-static int ps_estimate(void)
+/* 节点粒度：接收 FFT 是独立变换节点，不再藏在 estimate 里。 */
+static int ps_transform(void)
 {
     int32_t *td = (int32_t *)TD_RAM;
     int32_t *spec = td + 2 * CP_LEN;
-    uint32_t r, idx;
 #ifdef PROTO_CPU_ONLY
     fft4096_cpu(spec);
 #else
     fft4096(spec);
 #endif
+    return 0;
+}
+
+static int ps_estimate(void)
+{
+    int32_t *td = (int32_t *)TD_RAM;
+    int32_t *spec = td + 2 * CP_LEN;
+    uint32_t r, idx;
+
     rt_dcache_flush();                          /* CPU wrote this window, engine
                                                  * transformed it in place */
     for (r = 0; r < NRE; r++) {
@@ -602,7 +611,7 @@ static int ps_estimate(void)
 }
 
 /* --------------------------- 阶段 8：均衡 + 软解调（逆 REG + 解扰 + 符号锚点） */
-static int ps_equalise_demap(void)
+static int ps_equalise(void)
 {
     uint32_t k, j;
     /* 逆 REG/CCE 映射：发射侧按 38.211 7.3.2.3 把 bundle j 搬到 f(j)，
@@ -623,6 +632,12 @@ static int ps_equalise_demap(void)
         for (k = 0; k < E_BITS; k++)
             llr_e[k] = tmp[k];
     }
+    return 0;
+}
+
+static int ps_demap(void)
+{
+    uint32_t k;
     ps_llr_bad = 0;
     ps_llr_amin = 0xFFFFFFFFu;
     ps_llr_amax = 0;
@@ -641,6 +656,14 @@ static int ps_equalise_demap(void)
     for (k = 0; k < E_BITS; k++)
         if (gold_bit(k))
             llr_e[k] = -llr_e[k];
+    return 0;
+}
+
+/* 兼容入口：老的单片调用路径（bm 程序 / 逐阶段调试）仍可用。 */
+static int ps_equalise_demap(void)
+{
+    ps_equalise();
+    ps_demap();
     return 0;
 }
 

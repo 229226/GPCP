@@ -17,9 +17,11 @@ static const proto_op_t proto_ops[] = {
     { "dmrs", 0, us_dmrs },
     { "ofdm_demodulate", 0, us_ofdm_demodulate },
     { "estimate", 0, us_estimate },
-#if defined(TP) && HARQ_TX == 1
+#if HARQ_TX == 1
     { "equalise", 0, us_equalise },
+#ifdef TP
     { "transform", 0, us_transform },
+#endif
     { "demap", 0, us_demap },
 #else
     { "equalise_demap", 0, us_equalise_demap },

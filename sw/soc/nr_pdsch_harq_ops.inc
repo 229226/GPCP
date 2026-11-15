@@ -11,7 +11,8 @@ static const proto_op_t proto_ops[] = {
     { "dmrs",            0, harq_dmrs },
     { "ofdm_demodulate", 0, harq_ofdm_demodulate },
     { "estimate",        0, harq_estimate },
-    { "equalise_demap",  0, harq_equalise_demap },
+    { "equalise", 0, harq_equalise },
+    { "demap", 0, harq_demap },
     { "decode",          0, harq_decode },
 };
 

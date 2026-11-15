@@ -69,7 +69,8 @@ int main(void)
     qs_map_to_grid();          /* 4. 240 RE/符号（每 4 个一个导频） */
     qs_ofdm_modulate();        /* 5. IFFT [array] + CP -> 2 符号 TD */
     qs_channel();              /* 6. 信道（自环 = 理想） */
-    qs_estimate();             /* 7. 接收 FFT [array] + LS 估计 */
+    qs_transform();            /* 7a. 接收 FFT [array]（节点拆分后独立成阶段） */
+    qs_estimate();             /* 7b. LS 信道估计 */
     qs_equalise_demap();       /* 8. 均衡 + LLR + 符号锚点 + 解扰 + 解速率匹配 */
     qs_decode();               /* 9. 8 次 LDPC 迭代 [array] + CRC24A */
     cyc = mtime() - t0;

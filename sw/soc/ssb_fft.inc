@@ -121,6 +121,7 @@ static void fe_desc_tail(uint32_t n, int32_t *data, uint32_t *pg)
 
 static void fe_exec(uint32_t first, uint32_t last)
 {
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DESC_MODE, 0u);   /* 本路径用 32 字节描述符 */
     for (uint32_t i = first; i < last; i++) {
         f_done = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
         gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, DESC_BASE);

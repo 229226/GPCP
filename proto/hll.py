@@ -164,7 +164,9 @@ class Scenario:
         """信道估计。`includes_fft` 写进 IR：输入是时域样本时，本动词内部
         含一次接收 FFT。语义由场景声明，后端不再从图上推断。"""
         if includes_fft is None:
-            includes_fft = not any(n["op"] == "ofdm_demodulate" for n in self.nodes)
+            # 前面已经有解调或显式 transform，就说明频谱已经搬过来了。
+            includes_fft = not any(n["op"] in ("ofdm_demodulate", "transform")
+                                   for n in self.nodes)
         return self._node("estimate", [y, ref], "h",
                           includes_fft=bool(includes_fft))
 
@@ -183,11 +185,16 @@ class Scenario:
         return self._node("equalise", [y, h], "eq", qm=qm,
                           length=self.derived.get("e_bits", 0))
 
-    def transform(self, x, form="dft", size=0, inverse=False):
-        """显式变换： DFT/IDFT/FFT。不再藏在其他动词内部。"""
+    def transform(self, x, form="dft", size=0, inverse=False, count=1):
+        """显式变换：DFT/IDFT/FFT，链上做 `count` 次（每个符号一次）。
+
+        length = 2 * size * count，所以后端能从 IR 直接读出变换总规模，
+        不需要再从图上猜"这个 estimate 里有没有藏一次 FFT"。
+        """
         n = int(size) if size else int(self.derived.get("n_fft_min", 0))
+        c = max(1, int(count))
         return self._node("transform", [x], "spec", form=form, size=n,
-                          inverse=bool(inverse), length=2 * n)
+                          inverse=bool(inverse), count=c, length=2 * n * c)
 
     def demap(self, x, qm=None):
         """解交织 + 解扰 + 软解调，输出 LLR。"""
@@ -217,7 +224,7 @@ class Scenario:
     # ---------------------------------------------------------------- 导出
     def ir(self):
         return {
-            "schema": "gpcp-proto-ir/1",
+            "schema": "gpcp-proto-ir/2",
             "scenario": self.name,
             "rat": self.rat,
             "direction": self.direction,

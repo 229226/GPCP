@@ -17,7 +17,8 @@ corr_sss = S.correlate(grid, sss, hypotheses=336, seq="sss")
 
 ref = S.dmrs(type="pbch", n_id=1, l=0)
 h = S.estimate(grid, ref)
-llr = S.equalise_demap(grid, h, qm=2)
+eq = S.equalise(grid, h, qm=2)
+llr = S.demap(eq, qm=2)
 mib = S.decode(llr, scheme="polar", max_iter=1)
 
 S.expect(n_id1=200, n_id2=1, mib="tx.mib", dmrs_c_init="38.211 7.4.1.3",

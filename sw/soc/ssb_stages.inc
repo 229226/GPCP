@@ -572,10 +572,10 @@ static int ss_estimate(void)
 }
 
 /* ---- 阶段 6：QPSK 软解调 + PBCH 解扰 + 逆速率匹配（720 -> 512） */
-static int ss_equalise_demap(void)
+static int32_t e720[RM_LEN];
+
+static int ss_equalise(void)
 {
-    static int32_t e720[RM_LEN];
-    static int32_t zrm[RM_LEN], pre[POLAR_N];
     int pbch_sym[2] = {1, 3};
     int n = 0;
 
@@ -601,10 +601,24 @@ static int ss_equalise_demap(void)
             n++;
         }
     }
+    return 0;
+}
+
+static int ss_demap(void)
+{
+    static int32_t zrm[RM_LEN], pre[POLAR_N];
     for (int m = 0; m < RM_LEN; m++) zrm[m] = e720[tri_perm[m]];
     for (int i = 0; i < POLAR_N; i++) pre[i] = 0;
     for (int k = 0; k < RM_LEN; k++) pre[k % POLAR_N] += zrm[k];
     for (int i = 0; i < POLAR_N; i++) lbuf[0][i] = pre[sb_perm[i]];
+    return 0;
+}
+
+/* 兼容入口：老的单片调用路径（bm 程序 / 逐阶段调试）仍可用。 */
+static int ss_equalise_demap(void)
+{
+    ss_equalise();
+    ss_demap();
     return 0;
 }
 
