@@ -92,14 +92,26 @@
     "h"
    ],
    "length": 720,
-   "op": "equalise_demap",
-   "out": "llr",
+   "op": "equalise",
+   "out": "eq",
    "params": {
     "qm": 2
    }
   },
   {
    "id": 5,
+   "in": [
+    "eq"
+   ],
+   "length": 720,
+   "op": "demap",
+   "out": "llr",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 6,
    "in": [],
    "length": 17536,
    "op": "received",
@@ -109,7 +121,7 @@
    }
   },
   {
-   "id": 6,
+   "id": 7,
    "in": [
     "wave"
    ],
@@ -119,7 +131,7 @@
    "params": {}
   },
   {
-   "id": 7,
+   "id": 8,
    "in": [
     "grid",
     "ref"
@@ -132,20 +144,32 @@
    }
   },
   {
-   "id": 8,
+   "id": 9,
    "in": [
     "grid",
     "h"
    ],
    "length": 720,
-   "op": "equalise_demap",
+   "op": "equalise",
+   "out": "eq",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 10,
+   "in": [
+    "eq"
+   ],
+   "length": 720,
+   "op": "demap",
    "out": "llr",
    "params": {
     "qm": 2
    }
   },
   {
-   "id": 9,
+   "id": 11,
    "in": [
     "llr"
    ],
@@ -160,7 +184,7 @@
  ],
  "rat": "nr",
  "scenario": "nr_pdsch_harq",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "periodic",
   "jobs_per_slot": 1,

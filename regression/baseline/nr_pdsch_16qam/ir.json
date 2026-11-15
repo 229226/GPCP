@@ -62,31 +62,58 @@
   {
    "id": 2,
    "in": [
-    "wave",
+    "wave"
+   ],
+   "length": 16384,
+   "op": "transform",
+   "out": "spec",
+   "params": {
+    "count": 2,
+    "form": "fft",
+    "inverse": false,
+    "size": 4096
+   }
+  },
+  {
+   "id": 3,
+   "in": [
+    "spec",
     "ref"
    ],
    "length": 0,
    "op": "estimate",
    "out": "h",
    "params": {
-    "includes_fft": true
+    "includes_fft": false
    }
   },
   {
-   "id": 3,
+   "id": 4,
    "in": [
     "wave",
     "h"
    ],
    "length": 720,
-   "op": "equalise_demap",
+   "op": "equalise",
+   "out": "eq",
+   "params": {
+    "qm": 4
+   }
+  },
+  {
+   "id": 5,
+   "in": [
+    "eq"
+   ],
+   "length": 720,
+   "op": "demap",
    "out": "llr",
    "params": {
     "qm": 4
    }
   },
   {
-   "id": 4,
+   "id": 6,
    "in": [
     "llr"
    ],
@@ -101,7 +128,7 @@
  ],
  "rat": "nr",
  "scenario": "nr_pdsch_16qam",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "periodic",
   "jobs_per_slot": 1,

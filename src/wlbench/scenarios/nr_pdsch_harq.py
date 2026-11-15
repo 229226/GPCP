@@ -15,12 +15,14 @@ w0 = S.received(form="td", length=S.sym_len(2))
 ref = S.dmrs(type="type1", n_id=1, l=2)
 g0 = S.ofdm_demodulate(w0)
 h0 = S.estimate(g0, ref)
-l0 = S.equalise_demap(g0, h0, qm=2)
+eq0 = S.equalise(g0, h0, qm=2)
+l0 = S.demap(eq0, qm=2)
 
 w1 = S.received(form="td", length=S.sym_len(2))
 g1 = S.ofdm_demodulate(w1)
 h1 = S.estimate(g1, ref)
-l1 = S.equalise_demap(g1, h1, qm=2)
+eq1 = S.equalise(g1, h1, qm=2)
+l1 = S.demap(eq1, qm=2)
 
 hard = S.decode(l1, scheme="ldpc", max_iter=8)
 

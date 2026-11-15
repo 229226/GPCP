@@ -103,7 +103,7 @@
  ],
  "rat": "lte",
  "scenario": "lte_cell_search",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "periodic",
   "jobs_per_slot": 1,

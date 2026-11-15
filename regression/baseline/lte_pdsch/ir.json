@@ -146,14 +146,26 @@
     "h"
    ],
    "length": 800,
-   "op": "equalise_demap",
-   "out": "llr",
+   "op": "equalise",
+   "out": "eq",
    "params": {
     "qm": 2
    }
   },
   {
    "id": 10,
+   "in": [
+    "eq"
+   ],
+   "length": 800,
+   "op": "demap",
+   "out": "llr",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 11,
    "in": [
     "llr"
    ],
@@ -168,7 +180,7 @@
  ],
  "rat": "lte",
  "scenario": "lte_pdsch",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "periodic",
   "jobs_per_slot": 1,

@@ -8,12 +8,31 @@ GPU、纯软件参考）都只依赖这里的内容。
 | 字段 | 值 | 说明 |
 |---|---|---|
 | bundle schema | `wlbench-bundle/1` | `manifest.json` 的 `schema` |
-| IR schema | `gpcp-proto-ir/1` | 冻结值，为回归兼容保留原名；改名需新 schema_version |
+| IR schema | `gpcp-proto-ir/2` | 节点词汇 v2（见 §1.1）；v1 的 17 个 IR 已作废 |
 | metrics schema | `wlbench-metrics/1` | 后端回报格式 |
 | evaluation schema | `wlbench-evaluation/1` | `evaluate()` 输出 |
 
-**兼容承诺**：v1 的 `ir.json` 字节与 17 个冻结场景一致；任何会改变它的改动
-必须提升 `schema_version` 并重建回归锁。
+**兼容承诺**：同一 `schema_version` 下 `ir.json` 的节点结构不变；任何会改变它的
+改动必须提升 `schema_version` 并重建回归锁。
+
+### 1.1 v1 → v2：节点粒度
+
+v1 里一个节点可以同时包含"阵列核 + 标量收尾"两种实现，`where` 只能填一个值，
+于是出现"标着 CPU、实际跑了 9.8×"的情况（详见 GPCP `docs/25`）。v2 的规则是
+**一个节点 = 一个实现决策**，为此：
+
+| v1 | v2 | 原因 |
+|---|---|---|
+| `equalise_demap(y, h, qm)` | `equalise(y, h, qm)` + `demap(eq, qm)` | 均衡是矩阵/匹配滤波，解调是逐 RE 软判，并行度不同 |
+| `modulate`（内含 DFT 扩频） | `modulate` + `transform(form="dft", size=N, count=n)` | DFT 是块变换，加扰/映射是比特/符号级 |
+| `estimate(y, ref)` 内含接收 FFT | `transform(form="fft", count=n)` + `estimate(spec, ref)` | 变换不该藏在估计里；`includes_fft` 参数随之取消 |
+| `equalise_demap` 内含 IDFT | `equalise` + `transform(form="idft", ...)` + `demap` | 同上 |
+
+`transform` 的 `length = 2 * size * count`，`count` 是链上独立变换的次数（每个
+OFDM 符号一次），后端据此算出阵列运行次数，不需要再从图上猜。
+
+**数值不变**：v2 重建后 17 个场景的 `stimulus.bin` 逐字节相同、`golden.bits`
+与 `anchors` 逐项相同，只有 `ir.json` 与 `params_hash` 变化。
 
 ## 2. Workload bundle
 

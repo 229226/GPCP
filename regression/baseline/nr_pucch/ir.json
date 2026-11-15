@@ -70,7 +70,7 @@
  ],
  "rat": "nr",
  "scenario": "nr_pucch",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "periodic",
   "jobs_per_slot": 1,

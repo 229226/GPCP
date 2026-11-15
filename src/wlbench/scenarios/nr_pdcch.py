@@ -21,8 +21,10 @@ grid = S.map_to_grid(sym, ref)
 wave = S.ofdm_modulate(grid)
 
 y = S.channel(wave, model="awgn", snr_db=12)
-h = S.estimate(y, ref)
-llr = S.equalise_demap(y, h, qm=2)
+spec = S.transform(y, form="fft", count=1)
+h = S.estimate(spec, ref)
+eq = S.equalise(y, h, qm=2)
+llr = S.demap(eq, qm=2)
 hard = S.decode(llr, scheme="polar", max_iter=1)
 
 S.expect(hard_eq="tx.codeword", dci_bits=32, crc="crc24c",

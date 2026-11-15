@@ -13,8 +13,10 @@ S.traffic(arrival="periodic", jobs_per_slot=1, slots=40, util=1.0)
 
 wave = S.received(form="td", length=S.sym_len(2, 7))
 ref = S.dmrs(type="type1", n_id=1, l=2)
-h = S.estimate(wave, ref)
-llr = S.equalise_demap(wave, h, qm=4)
+spec = S.transform(wave, form="fft", count=2)
+h = S.estimate(spec, ref)
+eq = S.equalise(wave, h, qm=4)
+llr = S.demap(eq, qm=4)
 hard = S.decode(llr, scheme="ldpc", max_iter=8)
 
 S.expect(tb_eq="tx.tb", crc="crc24a", hard_eq="tx.codeword", llr_sign="all")

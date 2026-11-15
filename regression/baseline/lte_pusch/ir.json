@@ -74,6 +74,21 @@
   },
   {
    "id": 3,
+   "in": [
+    "sym"
+   ],
+   "length": 800,
+   "op": "transform",
+   "out": "spec",
+   "params": {
+    "count": 2,
+    "form": "dft",
+    "inverse": false,
+    "size": 200
+   }
+  },
+  {
+   "id": 4,
    "in": [],
    "length": 0,
    "op": "dmrs",
@@ -85,9 +100,9 @@
    }
   },
   {
-   "id": 4,
+   "id": 5,
    "in": [
-    "sym",
+    "spec",
     "ref"
    ],
    "length": 1272,
@@ -96,7 +111,7 @@
    "params": {}
   },
   {
-   "id": 5,
+   "id": 6,
    "in": [
     "grid"
    ],
@@ -106,7 +121,7 @@
    "params": {}
   },
   {
-   "id": 6,
+   "id": 7,
    "in": [
     "wave"
    ],
@@ -119,7 +134,7 @@
    }
   },
   {
-   "id": 7,
+   "id": 8,
    "in": [
     "y"
    ],
@@ -129,7 +144,7 @@
    "params": {}
   },
   {
-   "id": 8,
+   "id": 9,
    "in": [
     "grid",
     "ref"
@@ -142,20 +157,47 @@
    }
   },
   {
-   "id": 9,
+   "id": 10,
    "in": [
     "grid",
     "h"
    ],
    "length": 800,
-   "op": "equalise_demap",
+   "op": "equalise",
+   "out": "eq",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 11,
+   "in": [
+    "eq"
+   ],
+   "length": 800,
+   "op": "transform",
+   "out": "spec",
+   "params": {
+    "count": 2,
+    "form": "idft",
+    "inverse": true,
+    "size": 200
+   }
+  },
+  {
+   "id": 12,
+   "in": [
+    "spec"
+   ],
+   "length": 800,
+   "op": "demap",
    "out": "llr",
    "params": {
     "qm": 2
    }
   },
   {
-   "id": 10,
+   "id": 13,
    "in": [
     "llr"
    ],
@@ -170,7 +212,7 @@
  ],
  "rat": "lte",
  "scenario": "lte_pusch",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "periodic",
   "jobs_per_slot": 1,

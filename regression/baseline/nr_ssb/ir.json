@@ -142,14 +142,26 @@
     "h"
    ],
    "length": 0,
-   "op": "equalise_demap",
-   "out": "llr",
+   "op": "equalise",
+   "out": "eq",
    "params": {
     "qm": 2
    }
   },
   {
    "id": 9,
+   "in": [
+    "eq"
+   ],
+   "length": 0,
+   "op": "demap",
+   "out": "llr",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 10,
    "in": [
     "llr"
    ],
@@ -164,7 +176,7 @@
  ],
  "rat": "nr",
  "scenario": "nr_ssb",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "periodic",
   "jobs_per_slot": 1,

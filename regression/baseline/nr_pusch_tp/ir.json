@@ -108,6 +108,7 @@
    "op": "transform",
    "out": "spec",
    "params": {
+    "count": 1,
     "form": "dft",
     "inverse": true,
     "size": 360
@@ -141,7 +142,7 @@
  ],
  "rat": "nr",
  "scenario": "nr_pusch_tp",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "periodic",
   "jobs_per_slot": 1,

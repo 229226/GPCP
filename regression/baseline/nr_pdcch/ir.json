@@ -120,31 +120,58 @@
   {
    "id": 7,
    "in": [
-    "y",
+    "y"
+   ],
+   "length": 8192,
+   "op": "transform",
+   "out": "spec",
+   "params": {
+    "count": 1,
+    "form": "fft",
+    "inverse": false,
+    "size": 4096
+   }
+  },
+  {
+   "id": 8,
+   "in": [
+    "spec",
     "ref"
    ],
    "length": 0,
    "op": "estimate",
    "out": "h",
    "params": {
-    "includes_fft": true
+    "includes_fft": false
    }
   },
   {
-   "id": 8,
+   "id": 9,
    "in": [
     "y",
     "h"
    ],
    "length": 432,
-   "op": "equalise_demap",
+   "op": "equalise",
+   "out": "eq",
+   "params": {
+    "qm": 2
+   }
+  },
+  {
+   "id": 10,
+   "in": [
+    "eq"
+   ],
+   "length": 432,
+   "op": "demap",
    "out": "llr",
    "params": {
     "qm": 2
    }
   },
   {
-   "id": 9,
+   "id": 11,
    "in": [
     "llr"
    ],
@@ -159,7 +186,7 @@
  ],
  "rat": "nr",
  "scenario": "nr_pdcch",
- "schema": "gpcp-proto-ir/1",
+ "schema": "gpcp-proto-ir/2",
  "traffic": {
   "arrival": "single",
   "util": 1.0
