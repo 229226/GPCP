@@ -1,7 +1,8 @@
-# 硬件架构优化迭代记录
+# 软硬件优化迭代记录
 
-按提交记录 CGRA 相关优化的可复现性能。除特别说明外，所有数字来自同一台
-Verilator 模型、同一个 wlbench bundle：
+按提交记录 CGRA 相关软硬件优化的可复现性能。迭代范围包括 RTL、微码/调度、
+DMA/描述符、阶段编排、驱动与运行时、编译器/落点调整。除特别说明外，所有数字
+来自同一台 Verilator 模型、同一个 wlbench bundle：
 
 ```
 /home/zzq/wlbench/build/bundles/nr_pdsch
