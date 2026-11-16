@@ -446,7 +446,6 @@ module cgra_top #(
       win_lo      <= 32'b0;
       win_hi      <= 32'hFFFF_FFFF;
       win_err     <= 1'b0;
-      for (int i = 0; i < ROT_ENTRIES; i++) rot_tbl[i] <= 7'd0;
       ring_base   <= 32'b0;
       ring_size   <= 16'd0;
       ring_head   <= 16'd0;
@@ -459,6 +458,19 @@ module cgra_top #(
       rd_desc     <= 1'b0;
       wr_status   <= 1'b0;
       for (int i = 0; i < DESC_BEATS; i++) desc_buf[i] <= 64'b0;
+      /* 这几个状态由本块（描述符 FSM）推进，但复位值原先写在阵列序列器块里：
+       * 同一个变量被两个 always_ff 驱动，Verilator 能过，slang（综合入口）
+       * 直接报错。复位统一收到这里，序列器只复位它自己的计数器。 */
+      arr_en_q      <= 1'b0;
+      arr_en_desc_q <= 1'b0;
+      arr_req       <= 1'b0;
+      arr_phase     <= 2'd0;
+      arr_imem_q    <= 1'b0;
+      desc64        <= 1'b0;
+      out_en_q      <= 1'b0;
+      arr_run_q     <= 1'b0;
+      out_run_q     <= 1'b0;
+      rep_left      <= 16'd1;
     end else begin
       dma_irq_evt <= 1'b0;
       if (win_bad) win_err <= 1'b1;
@@ -712,11 +724,7 @@ module cgra_top #(
         default: dstate <= D_IDLE;
       endcase
     if (wr_en) begin
-      if ((wr_addr >= REG_ROT_BASE) &&
-          (wr_addr < (REG_ROT_BASE + 16'(ROT_ENTRIES * 4)))) begin
-        if (wr_addr[1:0] == 2'b00)
-          rot_tbl[(wr_addr - REG_ROT_BASE) >> 2] <= wr_data[6:0];
-      end else begin
+      // REG_ROT_BASE 的逐 bank 旋转表写在阵列序列器块里（rot_tbl 单一驱动）
       case (wr_addr)
         REG_ROT_ZC:     rot_zc     <= (wr_data[5:0] > 6'd32) ? 6'd32 : wr_data[5:0];
         REG_DESC_MODE:  desc64     <= wr_data[0];
@@ -764,7 +772,6 @@ module cgra_top #(
         end
         default: ;
       endcase
-      end
     end
     end
   end
@@ -820,17 +827,9 @@ module cgra_top #(
       busy       <= 1'b0;
       done       <= 1'b0;
       buf_page   <= 1'b0;   // single driver: the copy engine never touches it
-      arr_en_q   <= 1'b0;
-      arr_req    <= 1'b0;
-      arr_phase  <= 2'd0;
-      arr_imem_q <= 1'b0;
       imem_wbank <= 1'b0;
       imem_run_bank <= 1'b0;
-      desc64     <= 1'b0;
-      out_en_q   <= 1'b0;
-      arr_run_q  <= 1'b0;
-      out_run_q  <= 1'b0;
-      rep_left   <= 16'd1;
+      for (int i = 0; i < ROT_ENTRIES; i++) rot_tbl[i] <= 7'd0;
     end else begin
       if (wr_en) begin
         if (wr_addr == REG_CTRL) begin
@@ -862,6 +861,11 @@ module cgra_top #(
           buf_page <= wr_data[0];
         end else if (wr_addr == REG_IMEM_BANK) begin
           imem_wbank <= wr_data[0];
+        end else if ((wr_addr >= REG_ROT_BASE) &&
+                     (wr_addr < (REG_ROT_BASE + 16'(ROT_ENTRIES * 4)))) begin
+          // 每 bank 旋转表：dma_tbl_we 也写这里，必须和它同一个 always_ff
+          if (wr_addr[1:0] == 2'b00)
+            rot_tbl[(wr_addr - REG_ROT_BASE) >> 2] <= wr_data[6:0];
         end else if ((wr_addr >= REG_IMEM_BASE) &&
                      (wr_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
           // word index w = (wr_addr - base) >> 2 -> row w >> 4, lane w[3:0]
