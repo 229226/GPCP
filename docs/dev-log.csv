@@ -114,3 +114,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-16,,,45,doc,doc,新增硬件架构优化迭代记录：commit、wlbench 总周期、CGRA 覆盖率/利用率、CPU-DMA-CGRA 占比、全部性能计数器,bf14ec6,measured,docs/performance/iterations.md；修正旧 7.03% 为硬件口径 12.62%（ITER-0）/14.66%（ITER-1），计数器 0..56 全表
 2026-11-16,,,10,doc,doc,在 AGENTS §8 固化规则：每次硬件/架构迭代必须追加 docs/performance/iterations.md 记录,1a30e41,measured,规则列出 commit、wlbench total_cycles、覆盖率、利用率、CPU/DMA/CGRA 占比与关键计数器
 2026-11-16,,,5,doc,doc,迭代留档规则从硬件扩展到软硬件：RTL/微码/DMA/阶段编排/驱动/编译器均需记 ITER-N,2564b52,measured,AGENTS §8 与 docs/performance/iterations.md 标题/范围同步
+2026-11-16,,,110,rtl,feature,"IMEM 双 bank：CN 常驻 bank0 / BN 常驻 bank1，描述符新增 arr_imem；删环路径 g_all 死初始化；wlbench nr_pdsch 2,649,155→2,482,309",84f2f7b,measured,"iterate.md ITER-2；run/run-ring/run-fft/run-dma/run-irq/run-pdsch-iter/run-pdsch-full + 6 个 QAM/HARQ 门全过；阵列 388,384 拍，利用率 14.66%→15.65%；decode 1,082,145→913,031；IMEM 面积 0.138→0.276 mm²"

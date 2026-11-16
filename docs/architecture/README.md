@@ -58,6 +58,7 @@
 | `0x0064` | DESC_MODE | 0 = 32 B 描述符，1 = 64 B 复合描述符 |
 | `0x006C` | ROT_ZC | 每 bank 旋转表的循环模（0 视为 32） |
 | `0x0070` | WIN_STATUS | 输出写窗口越界（sticky，W1C） |
+| `0x0074` | IMEM_BANK | `[0]` 主机/拷贝引擎写 IMEM 的 bank（0/1）；读回当前写 bank |
 | `0x0080` | ROT_BASE | `0x80 + bank*4`，每 bank 7 bit 旋转表项 |
 | `0x1000` | PE 寄存器 | `0x1000 + pe*32 + reg*4` |
 | `0x2000` | IMEM | `0x2000 + idx*4`，`idx = cycle*16 + pe` |

@@ -8,7 +8,7 @@
 | 每 PE 寄存器 | 8 个（r0–r7） | 同上 |
 | 数据宽度 | 16-bit 乘、32-bit 累加 | `rtl/cgra/cgra_pe.sv` |
 | link | 最近邻四方向，1 周期 | `rtl/cgra/cgra_array.sv` |
-| IMEM | 8192 字 = 512 拍 × 16 PE | `GPCP_CGRA_IMEM_WORDS` |
+| IMEM | 2 bank × 8192 字（每 bank 512 拍 × 16 PE） | `GPCP_CGRA_IMEM_WORDS`、`REG_IMEM_BANK` |
 | 单次运行上限 | 512 拍 | `GPCP_CGRA_MAX_CYCLES` |
 | spad | 32 bank × 32 word × 2 页 | `target.yaml` |
 | 时钟 | 100 MHz（SoC 目标） | `target.yaml: clock_hz` |
@@ -64,7 +64,7 @@
 
 | 字 | 字段 | 含义 |
 |---|---|---|
-| 6 | `cycles[15:0]`、`arr_page[16]`、`arr_en[31]` | 搬入后跑一次阵列 |
+| 6 | `cycles[15:0]`、`arr_page[16]`、`arr_imem[17]`、`arr_en[31]` | 搬入后跑一次阵列（`arr_imem` 选 IMEM bank 0/1） |
 | 8 | `out_len[15:0]`、`out_spad[31:16]` | 搬出长度/起点 |
 | 9 | `out_en[0]` | 是否搬出 |
 | 10 | `out_dst` | 搬出到 RAM 的地址 |
