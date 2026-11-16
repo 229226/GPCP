@@ -112,5 +112,5 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-16,,,120,doc,doc,文档推倒重写：按 architecture/compiler/software/protocols/verification/performance/project 组织；规则收敛到 AGENTS.md,937d53e,measured,9 篇 834 行；删除 33 篇旧文档与 4 个重复 AI 入口；全仓 0 条悬空文档引用；devcheck 0 error
 2026-11-16,,,90,sw,feature,"LDPC 微码装载改走拷贝引擎；性能快照 1400→1420 避免与末阶段账本重叠；wlbench nr_pdsch 3,077,988→2,649,155",d082938,measured,"84 门回归待跑；run-proto-nr_pdsch/16qam/64qam/harq、run-pdsch-full/loop 全过；阵列 388,384 拍，利用率 12.62%→14.66%；译码 1,510,723→1,082,145"
 2026-11-16,,,45,doc,doc,新增硬件架构优化迭代记录：commit、wlbench 总周期、CGRA 覆盖率/利用率、CPU-DMA-CGRA 占比、全部性能计数器,bf14ec6,measured,docs/performance/iterations.md；修正旧 7.03% 为硬件口径 12.62%（ITER-0）/14.66%（ITER-1），计数器 0..56 全表
-2026-11-16,,,10,doc,doc,在 AGENTS §8 固化规则：每次硬件/架构迭代必须追加 docs/performance/iterations.md 记录,,measured,规则列出 commit、wlbench total_cycles、覆盖率、利用率、CPU/DMA/CGRA 占比与关键计数器
-2026-11-16,,,5,doc,doc,迭代留档规则从硬件扩展到软硬件：RTL/微码/DMA/阶段编排/驱动/编译器均需记 ITER-N,,measured,AGENTS §8 与 docs/performance/iterations.md 标题/范围同步
+2026-11-16,,,10,doc,doc,在 AGENTS §8 固化规则：每次硬件/架构迭代必须追加 docs/performance/iterations.md 记录,1a30e41,measured,规则列出 commit、wlbench total_cycles、覆盖率、利用率、CPU/DMA/CGRA 占比与关键计数器
+2026-11-16,,,5,doc,doc,迭代留档规则从硬件扩展到软硬件：RTL/微码/DMA/阶段编排/驱动/编译器均需记 ITER-N,2564b52,measured,AGENTS §8 与 docs/performance/iterations.md 标题/范围同步
