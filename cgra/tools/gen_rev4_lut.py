@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成 sw/soc/rev4_lut.h：4096 点 base-4 位反序表。
+"""生成 sw/soc/gen/rev4_lut.h：4096 点 base-4 位反序表。
 
 rev4(v) 在 ssb_fft.inc 里原来是 rev4n(v, 6)——内层每符号调用数千次，
 6 次移位/或改成一次查表。表是纯数学常量，由本脚本生成，勿手改。
@@ -7,7 +7,7 @@ rev4(v) 在 ssb_fft.inc 里原来是 rev4n(v, 6)——内层每符号调用数�
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "..", "..", "sw", "soc", "rev4_lut.h")
+OUT = os.path.join(HERE, "..", "..", "sw", "soc", "gen", "rev4_lut.h")
 N = 4096
 
 

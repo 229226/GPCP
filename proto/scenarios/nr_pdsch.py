@@ -1,6 +1,6 @@
 """G2 场景 2：NR 下行共享信道（PDSCH），与 run-pdsch-loop 同口径。
 
-写法遵守 docs/20：只出现协议量与 §2 的动词；带宽决定 FFT 点数，码块大小、
+写法遵守 docs/protocols/README.md：只出现协议量与 §2 的动词；带宽决定 FFT 点数，码块大小、
 提升长度、资源数都由 cfg 或动词参数推导/给定，这里没有任何芯片词汇。
 """
 from proto.hll import scenario
@@ -8,7 +8,7 @@ from proto.hll import scenario
 S = scenario("nr_pdsch", rat="nr", direction="dl")
 
 # 20 MHz / 15 kHz 与现有接收链同口径；n_id=1 是 38.211 7.4.1.1 的 DMRS 种子，
-# RNTI 0x1234 与 tools/nr_dl_mod.py 的默认激励一致。
+# RNTI 0x1234 与 tools/models/nr_dl_mod.py 的默认激励一致。
 S.cfg(oversample=2, bw_mhz=20, scs_khz=15, n_id=1, n_rnti=0x1234,
       a_bits=80, e_bits=720, qm=2, layers=1, nsym=2)
 

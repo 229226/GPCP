@@ -1,4 +1,4 @@
-"""nr_pucch 的物理层参照（tools/nr_pucch.py）。
+"""nr_pucch 的物理层参照（tools/models/nr_pucch.py）。
 
 激励 = 139 个接收 chip + 2 组 127 抽头；黄金 = detect()（bit / winner / m_CS
 / 两个复数相关值）。
@@ -10,6 +10,9 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _TOOLS = os.path.join(_ROOT, "tools")
+_MODELS = os.path.join(_TOOLS, "models")
+if _MODELS not in sys.path:
+    sys.path.insert(0, _MODELS)
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 

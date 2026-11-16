@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
 """PDSCH (SISO) full receive chain: golden model + binary time-domain stimulus.
 
 This closes the gap left by ``tools/pdsch_plan.py`` (which only models the link)
-and ``sw/soc/pdsch_iter_bm.c`` (which feeds LCG-random LLRs into the LDPC
+and ``sw/soc/bench/pdsch_iter_bm.c`` (which feeds LCG-random LLRs into the LDPC
 engine).  Here the stimulus is an actual OFDM waveform that the SoC has to
 demodulate itself:
 
@@ -14,7 +24,7 @@ demodulate itself:
        -> QPSK LLR -> de-interleave -> descramble -> rate de-match
        -> LLR scaling -> 8 pure-min-sum LDPC iterations -> CRC24A -> TB
 
-Constants below MUST stay in sync with sw/soc/pdsch_full_bm.c.
+Constants below MUST stay in sync with sw/soc/bench/pdsch_full_bm.c.
 """
 import argparse
 import os

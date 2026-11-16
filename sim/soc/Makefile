@@ -61,7 +61,7 @@ run: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/cgra_bm.bin@0x80000000 --results 0x80002000 --nwords 24 \
 		--dump $(ROOT)/$(OBJ)/soc_dump.txt
-	python3 $(ROOT)/tools/check_soc.py $(ROOT)/$(OBJ)/soc_dump.txt
+	python3 $(ROOT)/tools/checks/check_soc.py $(ROOT)/$(OBJ)/soc_dump.txt
 
 # DMA + double buffering: CVA6 streams three slots through the two scratchpad
 # pages while the array computes on the other page
@@ -69,7 +69,7 @@ run-dma: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/dma_bm.bin@0x80000000 --results 0x80010000 --nwords 50 \
 		--dump $(ROOT)/$(OBJ)/dma_dump.txt
-	python3 $(ROOT)/tools/check_dma.py $(ROOT)/$(OBJ)/dma_dump.txt
+	python3 $(ROOT)/tools/checks/check_dma.py $(ROOT)/$(OBJ)/dma_dump.txt
 
 # Interrupt-driven variant: the CPU waits in wfi and the CGRA raises a level
 # interrupt through the PLIC on every copy-engine / array completion
@@ -77,14 +77,14 @@ run-irq: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/irq_bm.bin@0x80000000 --results 0x80010000 --nwords 35 \
 		--dump $(ROOT)/$(OBJ)/irq_dump.txt
-	python3 $(ROOT)/tools/check_irq.py $(ROOT)/$(OBJ)/irq_dump.txt
+	python3 $(ROOT)/tools/checks/check_irq.py $(ROOT)/$(OBJ)/irq_dump.txt
 
 # Descriptor ring + 64-bit burst copy: the engine reads descriptors out of RAM
 run-ring: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/ring_bm.bin@0x80000000 --results 0x80010000 --nwords 40 \
 		--dump $(ROOT)/$(OBJ)/ring_dump.txt
-	python3 $(ROOT)/tools/check_ring.py $(ROOT)/$(OBJ)/ring_dump.txt
+	python3 $(ROOT)/tools/checks/check_ring.py $(ROOT)/$(OBJ)/ring_dump.txt
 
 # L1 receive chain: chnest -> mmse -> LDPC-CN, fused microcode per slot, ring +
 # double buffering (array works one page while the engine fills/drains the other)
@@ -92,7 +92,7 @@ run-rxchain: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/rxchain_bm.bin@0x80000000 --results 0x80010000 --nwords 101 \
 		--dump $(ROOT)/$(OBJ)/rxchain_dump.txt
-	python3 $(ROOT)/tools/check_rxchain.py $(ROOT)/$(OBJ)/rxchain_dump.txt
+	python3 $(ROOT)/tools/checks/check_rxchain.py $(ROOT)/$(OBJ)/rxchain_dump.txt
 
 # PDSCH LDPC iteration loop: 8 variable nodes / 4 check nodes, one PGBA run per
 # stage per iteration (check node 50 cycles, variable node 12 cycles)
@@ -100,7 +100,7 @@ run-pdsch: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_bm.bin@0x80000000 --results 0x80010000 --nwords 14 \
 		--dump $(ROOT)/$(OBJ)/pdsch_dump.txt
-	python3 $(ROOT)/tools/check_pdsch.py $(ROOT)/$(OBJ)/pdsch_dump.txt
+	python3 $(ROOT)/tools/checks/check_pdsch.py $(ROOT)/$(OBJ)/pdsch_dump.txt
 
 # Real BG2 block, DMA-blocked: every check node streamed in/out, 10-input
 # min-sum with sentinel padding, one summary + 42x3x20 result words
@@ -110,14 +110,14 @@ ZC64_SIGMA = $(if $(SIGMA),$(SIGMA),5)
 ZC64_TD    = $(ROOT)/build/ldpc/pdsch_zc64.td
 
 # Zc=64 的边消息按 4 x 16 分页过 16 PE 阵列：每个 (检查节点, 页) 一次 DMA + 一次 86 拍
-# 半镜像；CN 结果回主机窗口，CPU 就地做分层 VN 更新。TD 由 tools/nr_ldpc.py 生成。
+# 半镜像；CN 结果回主机窗口，CPU 就地做分层 VN 更新。TD 由 tools/models/nr_ldpc.py 生成。
 BG1_TD = $(ROOT)/build/ldpc/pdsch_bg1_zc64.td
 
 # 同一个分页/分层基准，换成 38.212 BG1（46 x 68，Kb=22，行度最大 19 -> 20 bank）
 run-pdsch-bg1-zc64: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(BG1_TD))
-	python3 $(ROOT)/tools/nr_ldpc.py dump --out $(BG1_TD) --bg 1 --zc 64 \
+	python3 $(ROOT)/tools/models/nr_ldpc.py dump --out $(BG1_TD) --bg 1 --zc 64 \
 		--snr $(ZC64_SNR) --iters $(ZC64_ITERS) --sigma $(ZC64_SIGMA)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdsch_bg1_bm.bin@0x80000000 \
@@ -125,22 +125,22 @@ run-pdsch-bg1-zc64: all
 		--results 0x80010000 --nwords 6600 \
 		--dump $(ROOT)/$(OBJ)/pdsch_bg1_zc64_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pdsch_zc64.py $(ROOT)/$(OBJ)/pdsch_bg1_zc64_dump.txt $(BG1_TD)
+	python3 $(ROOT)/tools/checks/check_pdsch_zc64.py $(ROOT)/$(OBJ)/pdsch_bg1_zc64_dump.txt $(BG1_TD)
 
 PBCH_TD = $(ROOT)/build/pbch/pbch_tx.td
 
-# gNB 发射链 G1：PBCH 的 polar 变换（N=512）过 CGRA（docs/19）
+# gNB 发射链 G1：PBCH 的 polar 变换（N=512）过 CGRA（docs/project/README.md）
 run-pbch-tx: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PBCH_TD))
-	python3 $(ROOT)/tools/nr_pbch.py dump --out $(PBCH_TD)
+	python3 $(ROOT)/tools/models/nr_pbch.py dump --out $(PBCH_TD)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pbch_tx_bm.bin@0x80000000 \
 		--load $(PBCH_TD)@0x80400000 \
 		--results 0x80010000 --nwords 16 \
 		--dump $(ROOT)/$(OBJ)/pbch_tx_dump.txt \
 		--max-cycles 10000000
-	python3 $(ROOT)/tools/check_pbch_tx.py $(ROOT)/$(OBJ)/pbch_tx_dump.txt $(PBCH_TD)
+	python3 $(ROOT)/tools/checks/check_pbch_tx.py $(ROOT)/$(OBJ)/pbch_tx_dump.txt $(PBCH_TD)
 
 PBCH_PACK_TD0 = $(ROOT)/build/pbch/pbch_pack_m0.td
 PBCH_PACK_TD1 = $(ROOT)/build/pbch/pbch_pack_m1.td
@@ -150,28 +150,28 @@ PBCH_PACK_TD1 = $(ROOT)/build/pbch/pbch_pack_m1.td
 run-pbch-pack: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PBCH_PACK_TD0))
-	python3 $(ROOT)/tools/nr_pbch.py selftest-pack
-	python3 $(ROOT)/tools/nr_pbch.py dump-pack --out $(PBCH_PACK_TD0) --mode 0
-	python3 $(ROOT)/tools/nr_pbch.py dump-pack --out $(PBCH_PACK_TD1) --mode 1
+	python3 $(ROOT)/tools/models/nr_pbch.py selftest-pack
+	python3 $(ROOT)/tools/models/nr_pbch.py dump-pack --out $(PBCH_PACK_TD0) --mode 0
+	python3 $(ROOT)/tools/models/nr_pbch.py dump-pack --out $(PBCH_PACK_TD1) --mode 1
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pbch_pack_bm.bin@0x80000000 \
 		--load $(PBCH_PACK_TD0)@0x80400000 \
 		--results 0x80010000 --nwords 420 \
 		--dump $(ROOT)/$(OBJ)/pbch_pack_m0_dump.txt \
 		--max-cycles 10000000
-	python3 $(ROOT)/tools/check_pbch_pack.py $(ROOT)/$(OBJ)/pbch_pack_m0_dump.txt $(PBCH_PACK_TD0)
+	python3 $(ROOT)/tools/checks/check_pbch_pack.py $(ROOT)/$(OBJ)/pbch_pack_m0_dump.txt $(PBCH_PACK_TD0)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pbch_pack_bm.bin@0x80000000 \
 		--load $(PBCH_PACK_TD1)@0x80400000 \
 		--results 0x80010000 --nwords 420 \
 		--dump $(ROOT)/$(OBJ)/pbch_pack_m1_dump.txt \
 		--max-cycles 10000000
-	python3 $(ROOT)/tools/check_pbch_pack.py $(ROOT)/$(OBJ)/pbch_pack_m1_dump.txt $(PBCH_PACK_TD1)
+	python3 $(ROOT)/tools/checks/check_pbch_pack.py $(ROOT)/$(OBJ)/pbch_pack_m1_dump.txt $(PBCH_PACK_TD1)
 
 run-pdsch-zc64: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(ZC64_TD))
-	python3 $(ROOT)/tools/nr_ldpc.py dump --out $(ZC64_TD) --zc 64 \
+	python3 $(ROOT)/tools/models/nr_ldpc.py dump --out $(ZC64_TD) --zc 64 \
 		--snr $(ZC64_SNR) --iters $(ZC64_ITERS) --sigma $(ZC64_SIGMA)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdsch_zc64_bm.bin@0x80000000 \
@@ -179,41 +179,41 @@ run-pdsch-zc64: all
 		--results 0x80010000 --nwords 5704 \
 		--dump $(ROOT)/$(OBJ)/pdsch_zc64_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pdsch_zc64.py $(ROOT)/$(OBJ)/pdsch_zc64_dump.txt $(ZC64_TD)
+	python3 $(ROOT)/tools/checks/check_pdsch_zc64.py $(ROOT)/$(OBJ)/pdsch_zc64_dump.txt $(ZC64_TD)
 
 run-pdsch-bg2: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_bg2_bm.bin@0x80000000 --results 0x80010000 --nwords 1270 \
 		--dump $(ROOT)/$(OBJ)/pdsch_bg2_dump.txt
-	python3 $(ROOT)/tools/check_pdsch_bg2.py $(ROOT)/$(OBJ)/pdsch_bg2_dump.txt
+	python3 $(ROOT)/tools/checks/check_pdsch_bg2.py $(ROOT)/$(OBJ)/pdsch_bg2_dump.txt
 
 # Debug: one variable block through the streaming BN microcode (26 x 20 words)
-# 新增 7 个 CGRA kernel 的 SoC 逐值自检（docs/22 待补项）
+# 新增 7 个 CGRA kernel 的 SoC 逐值自检（docs/performance/README.md 待补项）
 run-new-kernels: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/new_kernels_bm.bin@0x80000000 --results 0x80010000 --nwords 1800 \
 		--dump $(ROOT)/$(OBJ)/new_kernels_dump.txt
-	python3 $(ROOT)/tools/check_new_kernels_hw.py $(ROOT)/$(OBJ)/new_kernels_dump.txt
+	python3 $(ROOT)/tools/checks/check_new_kernels_hw.py $(ROOT)/$(OBJ)/new_kernels_dump.txt
 
 run-pdsch-bn1: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_bn1_bm.bin@0x80000000 --results 0x80010000 --nwords 268 \
 		--dump $(ROOT)/$(OBJ)/pdsch_bn1_dump.txt
-	python3 $(ROOT)/tools/check_pdsch_bn1.py $(ROOT)/$(OBJ)/pdsch_bn1_dump.txt
+	python3 $(ROOT)/tools/checks/check_pdsch_bn1.py $(ROOT)/$(OBJ)/pdsch_bn1_dump.txt
 
 # P1: full BG2 LDPC iteration (52 variable blocks x 8) on the generated microcode
 run-pdsch-iter: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_iter_bm.bin@0x80000000 --results 0x80010000 --nwords 1060 \
 		--dump $(ROOT)/$(OBJ)/pdsch_iter_dump.txt
-	python3 $(ROOT)/tools/check_pdsch_iter.py $(ROOT)/$(OBJ)/pdsch_iter_dump.txt
+	python3 $(ROOT)/tools/checks/check_pdsch_iter.py $(ROOT)/$(OBJ)/pdsch_iter_dump.txt
 
 # Debug: per-edge reconstruction + 24-slot gather for variable block 0
 run-pdsch-gather: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/pdsch_gather_bm.bin@0x80000000 --results 0x80010000 --nwords 2060 \
 		--dump $(ROOT)/$(OBJ)/pdsch_gather_dump.txt
-	python3 $(ROOT)/tools/check_pdsch_gather.py $(ROOT)/$(OBJ)/pdsch_gather_dump.txt
+	python3 $(ROOT)/tools/checks/check_pdsch_gather.py $(ROOT)/$(OBJ)/pdsch_gather_dump.txt
 
 # Multi-stage FFT (256/1024/4096): tiled radix-4 stages over the ring plus the
 # fused radix-16 tail; twiddles come from a Q15 ROM image generated by
@@ -226,7 +226,7 @@ run-fft: all
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
 		--results 0x80010000 --nwords 10760 \
 		--dump $(ROOT)/$(OBJ)/fft_dump.txt
-	python3 $(ROOT)/tools/check_fft.py $(ROOT)/$(OBJ)/fft_dump.txt
+	python3 $(ROOT)/tools/checks/check_fft.py $(ROOT)/$(OBJ)/fft_dump.txt
 
 # Slot-synchronous scheduler skeleton: CLINT timer ticks define the slot
 # cadence, the main loop sleeps in wfi and services one slot per tick
@@ -237,7 +237,7 @@ run-sync: all
 		--results 0x80010000 --nwords 53 \
 		--dump $(ROOT)/$(OBJ)/sync_dump.txt \
 		--max-cycles 2000000
-	python3 $(ROOT)/tools/check_sync.py $(ROOT)/$(OBJ)/sync_dump.txt
+	python3 $(ROOT)/tools/checks/check_sync.py $(ROOT)/$(OBJ)/sync_dump.txt
 
 run-sss: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
@@ -246,7 +246,7 @@ run-sss: all
 		--results 0x80010000 --nwords 41 \
 		--dump $(ROOT)/$(OBJ)/sss_dump.txt \
 		--max-cycles 4000000
-	python3 $(ROOT)/tools/check_sss.py $(ROOT)/$(OBJ)/sss_dump.txt
+	python3 $(ROOT)/tools/checks/check_sss.py $(ROOT)/$(OBJ)/sss_dump.txt
 
 run-polar: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
@@ -255,7 +255,7 @@ run-polar: all
 		--results 0x80010000 --nwords 135 \
 		--dump $(ROOT)/$(OBJ)/polar_dump.txt \
 		--max-cycles 4000000
-	python3 $(ROOT)/tools/check_sc.py $(ROOT)/$(OBJ)/polar_dump.txt
+	python3 $(ROOT)/tools/checks/check_sc.py $(ROOT)/$(OBJ)/polar_dump.txt
 
 run-ssb: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
@@ -264,14 +264,14 @@ run-ssb: all
 		--results 0x80010000 --nwords 45 \
 		--dump $(ROOT)/$(OBJ)/ssb_dump.txt \
 		--max-cycles 20000000
-	python3 $(ROOT)/tools/check_ssb.py $(ROOT)/$(OBJ)/ssb_dump.txt
+	python3 $(ROOT)/tools/checks/check_ssb.py $(ROOT)/$(OBJ)/ssb_dump.txt
 
 SSBTD = $(ROOT)/build/ssb/td.bin
 
 # the image must follow the model: changing ssb_plan.py changes the samples
-$(SSBTD): $(ROOT)/tools/ssb_plan.py
+$(SSBTD): $(ROOT)/tools/models/ssb_plan.py
 	@mkdir -p $(dir $(SSBTD))
-	python3 $(ROOT)/tools/ssb_plan.py dump $(SSBTD)
+	python3 $(ROOT)/tools/models/ssb_plan.py dump $(SSBTD)
 
 run-ssbfft: all $(SSBTD)
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
@@ -283,7 +283,7 @@ run-ssbfft: all $(SSBTD)
 		--results 0x80010000 --nwords 992 \
 		--dump $(ROOT)/$(OBJ)/ssb_fft_dump.txt \
 		--max-cycles 40000000
-	python3 $(ROOT)/tools/check_ssb_fft.py $(ROOT)/$(OBJ)/ssb_fft_dump.txt
+	python3 $(ROOT)/tools/checks/check_ssb_fft.py $(ROOT)/$(OBJ)/ssb_fft_dump.txt
 
 # FFT port used by the sample-level SSB chain (ssb_fft.inc): every bin compared
 # bit-exactly with the fixed-point reference for the same time-domain symbol
@@ -301,7 +301,7 @@ run-ssb-slot: all $(SSBTD)
 		--results 0x80010000 --nwords 1000 \
 		--dump $(ROOT)/$(OBJ)/ssb_slot_dump.txt \
 		--max-cycles 40000000
-	python3 $(ROOT)/tools/check_ssb_slot.py $(ROOT)/$(OBJ)/ssb_slot_dump.txt
+	python3 $(ROOT)/tools/checks/check_ssb_slot.py $(ROOT)/$(OBJ)/ssb_slot_dump.txt
 
 run-fftprobe: all $(SSBTD)
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
@@ -313,18 +313,18 @@ run-fftprobe: all $(SSBTD)
 		--results 0x80010000 --nwords 4097 \
 		--dump $(ROOT)/$(OBJ)/fftprobe_dump.txt \
 		--max-cycles 40000000
-	python3 $(ROOT)/tools/check_fftprobe.py $(ROOT)/$(OBJ)/fftprobe_dump.txt
+	python3 $(ROOT)/tools/checks/check_fftprobe.py $(ROOT)/$(OBJ)/fftprobe_dump.txt
 
 run-slot: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	env -u LD_LIBRARY_PATH $(BIN) --load $(ROOT)/build/sw/slot_rtos.bin@0x80000000 \
 		--results 0x80010000 --nwords 282 \
 		--dump $(ROOT)/$(OBJ)/slot_dump.txt
-	python3 $(ROOT)/tools/check_slot.py $(ROOT)/$(OBJ)/slot_dump.txt
+	python3 $(ROOT)/tools/checks/check_slot.py $(ROOT)/$(OBJ)/slot_dump.txt
 
 # B3: OpenSBI + Linux + initramfs
 # Linux boot (B3).  The model runs at ~32 k cycles/s here, so a full boot is a
-# long background job; the log is kept so tools/check_linux.py can grade (and
+# long background job; the log is kept so tools/checks/check_linux.py can grade (and
 # re-grade) it without re-running anything.
 #
 #   make linux                       # default budget, then grade stage 7
@@ -347,10 +347,10 @@ linux: all
 	set -o pipefail; env -u LD_LIBRARY_PATH $(BIN) $(LINUX_IMAGES) \
 		--max-cycles $(LINUX_MAX_CYCLES) $(if $(LINUX_TRACE),--trace-pc $(LINUX_TRACE),) \
 		2>&1 | tee $(LINUX_LOG)
-	python3 $(ROOT)/tools/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
+	python3 $(ROOT)/tools/checks/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
 
 linux-status:
-	python3 $(ROOT)/tools/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
+	python3 $(ROOT)/tools/checks/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
 
 # Same boot with the earlycon-only DTB (the 16550 console goes silent mid-boot)
 LINUX_EARLYCON := $(subst gpcp.dtb,gpcp-earlycon.dtb,$(LINUX_DTB))
@@ -360,7 +360,7 @@ linux-earlycon: all
 	set -o pipefail; env -u LD_LIBRARY_PATH $(BIN) $(subst $(LINUX_DTB),$(LINUX_EARLYCON),$(LINUX_IMAGES)) \
 		--max-cycles $(LINUX_MAX_CYCLES) $(if $(LINUX_TRACE),--trace-pc $(LINUX_TRACE),) \
 		2>&1 | tee $(LINUX_LOG)
-	python3 $(ROOT)/tools/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
+	python3 $(ROOT)/tools/checks/check_linux.py $(LINUX_LOG) --require $(LINUX_REQUIRE)
 
 clean:
 	rm -rf $(ROOT)/$(OBJ)
@@ -368,9 +368,9 @@ clean:
 # ---- P1 real-mapping SSB benchmark (38.211/38.212 chain on the SoC) ----
 SSBFID_TD = $(ROOT)/build/soc/ssb_fid.td
 
-$(SSBFID_TD): $(ROOT)/tools/ssb_plan_p1.py $(ROOT)/tools/nr_pbch.py
+$(SSBFID_TD): $(ROOT)/tools/models/ssb_plan_p1.py $(ROOT)/tools/models/nr_pbch.py
 	@mkdir -p $(dir $(SSBFID_TD))
-	python3 $(ROOT)/tools/ssb_plan_p1.py dump $@ $(if $(SNR),--snr $(SNR),)
+	python3 $(ROOT)/tools/models/ssb_plan_p1.py dump $@ $(if $(SNR),--snr $(SNR),)
 
 run-ssb-fid: all $(SSBFID_TD)
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
@@ -382,7 +382,7 @@ run-ssb-fid: all $(SSBFID_TD)
 		--results 0x80010000 --nwords 32 \
 		--dump $(ROOT)/$(OBJ)/ssb_fid_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_ssb_fid.py $(ROOT)/$(OBJ)/ssb_fid_dump.txt
+	python3 $(ROOT)/tools/checks/check_ssb_fid.py $(ROOT)/$(OBJ)/ssb_fid_dump.txt
 
 # ---- PDSCH (SISO) full receive chain: TD samples -> TB ----
 PDSCHFULL_TD = $(ROOT)/build/soc/pdsch_full.td
@@ -399,7 +399,7 @@ run-pdsch-full: all
 		--results 0x80010000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pdsch_full_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pdsch_full.py $(ROOT)/$(OBJ)/pdsch_full_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_pdsch_full.py $(ROOT)/$(OBJ)/pdsch_full_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- P4 MCS-driven downlink: 16QAM PDSCH (pdsch_full_bm.c -DQAM16) ----
 PDSCH16_TD = $(ROOT)/build/soc/pdsch_16qam.td
@@ -407,7 +407,7 @@ PDSCH16_TD = $(ROOT)/build/soc/pdsch_16qam.td
 run-pdsch-16qam: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDSCH16_TD))
-	python3 $(ROOT)/tools/nr_pdsch_amc.py dump $(PDSCH16_TD) --mcs $(if $(MCS),$(MCS),13) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_pdsch_amc.py dump $(PDSCH16_TD) --mcs $(if $(MCS),$(MCS),13) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdsch_16qam_bm.bin@0x80000000 \
@@ -416,7 +416,7 @@ run-pdsch-16qam: all
 		--results 0x80070000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pdsch_16qam_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pdsch_16qam.py $(ROOT)/$(OBJ)/pdsch_16qam_dump.txt --mcs $(if $(MCS),$(MCS),13) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_pdsch_16qam.py $(ROOT)/$(OBJ)/pdsch_16qam_dump.txt --mcs $(if $(MCS),$(MCS),13) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PDSCH 64QAM: same chain, Qm=6 (120 symbols on the first 120 data REs) ----
 PDSCH64_TD = $(ROOT)/build/soc/pdsch_64qam.td
@@ -424,7 +424,7 @@ PDSCH64_TD = $(ROOT)/build/soc/pdsch_64qam.td
 run-pdsch-64qam: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDSCH64_TD))
-	python3 $(ROOT)/tools/nr_pdsch_amc.py dump $(PDSCH64_TD) --mcs $(if $(MCS),$(MCS),20) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_pdsch_amc.py dump $(PDSCH64_TD) --mcs $(if $(MCS),$(MCS),20) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdsch_64qam_bm.bin@0x80000000 \
@@ -433,7 +433,7 @@ run-pdsch-64qam: all
 		--results 0x80070000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pdsch_64qam_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pdsch_64qam.py $(ROOT)/$(OBJ)/pdsch_64qam_dump.txt --mcs $(if $(MCS),$(MCS),20) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_pdsch_64qam.py $(ROOT)/$(OBJ)/pdsch_64qam_dump.txt --mcs $(if $(MCS),$(MCS),20) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PDSCH HARQ: two RV transmissions Chase-combined before LDPC ----
 PDSCHHARQ_TD = $(ROOT)/build/soc/pdsch_harq.td
@@ -450,7 +450,7 @@ run-pdsch-harq: all
 		--results 0x80010000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pdsch_harq_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pdsch_full.py $(ROOT)/$(OBJ)/pdsch_harq_dump.txt --harq --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_pdsch_full.py $(ROOT)/$(OBJ)/pdsch_harq_dump.txt --harq --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PUSCH (SISO) full receive chain: TD samples -> TB ----
 PUSCH_TD = $(ROOT)/build/soc/pusch.td
@@ -458,7 +458,7 @@ PUSCH_TD = $(ROOT)/build/soc/pusch.td
 run-pusch: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PUSCH_TD))
-	python3 $(ROOT)/tools/nr_pusch.py dump $(PUSCH_TD) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_pusch.py dump $(PUSCH_TD) --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pusch_bm.bin@0x80000000 \
@@ -467,7 +467,7 @@ run-pusch: all
 		--results 0x80070000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pusch_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_dump.txt --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_pusch.py $(ROOT)/$(OBJ)/pusch_dump.txt --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PUSCH DFT-s-OFDM: 360-point IDFT deprecoding on the SoC ----
 PUSCHTP_TD = $(ROOT)/build/soc/pusch_tp.td
@@ -475,7 +475,7 @@ PUSCHTP_TD = $(ROOT)/build/soc/pusch_tp.td
 run-pusch-tp: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PUSCHTP_TD))
-	python3 $(ROOT)/tools/nr_pusch.py dump $(PUSCHTP_TD) --rv $(if $(RV),$(RV),0) --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_pusch.py dump $(PUSCHTP_TD) --rv $(if $(RV),$(RV),0) --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pusch_tp_bm.bin@0x80000000 \
@@ -484,7 +484,7 @@ run-pusch-tp: all
 		--results 0x80070000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pusch_tp_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pusch.py $(ROOT)/$(OBJ)/pusch_tp_dump.txt --rv $(if $(RV),$(RV),0) --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_pusch.py $(ROOT)/$(OBJ)/pusch_tp_dump.txt --rv $(if $(RV),$(RV),0) --tp --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- CSI-RS + CQI report (38.211 7.4.1.5 / 38.214 5.2.2.1) ----
 CSI_TD = $(ROOT)/build/soc/csi.td
@@ -492,7 +492,7 @@ CSI_TD = $(ROOT)/build/soc/csi.td
 run-csi: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(CSI_TD))
-	python3 $(ROOT)/tools/nr_csi.py dump $(CSI_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_csi.py dump $(CSI_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/csi_bm.bin@0x80000000 \
@@ -501,7 +501,7 @@ run-csi: all
 		--results 0x80070000 --nwords 32 \
 		--dump $(ROOT)/$(OBJ)/csi_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_csi.py $(ROOT)/$(OBJ)/csi_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_csi.py $(ROOT)/$(OBJ)/csi_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- 2x2 MIMO channel estimation (two antennas, FDM pilots) ----
 MIMOCE_TD = $(ROOT)/build/soc/mimo_ce.td
@@ -509,7 +509,7 @@ MIMOCE_TD = $(ROOT)/build/soc/mimo_ce.td
 run-mimo-ce: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(MIMOCE_TD))
-	python3 $(ROOT)/tools/nr_mimo_ce.py dump $(MIMOCE_TD) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_mimo_ce.py dump $(MIMOCE_TD) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/mimo_ce_bm.bin@0x80000000 \
@@ -518,7 +518,7 @@ run-mimo-ce: all
 		--results 0x80070000 --nwords 16 \
 		--dump $(ROOT)/$(OBJ)/mimo_ce_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_mimo_ce.py $(ROOT)/$(OBJ)/mimo_ce_dump.txt --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_mimo_ce.py $(ROOT)/$(OBJ)/mimo_ce_dump.txt --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
 
 # ---- 2x2 MMSE receiver: pilots -> H -> per-RE solve -> hard bits ----
 MIMO_TD = $(ROOT)/build/soc/mimo.td
@@ -526,7 +526,7 @@ MIMO_TD = $(ROOT)/build/soc/mimo.td
 run-mimo: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(MIMO_TD))
-	python3 $(ROOT)/tools/nr_mimo_ce.py dump $(MIMO_TD) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_mimo_ce.py dump $(MIMO_TD) --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/mimo_bm.bin@0x80000000 \
@@ -535,7 +535,7 @@ run-mimo: all
 		--results 0x80070000 --nwords 200 \
 		--dump $(ROOT)/$(OBJ)/mimo_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_mimo.py $(ROOT)/$(OBJ)/mimo_dump.txt --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_mimo.py $(ROOT)/$(OBJ)/mimo_dump.txt --snr $(if $(SNR),$(SNR),25) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PUCCH format 0: 1-bit SR / HARQ-ACK on the CGRA ----
 PUCCH_TD = $(ROOT)/build/soc/pucch.td
@@ -543,14 +543,14 @@ PUCCH_TD = $(ROOT)/build/soc/pucch.td
 run-pucch: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PUCCH_TD))
-	python3 $(ROOT)/tools/nr_pucch.py dump $(PUCCH_TD) --ack $(if $(ACK),$(ACK),1) --snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_pucch.py dump $(PUCCH_TD) --ack $(if $(ACK),$(ACK),1) --snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pucch_bm.bin@0x80000000 \
 		--load $(PUCCH_TD)@0x80400000 \
 		--results 0x80070000 --nwords 128 \
 		--dump $(ROOT)/$(OBJ)/pucch_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pucch.py $(ROOT)/$(OBJ)/pucch_dump.txt --ack $(if $(ACK),$(ACK),1) --snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_pucch.py $(ROOT)/$(OBJ)/pucch_dump.txt --ack $(if $(ACK),$(ACK),1) --snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
 
 # ---- SIB1: Type0-PDCCH (SI-RNTI) + PDSCH -> SIB1 ----
 SIB1_TD = $(ROOT)/build/soc/sib1.td
@@ -558,7 +558,7 @@ SIB1_TD = $(ROOT)/build/soc/sib1.td
 run-sib1: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(SIB1_TD))
-	python3 $(ROOT)/tools/nr_sib1.py dump $(SIB1_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1) --rv $(if $(RV),$(RV),0)
+	python3 $(ROOT)/tools/models/nr_sib1.py dump $(SIB1_TD) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1) --rv $(if $(RV),$(RV),0)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/sib1_bm.bin@0x80000000 \
@@ -567,7 +567,7 @@ run-sib1: all
 		--results 0x80070000 --nwords 1100 \
 		--dump $(ROOT)/$(OBJ)/sib1_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_sib1.py $(ROOT)/$(OBJ)/sib1_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1) --rv $(if $(RV),$(RV),0)
+	python3 $(ROOT)/tools/checks/check_sib1.py $(ROOT)/$(OBJ)/sib1_dump.txt --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1) --rv $(if $(RV),$(RV),0)
 
 # ---- PDCCH / DCI blind detection (38.211 7.3 + 38.212 7.3) ----
 PDCCH_TD = $(ROOT)/build/soc/pdcch.td
@@ -575,7 +575,7 @@ PDCCH_TD = $(ROOT)/build/soc/pdcch.td
 run-pdcch: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDCCH_TD))
-	python3 $(ROOT)/tools/nr_pdcch.py dump $(PDCCH_TD) $(if $(SNR),$(SNR),12) $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/models/nr_pdcch.py dump $(PDCCH_TD) $(if $(SNR),$(SNR),12) $(if $(SEED),$(SEED),1)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdcch_bm.bin@0x80000000 \
@@ -584,7 +584,7 @@ run-pdcch: all
 		--results 0x80010000 --nwords 72 \
 		--dump $(ROOT)/$(OBJ)/pdcch_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_pdcch.py $(ROOT)/$(OBJ)/pdcch_dump.txt --snr $(if $(SNR),$(SNR),12) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_pdcch.py $(ROOT)/$(OBJ)/pdcch_dump.txt --snr $(if $(SNR),$(SNR),12) --seed $(if $(SEED),$(SEED),1)
 
 # ---- DCI-driven link: PDCCH (DCI) -> rv -> PDSCH circular buffer (38.211/38.212)
 # One combined TD (PDCCH symbol + PDSCH symbols) at 0x8040_0000; the SoC decodes
@@ -603,7 +603,7 @@ run-link-e2e: all
 		--results 0x80070000 --nwords 1100 \
 		--dump $(ROOT)/$(OBJ)/link_e2e_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_link_e2e.py $(ROOT)/$(OBJ)/link_e2e_dump.txt --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
+	python3 $(ROOT)/tools/checks/check_link_e2e.py $(ROOT)/$(OBJ)/link_e2e_dump.txt --rv $(if $(RV),$(RV),0) --snr $(if $(SNR),$(SNR),20) --seed $(if $(SEED),$(SEED),1)
 
 # ---- PRACH Msg1: ZC cyclic-shift search -> preamble index + timing advance ----
 # Stimulus is the 139-chip received preamble plus all L_RA rotated 127-tap
@@ -615,7 +615,7 @@ PRACH_TD = $(ROOT)/build/rach/prach.td
 run-prach: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PRACH_TD))
-	python3 $(ROOT)/tools/nr_rach.py dump --prach-out $(PRACH_TD) \
+	python3 $(ROOT)/tools/models/nr_rach.py dump --prach-out $(PRACH_TD) \
 		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
 		--prach-snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
 	env -u LD_LIBRARY_PATH $(BIN) \
@@ -624,7 +624,7 @@ run-prach: all
 		--results 0x80070000 --nwords 296 \
 		--dump $(ROOT)/$(OBJ)/prach_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_prach.py $(ROOT)/$(OBJ)/prach_dump.txt \
+	python3 $(ROOT)/tools/checks/check_prach.py $(ROOT)/$(OBJ)/prach_dump.txt \
 		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
 		--snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
 
@@ -643,7 +643,7 @@ PCGRA_TD = $(ROOT)/build/rach/prach_cgra.td
 run-prach-cgra: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PCGRA_TD))
-	python3 $(ROOT)/tools/nr_rach.py dump --prach-out $(PCGRA_TD) \
+	python3 $(ROOT)/tools/models/nr_rach.py dump --prach-out $(PCGRA_TD) \
 		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
 		--prach-snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
 	env -u LD_LIBRARY_PATH $(BIN) \
@@ -652,14 +652,14 @@ run-prach-cgra: all
 		--results 0x80070000 --nwords 296 \
 		--dump $(ROOT)/$(OBJ)/prach_cgra_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_prach_cgra.py $(ROOT)/$(OBJ)/prach_cgra_dump.txt \
+	python3 $(ROOT)/tools/checks/check_prach_cgra.py $(ROOT)/$(OBJ)/prach_cgra_dump.txt \
 		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
 		--snr $(if $(SNR),$(SNR),6) --seed $(if $(SEED),$(SEED),1)
 
 run-rach: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc rach RACH_OCC=$(if $(OCC),$(OCC),1)
 	@mkdir -p $(dir $(RACH_TD))
-	python3 $(ROOT)/tools/nr_rach.py dump --prach-out $(RACH_TD).prach --msg-out $(RACH_TD) \
+	python3 $(ROOT)/tools/models/nr_rach.py dump --prach-out $(RACH_TD).prach --msg-out $(RACH_TD) \
 		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
 		--occ $(if $(OCC),$(OCC),1) --seed $(if $(SEED),$(SEED),1) \
 		$(if $(MSG4_RV),--msg4-rv $(MSG4_RV))
@@ -672,7 +672,7 @@ run-rach: all
 		--results 0x80180000 --nwords 3620 \
 		--dump $(ROOT)/$(OBJ)/rach_dump.txt \
 		--max-cycles $(if $(MAXC),$(MAXC),100000000)
-	python3 $(ROOT)/tools/check_rach.py $(ROOT)/$(OBJ)/rach_dump.txt \
+	python3 $(ROOT)/tools/checks/check_rach.py $(ROOT)/$(OBJ)/rach_dump.txt \
 		--preamble $(if $(PRE),$(PRE),2) --ta $(if $(TA),$(TA),9) \
 		--occ $(if $(OCC),$(OCC),1) --seed $(if $(SEED),$(SEED),1) \
 		$(if $(MSG4_RV),--msg4-rv $(MSG4_RV))
@@ -684,8 +684,8 @@ run-ifft: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(IFFT_TD))
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
-	python3 $(ROOT)/tools/nr_ofdm_tx.py selftest-ifft
-	python3 $(ROOT)/tools/nr_ofdm_tx.py dump-ifft --out $(IFFT_TD)
+	python3 $(ROOT)/tools/models/nr_ofdm_tx.py selftest-ifft
+	python3 $(ROOT)/tools/models/nr_ofdm_tx.py dump-ifft --out $(IFFT_TD)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/ifft_bm.bin@0x80000000 \
 		--load $(IFFT_TD)@0x80400000 \
@@ -693,7 +693,7 @@ run-ifft: all
 		--results 0x80040000 --nwords 16976 \
 		--dump $(ROOT)/$(OBJ)/ifft_dump.txt \
 		--max-cycles 40000000
-	python3 $(ROOT)/tools/check_ifft.py $(ROOT)/$(OBJ)/ifft_dump.txt $(IFFT_TD)
+	python3 $(ROOT)/tools/checks/check_ifft.py $(ROOT)/$(OBJ)/ifft_dump.txt $(IFFT_TD)
 
 # ---- T0: fixed cost of one array run (no changes to rt_array_run) ---------
 run-overhead: all
@@ -703,7 +703,7 @@ run-overhead: all
 		--results 0x80010000 --nwords 24 \
 		--dump $(ROOT)/$(OBJ)/overhead_dump.txt \
 		--max-cycles 10000000
-	python3 $(ROOT)/tools/check_overhead.py $(ROOT)/$(OBJ)/overhead_dump.txt
+	python3 $(ROOT)/tools/checks/check_overhead.py $(ROOT)/$(OBJ)/overhead_dump.txt
 
 # ---- G1/A4: 4-symbol SSB TX + hardware loopback (MIB 32/32) ----------------
 # One gate, two simulations: ssb_tx_bm produces the waveform on the CGRA,
@@ -717,8 +717,8 @@ run-ssb-tx: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(SSB_TX_CONJ_TD))
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
-	python3 $(ROOT)/tools/nr_ofdm_tx.py selftest-ssb-tx
-	python3 $(ROOT)/tools/nr_ofdm_tx.py dump-ssb-tx --out $(SSB_TX_CONJ_TD)
+	python3 $(ROOT)/tools/models/nr_ofdm_tx.py selftest-ssb-tx
+	python3 $(ROOT)/tools/models/nr_ofdm_tx.py dump-ssb-tx --out $(SSB_TX_CONJ_TD)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/ssb_tx_bm.bin@0x80000000 \
 		--load $(SSB_TX_CONJ_TD)@0x80400000 \
@@ -726,7 +726,7 @@ run-ssb-tx: all
 		--results 0x80040000 --nwords 35088 \
 		--dump $(ROOT)/$(OBJ)/ssb_tx_dump.txt \
 		--max-cycles 40000000
-	python3 $(ROOT)/tools/check_ssb_tx.py $(ROOT)/$(OBJ)/ssb_tx_dump.txt $(SSB_TX_CONJ_TD) $(SSB_LOOP_TD)
+	python3 $(ROOT)/tools/checks/check_ssb_tx.py $(ROOT)/$(OBJ)/ssb_tx_dump.txt $(SSB_TX_CONJ_TD) $(SSB_LOOP_TD)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/ssb_fid_bm.bin@0x80000000 \
 		--load $(SSB_LOOP_TD)@0x80400000 \
@@ -734,7 +734,7 @@ run-ssb-tx: all
 		--results 0x80010000 --nwords 32 \
 		--dump $(ROOT)/$(OBJ)/ssb_loop_dump.txt \
 		--max-cycles 100000000
-	python3 $(ROOT)/tools/check_ssb_fid.py $(ROOT)/$(OBJ)/ssb_loop_dump.txt
+	python3 $(ROOT)/tools/checks/check_ssb_fid.py $(ROOT)/$(OBJ)/ssb_loop_dump.txt
 
 # ---- G2/B1: 38.212 LDPC encoder on CVA6 (BG1/BG2 x Zc=20/64) --------------
 LDPC_ENC_TD = $(ROOT)/build/ldpc/enc.td
@@ -746,23 +746,23 @@ PDCCH_TX_TD = $(ROOT)/build/pdcch/tx.td
 run-pdcch-tx: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDCCH_TX_TD))
-	python3 $(ROOT)/tools/nr_pdcch_tx.py selftest
-	python3 $(ROOT)/tools/nr_pdcch_tx.py dump-td --out $(PDCCH_TX_TD)
+	python3 $(ROOT)/tools/models/nr_pdcch_tx.py selftest
+	python3 $(ROOT)/tools/models/nr_pdcch_tx.py dump-td --out $(PDCCH_TX_TD)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdcch_tx_bm.bin@0x80000000 \
 		--load $(PDCCH_TX_TD)@0x80400000 \
 		--results 0x80010000 --nwords 1890 \
 		--dump $(ROOT)/$(OBJ)/pdcch_tx_dump.txt \
 		--max-cycles 20000000
-	python3 $(ROOT)/tools/check_pdcch_tx.py $(ROOT)/$(OBJ)/pdcch_tx_dump.txt $(PDCCH_TX_TD)
+	python3 $(ROOT)/tools/checks/check_pdcch_tx.py $(ROOT)/$(OBJ)/pdcch_tx_dump.txt $(PDCCH_TX_TD)
 
 # G2/B4: PDCCH self-loopback -- the transmit chain builds the waveform in RAM and
 # the receive chain decodes it in the same program (no host round trip).
 run-pdcch-loop: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(PDCCH_TX_TD))
-	python3 $(ROOT)/tools/nr_pdcch_tx.py selftest
-	python3 $(ROOT)/tools/nr_pdcch_tx.py dump-td --out $(PDCCH_TX_TD)
+	python3 $(ROOT)/tools/models/nr_pdcch_tx.py selftest
+	python3 $(ROOT)/tools/models/nr_pdcch_tx.py dump-td --out $(PDCCH_TX_TD)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdcch_loop_bm.bin@0x80000000 \
@@ -771,15 +771,15 @@ run-pdcch-loop: all
 		--results 0x80070000 --nwords 544 \
 		--dump $(ROOT)/$(OBJ)/pdcch_loop_dump.txt \
 		--max-cycles 40000000
-	python3 $(ROOT)/tools/check_pdcch_loop.py $(ROOT)/$(OBJ)/pdcch_loop_dump.txt $(PDCCH_TX_TD)
+	python3 $(ROOT)/tools/checks/check_pdcch_loop.py $(ROOT)/$(OBJ)/pdcch_loop_dump.txt $(PDCCH_TX_TD)
 
 # G2/B5: PDSCH self-loopback -- TB -> LDPC -> two-symbol waveform -> LDPC -> TB
-# in one program (the second half of docs/19 G2's acceptance).
+# in one program (the second half of docs/project/README.md G2's acceptance).
 run-pdsch-loop: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(DL_MOD_TD))
-	python3 $(ROOT)/tools/nr_dl_mod.py selftest
-	python3 $(ROOT)/tools/nr_dl_mod.py dump-td --out $(DL_MOD_TD)
+	python3 $(ROOT)/tools/models/nr_dl_mod.py selftest
+	python3 $(ROOT)/tools/models/nr_dl_mod.py dump-td --out $(DL_MOD_TD)
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/pdsch_loop_bm.bin@0x80000000 \
@@ -788,9 +788,9 @@ run-pdsch-loop: all
 		--results 0x80070000 --nwords 1260 \
 		--dump $(ROOT)/$(OBJ)/pdsch_loop_dump.txt \
 		--max-cycles 40000000
-	python3 $(ROOT)/tools/check_pdsch_loop.py $(ROOT)/$(OBJ)/pdsch_loop_dump.txt $(DL_MOD_TD)
+	python3 $(ROOT)/tools/checks/check_pdsch_loop.py $(ROOT)/$(OBJ)/pdsch_loop_dump.txt $(DL_MOD_TD)
 
-# ---- docs/20：协议基准（场景 -> plan.h -> 通用运行器）------------------------
+# ---- docs/protocols/README.md：协议基准（场景 -> plan.h -> 通用运行器）------------------------
 # 阶段 0 的等价门由顶层 `make proto PROTO=nr_pdcch` 编排：
 #   本目标只跑协议运行器并做"模型判据 + 按时率 + 阶段占比"（自己写自己的 dump，
 #   不与 run-pdcch-loop 争文件）；与手写基准的逐值对账在 proto_eval --ref 里。
@@ -818,7 +818,7 @@ run-proto-$(PROTO): all
 		--dump $(ROOT)/$(OBJ)/proto_$(PROTO)_dump.txt
 
 # 同一场景的"全 CPU"对照路径（-DPROTO_CPU_ONLY）：阶段表/激励/判据完全不变，
-# 只把阵列承担的部分换成 CVA6 标量实现，用于逐阶段比较落点（docs/22）。
+# 只把阵列承担的部分换成 CVA6 标量实现，用于逐阶段比较落点（docs/performance/README.md）。
 run-proto-cpu-$(PROTO): all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc proto PROTO=$(PROTO) PROTO_CPU=1
 	@test -f $(ROOT)/build/fft/twiddle.bin || python3 $(ROOT)/tools/fft_plan.py lut $(ROOT)/build/fft/twiddle.bin
@@ -839,15 +839,15 @@ run-proto-cpu-$(PROTO): all
 run-dl-mod: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
 	@mkdir -p $(dir $(DL_MOD_TD))
-	python3 $(ROOT)/tools/nr_dl_mod.py selftest
-	python3 $(ROOT)/tools/nr_dl_mod.py dump-td --out $(DL_MOD_TD)
+	python3 $(ROOT)/tools/models/nr_dl_mod.py selftest
+	python3 $(ROOT)/tools/models/nr_dl_mod.py dump-td --out $(DL_MOD_TD)
 	env -u LD_LIBRARY_PATH $(BIN) \
 		--load $(ROOT)/build/sw/dl_mod_bm.bin@0x80000000 \
 		--load $(DL_MOD_TD)@0x80400000 \
 		--results 0x80010000 --nwords 3460 \
 		--dump $(ROOT)/$(OBJ)/dl_mod_dump.txt \
 		--max-cycles 20000000
-	python3 $(ROOT)/tools/check_dl_mod.py $(ROOT)/$(OBJ)/dl_mod_dump.txt $(DL_MOD_TD)
+	python3 $(ROOT)/tools/checks/check_dl_mod.py $(ROOT)/$(OBJ)/dl_mod_dump.txt $(DL_MOD_TD)
 
 run-ldpc-enc: all
 	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
@@ -855,13 +855,13 @@ run-ldpc-enc: all
 	@set -e; for spec in "2 20" "2 64" "1 20" "1 64"; do \
 		set -- $$spec; bg=$$1; zc=$$2; \
 		echo "---- LDPC encode BG$$bg Zc=$$zc ----"; \
-		python3 $(ROOT)/tools/nr_ldpc.py dump-enc --out $(LDPC_ENC_TD) --bg $$bg --zc $$zc; \
+		python3 $(ROOT)/tools/models/nr_ldpc.py dump-enc --out $(LDPC_ENC_TD) --bg $$bg --zc $$zc; \
 		env -u LD_LIBRARY_PATH $(BIN) \
 			--load $(ROOT)/build/sw/ldpc_enc_bm.bin@0x80000000 \
 			--load $(LDPC_ENC_TD)@0x80400000 \
 			--results 0x80010000 --nwords 160 \
 			--dump $(ROOT)/$(OBJ)/ldpc_enc_bg$${bg}_zc$${zc}.txt \
 			--max-cycles 20000000; \
-		python3 $(ROOT)/tools/check_ldpc_enc.py \
+		python3 $(ROOT)/tools/checks/check_ldpc_enc.py \
 			$(ROOT)/$(OBJ)/ldpc_enc_bg$${bg}_zc$${zc}.txt $(LDPC_ENC_TD); \
 	done

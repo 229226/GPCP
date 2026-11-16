@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""docs/20 §6 的第 2~3 步：场景 → IR（与目标无关）→ 各目标的落点计划。
+"""docs/protocols/README.md 的第 2~3 步：场景 → IR（与目标无关）→ 各目标的落点计划。
 
     python3 proto/compile.py --scenario nr_pdcch
     python3 proto/compile.py --all
@@ -45,7 +45,7 @@ def compile_one(path, outdir, use_whatif=True):
     if bad:
         for line, msg in sorted(bad):
             print("  %s:%d  %s" % (path, line, msg))
-        raise SystemExit("[FAIL] %s 未通过 docs/20 §3 检查" % path)
+        raise SystemExit("[FAIL] %s 未通过 docs/protocols/README.md 检查" % path)
 
     S = load_scenario(path)
     ir = S.ir()

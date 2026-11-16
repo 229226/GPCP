@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""docs/20 §6 第 4 步：落点计划 -> 运行器能 include 的 plan.h，并产出激励。
+"""docs/protocols/README.md 第 4 步：落点计划 -> 运行器能 include 的 plan.h，并产出激励。
 
     python3 proto/emit.py --scenario nr_pdcch
     python3 proto/emit.py --all
@@ -38,7 +38,7 @@ def load_model(scenario):
     if not os.path.exists(path):
         raise SystemExit(
             "[FAIL] 缺少 proto/models/%s.py：每个场景都要给出激励与黄金锚点"
-            "（docs/20 §8 规则 1）" % scenario)
+            "（docs/protocols/README.md 规则 1）" % scenario)
     spec = importlib.util.spec_from_file_location("proto_model_" + scenario, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -108,7 +108,7 @@ def emit(scenario, outdir):
         "               PROTO_WHERE_DMA = 2 } proto_where_t;",
         "",
         "typedef struct {",
-        "    uint8_t     id;            /* 语义图节点号（docs/20 §2 的顺序） */",
+        "    uint8_t     id;            /* 语义图节点号（docs/protocols/README.md 的顺序） */",
         "    uint8_t     where;         /* 落点：CPU / 阵列 / DMA */",
         "    uint16_t    planned_runs;  /* 计划里的阵列运行次数（0 = 纯标量） */",
         "    const char *op;            /* 协议动词 */",

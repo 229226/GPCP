@@ -1,9 +1,9 @@
-"""协议描述层（HLL）——docs/20 第 2 节动词的实现。
+"""协议描述层（HLL）——docs/protocols/README.md 第 2 节动词的实现。
 
 设计约束（必须保持）：
   * 本模块只记录"协议语义节点"，不出现任何硬件概念；
   * 所有物理决策（切块/缓冲/并行度/微码）属于 proto/lower.py 与 cgra/target.yaml；
-  * 相同场景对任何 target 产生的 IR 必须逐字节相同（docs/20 §4）。
+  * 相同场景对任何 target 产生的 IR 必须逐字节相同（docs/protocols/README.md）。
 
 场景文件只允许：from proto.hll import scenario，然后按动词顺序调用。
 """
@@ -21,7 +21,7 @@ _KERNEL_FFT = (256, 1024, 4096)
 
 def _derive(cfg):
     """把协议配置推导成波形级参数。v1 只推导"带宽决定"的那几个量；
-    传输块大小/码块数等需要 38.214 表，留到阶段 1（见 docs/20 §7）。"""
+    传输块大小/码块数等需要 38.214 表，留到阶段 1（见 docs/protocols/README.md）。"""
     bw = cfg.get("bw_mhz")
     scs = cfg.get("scs_khz")
     d = {}
@@ -237,7 +237,7 @@ class Scenario:
         }
 
     def ir_bytes(self):
-        """确定性的序列化：同场景对任何 target 都必须得到相同字节（docs/20 §4）。"""
+        """确定性的序列化：同场景对任何 target 都必须得到相同字节（docs/protocols/README.md）。"""
         import json
         return json.dumps(self.ir(), sort_keys=True, indent=1,
                           ensure_ascii=False).encode("utf-8")

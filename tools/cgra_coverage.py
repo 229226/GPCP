@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
 """CGRA 覆盖率：阵列到底接管了多少运算量，以及接管得值不值。
 
 三个口径故意放在一起——单独看任何一个都会误判：
@@ -44,7 +54,7 @@ LEDGER = os.path.join(PROTO, "compare_all.csv")
 
 def load_ledger():
     if not os.path.exists(LEDGER):
-        sys.exit("[FAIL] 缺少 %s：先 make proto-all 并用 tools/gen_proto_ledger.py"
+        sys.exit("[FAIL] 缺少 %s：先 make proto-all 并用 tools/gen/gen_proto_ledger.py"
                  % LEDGER)
     rows = list(csv.DictReader(open(LEDGER, encoding="utf-8")))
     per, totals = defaultdict(list), {}

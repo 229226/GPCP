@@ -6,7 +6,7 @@
 
 判据只有两条，都是硬件事实，不是策略：
   1. lowering 能不能成（目标装不下 → 不可行）；
-  2. 有没有 `sw/soc/<场景>_ops.inc`（算子序列的硬件实现）。
+  2. 有没有 `sw/soc/ops/<场景>_ops.inc`（算子序列的硬件实现）。
 
 外加一条参数范围：`mmse_full` 现在按 2 层写死，`layers > 2` 的 MMSE
 workload 只会被错误地映射，所以显式判为不支持，而不是跑出错的数。
@@ -54,8 +54,8 @@ def report(bundle):
     if _layers(ir) > 2:
         rec["reasons"].append(
             "mmse_full 只实现 2 层，bundle 要 %d 层" % _layers(ir))
-    if not (A.GPCP / "sw" / "soc" / (name + "_ops.inc")).exists():
-        rec["reasons"].append("没有 sw/soc/%s_ops.inc（算子无硬件实现）" % name)
+    if not (A.GPCP / "sw" / "soc" / "ops" / (name + "_ops.inc")).exists():
+        rec["reasons"].append("没有 sw/soc/ops/%s_ops.inc（算子无硬件实现）" % name)
     rec["supported"] = not rec["reasons"]
     return rec
 

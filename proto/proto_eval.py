@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""docs/20 §6 第 6 步：判据 + 按时率 + 阶段占比 + 差距表 -> report.md。
+"""docs/protocols/README.md 第 6 步：判据 + 按时率 + 阶段占比 + 差距表 -> report.md。
 
     # 单跑协议运行器（模型判据 + 预算 + 阶段表）
     python3 proto/proto_eval.py --scenario nr_pdcch --dump build/soc/proto_nr_pdcch_dump.txt
@@ -10,7 +10,7 @@
     python3 proto/proto_eval.py --scenario nr_pdcch --ref-gate   # 打印参照门名（Makefile 用）
 
 判据分三层，缺一层都不算过：
-  1. 模型层：golden.json 的锚点与比特（由 tools/nr_pdcch_tx.py 独立算出）；
+  1. 模型层：golden.json 的锚点与比特（由 tools/models/nr_pdcch_tx.py 独立算出）；
   2. 平台层：errors == 0、params_hash 一致（旧二进制不能服务新激励）、预算内；
   3. 等价层（可选）：与手写 benchmark 的每个锚点逐值相同、周期差 ≤ 1%。
 """
@@ -112,7 +112,7 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
     lines = [
         "# 协议基准报告 — %s（%s/%s）" % (scenario, ir.get("rat"), ir.get("direction")),
         "",
-        "> 生成物：`proto/proto_eval.py`（docs/20 §6）。不要手改，重跑 `make proto` 覆盖。",
+        "> 生成物：`proto/proto_eval.py`（docs/protocols/README.md）。不要手改，重跑 `make proto` 覆盖。",
         "",
         "- 目标：`%s`（%dx%d = %d PE，%d bank × %d 字，IMEM %d 拍，%d MHz）"
         % (tgt.get("source", "?"), tgt["rows"], tgt["cols"], tgt["n_pes"],
@@ -139,12 +139,12 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
            "超 %.1f×" % (cycles / float(budget)) if budget and cycles > budget
            else "在预算内",
            "按时" if on_time else "**超时**",
-           "" if enforced else "（单次到达：阶段 0 只报不判，负载模型见 docs/20 §5）"),
+           "" if enforced else "（单次到达：阶段 0 只报不判，负载模型见 docs/protocols/README.md）"),
         "",
     ]
     if timeline:
         lines += [
-            "### 负载时间轴（docs/20 §5）",
+            "### 负载时间轴（docs/protocols/README.md）",
             "",
             "- 到达模型：`%s`，每格 %d 个作业，共 **%d 格**"
             % ((ir.get("traffic") or {}).get("arrival", "?"),
@@ -206,7 +206,7 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
                          % (s["id"], s["op"], s["where"], s["planned"], s["runs"],
                             "；".join(why)))
         lines += ["", "> 这些是 `proto/lower.py` 的**估算**与真实执行的差，不是 bug；"
-                  "docs/20 §7 把它们列为阶段 4 的自动搜索目标。"]
+                  "docs/protocols/README.md 把它们列为阶段 4 的自动搜索目标。"]
     else:
         lines.append("（无差异：每个阶段的计划运行数与实测一致，且没有"
                      "「标量落点里跑阵列」的情况。）")
@@ -374,7 +374,7 @@ def write_report(path, scenario, plan, ir, rep, stages, ref_rows, cycles, budget
                   "| 项 | 手写 | 协议运行器 | 结论 |", "|---|---|---|---|"]
         for name, refv, gotv, verdict in ref_rows:
             lines.append("| %s | %s | %s | %s |" % (name, refv, gotv, verdict))
-        lines += ["", "> 周期判据是 ±%.0f%%（docs/20 §7）；其余锚点必须逐值相同。"
+        lines += ["", "> 周期判据是 ±%.0f%%（docs/protocols/README.md）；其余锚点必须逐值相同。"
                   % (CYCLES_TOL * 100)]
     lines += ["",
               "## 记账证据（给 tools/devlog.py 用）",
@@ -396,7 +396,7 @@ def main(argv):
     ap.add_argument("--ref-gate", action="store_true", help="只打印参照门的 make 目标名")
     ap.add_argument("--branch", default="base", help="用哪个 plan-<branch>.json")
     ap.add_argument("--cpu-only", action="store_true",
-                    help="CPU 对照路径：不要求 DMA/阵列忙 > 0（docs/22）")
+                    help="CPU 对照路径：不要求 DMA/阵列忙 > 0（docs/performance/README.md）")
     a = ap.parse_args(argv)
 
     model = _model(a.scenario)
@@ -474,7 +474,7 @@ def main(argv):
     for name, off, kind in spec["scalars"]:
         got = w[base + off]
         anchors[name] = got
-        # CPU 对照路径不跑阵列，硬件运行次数类锚点不适用（docs/22）
+        # CPU 对照路径不跑阵列，硬件运行次数类锚点不适用（docs/performance/README.md）
         if getattr(a, "cpu_only", False) and name in ("mmse_runs",):
             rep.add(name, "不适用", got, True, "CPU 路径不跑阵列")
             continue
@@ -526,7 +526,7 @@ def main(argv):
     else:
         rep.add("阵列忙拍", "本场景不统计", w[5], True)
 
-    # ---- 按时率 / 负载时间轴（docs/20 §5）----
+    # ---- 按时率 / 负载时间轴（docs/protocols/README.md）----
     # 单次到达：预算只报不判（阶段 0 的等价门不掺负载）。
     # 连续业务：每格的代价 = 硬件实测的整链周期，时间轴与队列在 proto/load.py 里推。
     slot_ms = float(ir.get("budget", {}).get("slot_ms", 0) or 0)
@@ -595,7 +595,7 @@ def main(argv):
         if rs.get("runs") is not None:
             rep.eq("参照阵列运行数", r[rs["runs"]], w[3])
 
-    # CPU 对照路径（docs/22）不能覆盖 CGRA 路径的 report.md：perf_report.py
+    # CPU 对照路径（docs/performance/README.md）不能覆盖 CGRA 路径的 report.md：perf_report.py
     # 只读 report.md，一旦被覆盖，报告里这个场景就变成"全是 CPU"。
     report = os.path.join(pdir, "report_cpu.md" if getattr(a, "cpu_only", False)
                           else "report.md")

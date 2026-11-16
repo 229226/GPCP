@@ -1,9 +1,9 @@
 """nr_pdsch 的物理层参照（只给 proto/emit.py 与 proto/proto_eval.py 用）。
 
-分工（docs/20 §4）：
+分工（docs/protocols/README.md）：
   * 激励 = 协议输入（80 bit TB、rv、RNTI、Qm）。复用已验收的
-    tools/nr_dl_mod.py dump-td，所以协议运行器和手写 benchmark 吃同一份字节。
-  * 黄金 = tools/nr_dl_mod.py 的发射链（B2，已被 run-dl-mod 逐值验收）。
+    tools/models/nr_dl_mod.py dump-td，所以协议运行器和手写 benchmark 吃同一份字节。
+  * 黄金 = tools/models/nr_dl_mod.py 的发射链（B2，已被 run-dl-mod 逐值验收）。
   * 参照门 = 人写的同一协议 benchmark（run-pdsch-loop）。
 """
 import os
@@ -13,6 +13,9 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _TOOLS = os.path.join(_ROOT, "tools")
+_MODELS = os.path.join(_TOOLS, "models")
+if _MODELS not in sys.path:
+    sys.path.insert(0, _MODELS)
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
@@ -22,7 +25,7 @@ import pdsch_plan as PLAN                                # noqa: E402
 REF_GATE = "run-pdsch-loop"
 REF_DUMP = "sim/soc/build/pdsch_loop_dump.txt"
 
-# 锚点块布局（与 sw/soc/nr_pdsch_ops.inc 的 write_anchors 一一对应）
+# 锚点块布局（与 sw/soc/ops/nr_pdsch_ops.inc 的 write_anchors 一一对应）
 SPEC = {
     "scalars": [
         ("tb_bad", 0, "d"),
@@ -60,7 +63,7 @@ SPEC = {
 
 
 def stimulus_bytes():
-    """协议输入，字节等同于 tools/nr_dl_mod.py dump-td 的输出。"""
+    """协议输入，字节等同于 tools/models/nr_dl_mod.py dump-td 的输出。"""
     fd, path = tempfile.mkstemp(suffix=".td")
     os.close(fd)
     try:

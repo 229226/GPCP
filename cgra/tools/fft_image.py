@@ -214,7 +214,7 @@ def run(spec):
             print(f"[fft_image/{which}] 自检失败 {len(errs)}/{nvals}: {errs[:3]}",
                   file=sys.stderr)
             return 1
-        out = os.path.join(ROOT, "sw", "soc", f"{sym.lower()}_prog.h")
+        out = os.path.join(ROOT, "sw", "soc", "gen", f"{sym.lower()}_prog.h")
         write_header(out, sym, mc, which, nvals)
         total += nvals
         print(f"wrote {out}: {which} {mc.cycles} 拍 × {NPES} PE，"

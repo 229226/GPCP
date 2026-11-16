@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """把 BG2 变量节点（24 个消息槽）的 BN 数据流切成 <=8 算子的子图，逐个交给 CGRA-ME ILP。
 
-背景（docs/09 §4）：真实 BG2 的最大列度是 23（实测：`sw/include/ldpc_bg2.h` 的 42x52 基图，
+背景（docs/protocols/README.md）：真实 BG2 的最大列度是 23（实测：`sw/include/ldpc_bg2.h` 的 42x52 基图，
 列的变量节点度数分布为 1..23），所以流式 BN 微码用 24 个消息槽（第 24 槽补零）。
 每个提升行（一个 PE）的数据流：
 
@@ -12,7 +12,7 @@
 本脚本把这个图按数据依赖切成小片（每片 <= 8 个算子），每片生成一个 dot，单独跑
 CGRA-ME 的 ILP 映射器（II=1，8x8 架构），最后汇总"片子数 / 映射成功率 / 求解时间 /
 每片用到的 PE 数与拍数"。叶子（真实芯片里的 LD）在这里建模成"无操作数算子"，
-因为这一版 CGRA-ME 对 `input=1` 节点一律判 infeasible（docs/10 §7.2）。
+因为这一版 CGRA-ME 对 `input=1` 节点一律判 infeasible（docs/compiler/README.md）。
 
 注意节点命名：dot 词法只认 `[A-Za-z_]+[0-9]*`（字母/下划线在前、数字在后），
 `a0_0` 这种"字母数字下划线混排"会报 `syntax error, unexpected ID`。
@@ -113,7 +113,7 @@ def build_chunks():
 
     # 减法片：每片 3 个消息 + 3 个 acc 叶子（acc 在真机上本来就是每条边各读一次 spad，
     # 这里也每条边一个叶子，避免 val 的扇出 > 2 —— CGRA-ME 的 ILP 对扇出 >= 3 的
-    # val 会出现"求解成功但取不出映射"的 bug，实测见 docs/10 §10）
+    # val 会出现"求解成功但取不出映射"的 bug，实测见 docs/compiler/README.md）
     sub = 0
     while sub < NSLOT:
         c = Chunk(f"sub_{sub // G2}", "sub")
@@ -151,7 +151,7 @@ def run_chunk(arch, dot, ii, limit, workdir, edges=()):
     cycles = [c for c, _b in where.values()]
     pes = sorted({b for _c, b in where.values()})
     # 同拍依赖：本项目的 PE 只有 1 拍延迟的 link 寄存器，生产者与消费者落在同一拍
-    # 就要求"组合逻辑跨 PE 直连"，在真机上不可实现（docs/02 §1.1）
+    # 就要求"组合逻辑跨 PE 直连"，在真机上不可实现（docs/architecture/cgra.md）
     same = sum(1 for s, d, _o in edges
                if where.get(s) and where.get(d) and where[s][0] == where[d][0])
     return dict(mapped=mapped, secs=secs, cost=cost, npe=len(pes),

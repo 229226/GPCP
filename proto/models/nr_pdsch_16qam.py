@@ -1,6 +1,6 @@
 """nr_pdsch_16qam 的物理层参照：Qm=4，2 符号 TD + 尾部 [TB,qm,rv,RNTI,magic]。
 
-TD 由 tools/nr_pdsch_amc.py 的 16QAM 格点（38.211 Gold DMRS + 前 180 个数据 RE）
+TD 由 tools/models/nr_pdsch_amc.py 的 16QAM 格点（38.211 Gold DMRS + 前 180 个数据 RE）
 经 pdsch_full_plan.td_from_y 生成；无信道、无噪声。
 """
 import os
@@ -11,6 +11,9 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _TOOLS = os.path.join(_ROOT, "tools")
+_MODELS = os.path.join(_TOOLS, "models")
+if _MODELS not in sys.path:
+    sys.path.insert(0, _MODELS)
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 

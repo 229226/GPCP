@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""docs/20 §3 的执行器：协议场景文件的静态检查。
+"""docs/protocols/README.md 的执行器：协议场景文件的静态检查。
 
 四条规则，全部基于语法树（不是正则）：
   1. 标识符禁用词（硬件概念）；
   2. 语句白名单（无 while/try/class/lambda/global/with/async，import 只许 hll）；
-  3. 调用白名单（只有 docs/20 §2 的动词 + 少数内建）；
+  3. 调用白名单（只有 docs/protocols/README.md 的动词 + 少数内建）；
   4. 模块级只允许：导入、`S = scenario(...)`、以及基于 S 的动词调用链。
 
 用法： check_hll.py proto/scenarios/*.py   （有违例则 exit 1）
@@ -18,7 +18,7 @@ BANNED_IDENTS = (
     "register", "regfile", "buffer_bank",
 )
 
-# docs/20 §2 的动词（方法名）
+# docs/protocols/README.md 的动词（方法名）
 VERBS = {
     "cfg", "traffic", "transport_block", "received", "encode", "modulate", "dmrs",
     "correlate", "map_to_grid", "extract", "measure", "ofdm_modulate",
@@ -89,7 +89,7 @@ class Checker(ast.NodeVisitor):
         self.err(node, "禁止 with")
 
     def visit_FunctionDef(self, node):
-        self.err(node, "禁止自定义函数（新动词必须走 docs/20 §8 的规范修订）")
+        self.err(node, "禁止自定义函数（新动词必须走 docs/protocols/README.md 的规范修订）")
 
     # ------------------------------------------------------------ 调用
     def visit_Call(self, node):
@@ -102,7 +102,7 @@ class Checker(ast.NodeVisitor):
             self.err(node, "不允许这种调用形式")
             name = None
         if name and name not in ALLOWED_CALLS and name not in ALLOWED_BUILTINS:
-            self.err(node, "不允许调用 %s()（可用动词见 docs/20 §2）" % name)
+            self.err(node, "不允许调用 %s()（可用动词见 docs/protocols/README.md）" % name)
         if name == "received":
             import ast as _ast
             for kw in node.keywords:
@@ -121,7 +121,7 @@ class Checker(ast.NodeVisitor):
             # 只拦"独立词"，避免误伤 e.g. "period"/"spe"
             if low == b or low.startswith(b + "_") or low.endswith("_" + b) \
                     or ("_" + b + "_") in low:
-                self.err(node, "标识符 %r 含硬件词 %r（docs/20 §3 规则 1）" % (name, b))
+                self.err(node, "标识符 %r 含硬件词 %r（docs/protocols/README.md 规则 1）" % (name, b))
                 return
 
     def visit_Name(self, node):
@@ -178,7 +178,7 @@ def main(argv):
         else:
             print("[ OK ] %s  (硬件无关检查通过)" % f)
     if total:
-        print("\n%d 处违例；规则见 docs/20 §3" % total)
+        print("\n%d 处违例；规则见 docs/protocols/README.md" % total)
         return 1
     return 0
 

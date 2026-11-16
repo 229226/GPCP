@@ -1,7 +1,7 @@
 name: cn_wb
 kind: cn_wb
 desc: "LDPC 校验节点：min1/min2/sign + 逐边 m' 回写（去掉 CPU reconstruct_gather）"
-out: sw/soc/pdsch_cn_wb_prog.h
+out: sw/soc/gen/pdsch_cn_wb_prog.h
 edges: 10
 sentinel_bank: 30
 res_banks: [10, 11, 12]

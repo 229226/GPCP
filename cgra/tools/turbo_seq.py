@@ -7,9 +7,9 @@ sys/apr/par 三条分支度量。C 侧只负责分块、写 spad、启动阵列�
 不再逐状态跑标量循环。
 
 输出：
-    sw/soc/turbo_seq_layout.h
-    sw/soc/turbo_fwd32_prog.h / turbo_fwd11_prog.h
-    sw/soc/turbo_bwd32_prog.h / turbo_bwd11_prog.h
+    sw/soc/gen/turbo_seq_layout.h
+    sw/soc/gen/turbo_fwd32_prog.h / turbo_fwd11_prog.h
+    sw/soc/gen/turbo_bwd32_prog.h / turbo_bwd11_prog.h
 
 指令字全部由 tools/cgra.py 的 enc() 产生，C 侧零手写微码。
 """
@@ -21,7 +21,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import cgra  # noqa: E402
 
-OUT = os.path.join(ROOT, "sw", "soc")
+OUT = os.path.join(ROOT, "sw", "soc", "gen")
 NPES = cgra.NPES
 
 # spad 布局（一页 512 字以内）

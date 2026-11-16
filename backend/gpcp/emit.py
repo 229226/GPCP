@@ -60,7 +60,7 @@ def plan_h(scenario, ir, ir_bytes, stim, plan, target):
         "               PROTO_WHERE_DMA = 2 } proto_where_t;",
         "",
         "typedef struct {",
-        "    uint8_t     id;            /* 语义图节点号（docs/20 §2 的顺序） */",
+        "    uint8_t     id;            /* 语义图节点号（docs/protocols/README.md 的顺序） */",
         "    uint8_t     where;         /* 落点：CPU / 阵列 / DMA */",
         "    uint16_t    planned_runs;  /* 计划里的阵列运行次数（0 = 纯标量） */",
         "    const char *op;            /* 协议动词 */",

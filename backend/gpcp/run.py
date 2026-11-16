@@ -51,8 +51,8 @@ def stage(name, bundle):
 
 
 def build(name, stage_dir, cpu):
-    if not (SW_SOC / (name + "_ops.inc")).exists():
-        _die("没有 sw/soc/%s_ops.inc：这个 bundle 的算子还没有硬件实现"
+    if not (SW_SOC / "ops" / (name + "_ops.inc")).exists():
+        _die("没有 sw/soc/ops/%s_ops.inc：这个 bundle 的算子还没有硬件实现"
              "（lowering 能出计划，但跑不了）" % name, 3)
     cmd = ["make", "-C", str(SW_SOC), "proto",
            "PROTO=" + name, "PROTO_DIR=" + str(stage_dir)]

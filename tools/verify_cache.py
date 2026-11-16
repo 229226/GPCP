@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
 """Input-fingerprint cache for the GPCP acceptance gates.
 
 Rule (docs: AGENTS.md section 8 "regression tiers"):
@@ -44,8 +54,9 @@ GLOBAL_GLOBS = [
     "sim/**/*.v", "rtl/**/*.svh", "sim/**/*.cpp", "sim/**/*.cc", "sim/**/*.h",
     "sim/**/*.py", "cgra/**/*.py", "cgra/**/*.v", "cgra/**/*.sv",
     "cgra/target.yaml",          # 硬件真相：改它等于换芯片，全部失效
-    "sw/soc/Makefile", "sw/soc/link.ld", "sw/soc/start.S",
-    "sw/include/*.h", "sw/soc/*_prog.h", "sw/soc/pdcch_luts.h",
+    "sw/soc/Makefile", "sw/soc/link.ld", "sw/soc/start.S", "sw/soc/start_irq.S",
+    "sw/include/*.h", "sw/soc/gen/*.h",
+    "sw/soc/stages/*.inc", "sw/soc/ops/*.inc", "sw/soc/lib/*.inc",
     "sim/soc/Makefile", "Makefile",
     "tools/cgra.py", "tools/verify.sh", "tools/verify_cache.py",
     "build/fft/twiddle.bin", "sim/soc/build/Vgpcp_soc",
@@ -55,52 +66,52 @@ GLOBAL_GLOBS = [
 # the recipe parser above, so their inputs are listed explicitly. Keep this in
 # sync when a scenario gains a new model module.
 GATE_EXTRA = {
-    "run-proto-nr_pdcch": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                           "sw/soc/pdcch_stages.inc", "sw/soc/nr_pdcch_ops.inc"],
-    "run-proto-nr_pdsch": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                           "sw/soc/pdsch_stages.inc", "sw/soc/nr_pdsch_ops.inc",
-                           "sw/soc/ldpc_enc.inc"],
-    "run-proto-nr_csi": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                         "sw/soc/csi_stages.inc", "sw/soc/nr_csi_ops.inc"],
-    "run-proto-nr_prach": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                           "sw/soc/zc_corr.inc", "sw/soc/nr_prach_ops.inc"],
-    "run-proto-nr_pucch": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                           "sw/soc/zc_corr.inc", "sw/soc/nr_pucch_ops.inc"],
-    "run-proto-nr_mimo": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                          "sw/soc/mimo_stages.inc", "sw/soc/nr_mimo_ops.inc"],
-    "run-proto-nr_pusch": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                           "sw/soc/pusch_stages.inc", "sw/soc/nr_pusch_ops.inc",
-                           "sw/soc/ldpc_enc.inc"],
-    "run-proto-nr_ssb": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                         "sw/soc/ssb_stages.inc", "sw/soc/nr_ssb_ops.inc",
-                         "sw/soc/ssb_fft.inc", "tools/ssb_fid_luts.h"],
-    "run-proto-lte_pdsch": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                            "sw/soc/lte_stages.inc", "sw/soc/lte_pdsch_ops.inc"],
-    "run-proto-nr_pdsch_16qam": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                                 "sw/soc/pdsch_stages.inc", "sw/soc/nr_pdsch_ops.inc",
-                                 "sw/soc/nr_pdsch_16qam_ops.inc", "sw/soc/ldpc_enc.inc"],
-    "run-proto-nr_pdsch_64qam": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                                 "sw/soc/pdsch_stages.inc", "sw/soc/nr_pdsch_ops.inc",
-                                 "sw/soc/nr_pdsch_64qam_ops.inc", "sw/soc/ldpc_enc.inc"],
-    "run-proto-nr_pdsch_harq": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                                "sw/soc/pdsch_harq_stages.inc", "sw/soc/pdsch_stages.inc",
-                                "sw/soc/nr_pdsch_harq_ops.inc", "sw/soc/ldpc_enc.inc"],
-    "run-proto-nr_pusch_tp": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                              "sw/soc/pusch_stages.inc", "sw/soc/nr_pusch_ops.inc",
-                              "sw/soc/nr_pusch_tp_ops.inc", "sw/soc/ldpc_enc.inc"],
-    "run-proto-lte_pusch": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                            "sw/soc/lte_stages.inc", "sw/soc/lte_ul_stages.inc",
-                            "sw/soc/lte_ul_dft200_tab.h", "sw/soc/lte_pusch_ops.inc"],
-    "run-proto-lte_prach": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                            "sw/soc/zc_corr.inc", "sw/soc/nr_prach_ops.inc",
-                            "sw/soc/lte_prach_ops.inc"],
-    "run-proto-lte_cell_search": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                                  "sw/soc/lte_cell_stages.inc", "sw/soc/lte_pss_tab.h",
-                                  "sw/soc/lte_cell_search_ops.inc"],
-    "run-proto-wifi_11be": ["proto/**/*.py", "sw/soc/proto_runner.c",
-                            "sw/soc/wifi_stages.inc", "sw/soc/wifi_cos256_tab.h",
-                            "sw/soc/wifi_ldpc_648_r12.h", "sw/soc/wifi_11be_ops.inc",
-                            "tools/wifi_ldpc.py"],
+    "run-proto-nr_pdcch": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                           "sw/soc/stages/pdcch_stages.inc", "sw/soc/ops/nr_pdcch_ops.inc"],
+    "run-proto-nr_pdsch": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                           "sw/soc/stages/pdsch_stages.inc", "sw/soc/ops/nr_pdsch_ops.inc",
+                           "sw/soc/lib/ldpc_enc.inc"],
+    "run-proto-nr_csi": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                         "sw/soc/stages/csi_stages.inc", "sw/soc/ops/nr_csi_ops.inc"],
+    "run-proto-nr_prach": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                           "sw/soc/lib/zc_corr.inc", "sw/soc/ops/nr_prach_ops.inc"],
+    "run-proto-nr_pucch": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                           "sw/soc/lib/zc_corr.inc", "sw/soc/ops/nr_pucch_ops.inc"],
+    "run-proto-nr_mimo": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                          "sw/soc/stages/mimo_stages.inc", "sw/soc/ops/nr_mimo_ops.inc"],
+    "run-proto-nr_pusch": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                           "sw/soc/stages/pusch_stages.inc", "sw/soc/ops/nr_pusch_ops.inc",
+                           "sw/soc/lib/ldpc_enc.inc"],
+    "run-proto-nr_ssb": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                         "sw/soc/stages/ssb_stages.inc", "sw/soc/ops/nr_ssb_ops.inc",
+                         "sw/soc/lib/ssb_fft.inc", "tools/ssb_fid_luts.h"],
+    "run-proto-lte_pdsch": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                            "sw/soc/stages/lte_stages.inc", "sw/soc/ops/lte_pdsch_ops.inc"],
+    "run-proto-nr_pdsch_16qam": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                                 "sw/soc/stages/pdsch_stages.inc", "sw/soc/ops/nr_pdsch_ops.inc",
+                                 "sw/soc/ops/nr_pdsch_16qam_ops.inc", "sw/soc/lib/ldpc_enc.inc"],
+    "run-proto-nr_pdsch_64qam": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                                 "sw/soc/stages/pdsch_stages.inc", "sw/soc/ops/nr_pdsch_ops.inc",
+                                 "sw/soc/ops/nr_pdsch_64qam_ops.inc", "sw/soc/lib/ldpc_enc.inc"],
+    "run-proto-nr_pdsch_harq": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                                "sw/soc/stages/pdsch_harq_stages.inc", "sw/soc/stages/pdsch_stages.inc",
+                                "sw/soc/ops/nr_pdsch_harq_ops.inc", "sw/soc/lib/ldpc_enc.inc"],
+    "run-proto-nr_pusch_tp": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                              "sw/soc/stages/pusch_stages.inc", "sw/soc/ops/nr_pusch_ops.inc",
+                              "sw/soc/ops/nr_pusch_tp_ops.inc", "sw/soc/lib/ldpc_enc.inc"],
+    "run-proto-lte_pusch": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                            "sw/soc/stages/lte_stages.inc", "sw/soc/stages/lte_ul_stages.inc",
+                            "sw/soc/gen/lte_ul_dft200_tab.h", "sw/soc/ops/lte_pusch_ops.inc"],
+    "run-proto-lte_prach": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                            "sw/soc/lib/zc_corr.inc", "sw/soc/ops/nr_prach_ops.inc",
+                            "sw/soc/ops/lte_prach_ops.inc"],
+    "run-proto-lte_cell_search": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                                  "sw/soc/stages/lte_cell_stages.inc", "sw/soc/gen/lte_pss_tab.h",
+                                  "sw/soc/ops/lte_cell_search_ops.inc"],
+    "run-proto-wifi_11be": ["proto/**/*.py", "sw/soc/bench/proto_runner.c",
+                            "sw/soc/stages/wifi_stages.inc", "sw/soc/gen/wifi_cos256_tab.h",
+                            "sw/soc/gen/wifi_ldpc_648_r12.h", "sw/soc/ops/wifi_11be_ops.inc",
+                            "tools/models/wifi_ldpc.py"],
 }
 
 # Binary -> C source for the few targets whose binary is not named after its
@@ -177,7 +188,7 @@ def soc_gate_inputs(gate):
     if not bins:
         # e.g. run-rach names its binary with $(OCC) inline, which the regex
         # cannot resolve.  Be conservative rather than miss a source change.
-        files |= expand(["sw/soc/*.c", "sw/soc/*.h", "sw/soc/*.S"])
+        files |= expand(["sw/soc/bench/*.c", "sw/soc/gen/*.h", "sw/soc/**/*.inc", "sw/soc/*.S"])
     for b in bins:
         stem = b.replace(".bin", "")
         files.add("build/sw/%s" % b)
@@ -186,12 +197,12 @@ def soc_gate_inputs(gate):
             # rach_bm_1.bin -> rach_bm.c
             stem = re.sub(r"_\d+$", "", stem)
             src = stem + ".c"
-        cand = "sw/soc/%s" % src
+        cand = "sw/soc/bench/%s" % src
         if (ROOT / cand).is_file():
             files.add(cand)
         else:
             # Unknown mapping: be conservative, watch every bare-metal source.
-            files |= expand(["sw/soc/*.c", "sw/soc/*.h", "sw/soc/*.S"])
+            files |= expand(["sw/soc/bench/*.c", "sw/soc/gen/*.h", "sw/soc/**/*.inc", "sw/soc/*.S"])
     return files
 
 

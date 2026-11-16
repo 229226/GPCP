@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
 """把 build/proto/*/report.md 的 CGRA 硬件计数器汇总成一份可读的 HTML 报告。
 
 数据来源：`verify.sh full` 生成的 17 个协议基准报告（每阶段 9 个计数器 +

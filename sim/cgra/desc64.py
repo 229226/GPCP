@@ -1,4 +1,4 @@
-# 由 tools/gen_cgra_desc.py 从 rtl/cgra/cgra_desc64.yml 生成，不要手改。
+# 由 tools/gen/gen_cgra_desc.py 从 rtl/cgra/cgra_desc64.yml 生成，不要手改。
 """64B 复合描述符字段表（由 YAML 生成）。"""
 
 # name: (word, lo, width)

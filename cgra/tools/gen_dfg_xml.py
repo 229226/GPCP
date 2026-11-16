@@ -12,7 +12,7 @@
 #      用 Variable2SPMAddr 断言失败。
 #
 # 注意：本生成器只负责“产出合法 DFG XML”。能否被 mapper 接受，取决于目标 ADL 的
-# 算子词表与端口命名（见 docs/18 §10 的结论：我们的硬件 ADL 并不能被 mapper 接受）。
+# 算子词表与端口命名（见 docs/compiler/README.md 的结论：我们的硬件 ADL 并不能被 mapper 接受）。
 import argparse
 import sys
 import json

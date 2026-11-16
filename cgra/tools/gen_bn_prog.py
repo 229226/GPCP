@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """薄壳：转发到统一入口 gen_kernel_prog.py（kernel_spec + rule_map）。
 
-    python3 cgra/tools/gen_bn_prog.py [--rows 20] [--out sw/soc/pdsch_bn_prog.h]
+    python3 cgra/tools/gen_bn_prog.py [--rows 20] [--out sw/soc/gen/pdsch_bn_prog.h]
 
-实际微码由 rule_map.schedule_bn_split 生成（见 docs/18-微码自动化.md）；
+实际微码由 rule_map.schedule_bn_split 生成（见 docs/compiler/README.md）；
 本文件只是兼容壳，命令与产物与旧版完全一致。
 """
 import argparse

@@ -1,4 +1,4 @@
-"""nr_prach 的物理层参照（tools/nr_rach.py 的 Msg1 部分）。
+"""nr_prach 的物理层参照（tools/models/nr_rach.py 的 Msg1 部分）。
 
 激励 = 139 个接收 chip + 139 组 127 抽头（dump_prach 的格式）；
 黄金 = msg1_correlations（139 个复数相关值）+ msg1_detect（前导 / TA / 裕度）。
@@ -10,6 +10,9 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _TOOLS = os.path.join(_ROOT, "tools")
+_MODELS = os.path.join(_TOOLS, "models")
+if _MODELS not in sys.path:
+    sys.path.insert(0, _MODELS)
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 

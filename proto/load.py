@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""docs/20 §5 的负载模型：把一个时隙的实测代价摊成 40 格时间轴。
+"""docs/protocols/README.md 的负载模型：把一个时隙的实测代价摊成 40 格时间轴。
 
 它只做"时间轴 + 单服务器队列"，不重新定义协议，也不猜硬件：
   * 每格来多少作业由场景的 `traffic(**kw)` 决定（arrival / jobs_per_slot / slots）；
@@ -76,7 +76,7 @@ def simulate(cost, counts, budget):
 
 
 def dump(outdir, rows, late, cost, budget, slots):
-    """写 timeline.json + timeline.csv（逐格记录，docs/20 §5.1）。"""
+    """写 timeline.json + timeline.csv（逐格记录，docs/protocols/README.md）。"""
     os.makedirs(outdir, exist_ok=True)
     summary = {
         "slots": slots,

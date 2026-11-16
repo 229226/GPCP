@@ -7,7 +7,7 @@
   P1 存储：两个 SPM 各 1024 字（32 bank x 32 word / 页），对应我们 scratchpad
      64 bank x 32 word 分两页、LD/ST 用页内 {bank,word} 立即数。
 
-仍然表达不了的（写在 docs/16 §7）：
+仍然表达不了的（见 docs/compiler/README.md）：
   - MAC 不更新 link（执行语义，不是结构）；
   - 全局 PC / 共享 IMEM（执行模型）；
   - LD/ST 的 10 位立即数寻址（后端折叠）。
@@ -41,7 +41,7 @@ def build():
     # 注意：删掉它的 4 个方向寄存器（NR/ER/WR/SR）会让映射器段错误 —— 它的路由
     # 模型假定每个方向输入后面有一级寄存器，否则会出现跨 PE 的组合环。
     # 所以保留方向寄存器（它们只承担"link 延迟"的角色），在此基础上追加我们的
-    # 通用寄存器。真正的 8 寄存器约束由我们自己的后端分配器保证，见 docs/16 §7。
+    # 通用寄存器。真正的 8 寄存器约束由我们自己的后端分配器保证，见 docs/compiler/README.md。
     pe = arch["PE"]
     extra = ["r5", "r6", "r7", "acc"]
     pe["REGS"] = pe["REGS"] + extra
@@ -65,7 +65,7 @@ def build():
     # P1 未完成：把 SPM 改成 1024 字会触发 getJSONPort 断言 —— 因为 wrapper 的
     # DATA_LAYOUT(loopend=2047) 与 INIT_FILE 的测试数据仍按 2048 字铺地址。
     # 要改必须三处同步（MEM.SIZE / DATA_LAYOUT / INIT_FILE），本轮未做。
-    # 见 docs/16 §7。
+    # 见 docs/compiler/README.md。
 
     return {"ARCH": arch}
 

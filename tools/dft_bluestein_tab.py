@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
 """生成 Bluestein DFT 的 chirp 表（Q15）。
 
 chirp[n] = exp(+j*pi*n^2/N)，N = 200 / 360。
@@ -8,7 +18,7 @@ import math
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "sw/soc/dft_bluestein_tab.h"
+OUT = ROOT / "sw/soc/gen/dft_bluestein_tab.h"
 
 
 def q15(v: float) -> int:

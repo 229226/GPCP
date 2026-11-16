@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
 """CGRA 利用率：阵列分到活之后，到底有多少时间在真算。
 
-和覆盖率（docs/25）是两个问题：
+和覆盖率（docs/performance/README.md）是两个问题：
   - 覆盖率回答"多少工作量交给了阵列"（分子是工作量）；
   - 利用率回答"阵列接活之后忙不忙"（分子是时间）。
 
@@ -21,7 +31,7 @@
      **最严格的"CGRA 利用率"**：把整段时间 × 全部 PE 当分母，只有真算的部分算数。
      U_pe_all = U_time * U_pe_run。
 
-配套的互斥状态（每拍只归一类，见 docs/20 §10.3）：
+配套的互斥状态（每拍只归一类，见 docs/protocols/README.md）：
   阵列执行 / DMA 传输 / CPU 执行，三者相加 ≈ 总周期。
 
 用法：
@@ -42,7 +52,7 @@ from proto_eval import parse_perf, read_dump  # noqa: E402
 BUILD = os.path.join(ROOT, "sim", "soc", "build")
 N_PE = 16
 
-# perf full[] 的字段索引（docs/20 §10.2）
+# perf full[] 的字段索引（docs/protocols/README.md）
 I_CYC, I_BUSY, I_RUNS, I_ISSUED, I_NOP = 0, 1, 2, 3, 4
 I_MAC, I_LD, I_ST, I_BANK, I_WORD = 5, 7, 8, 12, 13
 I_DMA, I_CPU = 54, 56

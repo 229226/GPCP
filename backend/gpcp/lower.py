@@ -1,4 +1,4 @@
-"""把语义 IR 落到某个硬件目标上（docs/20 §3 第 3 步）。
+"""把语义 IR 落到某个硬件目标上（docs/protocols/README.md 第 3 步）。
 
 **这是整个方案里唯一允许出现硬件数字的地方**（另一个是 cgra/target.yaml）。
 它只做三件事：
@@ -12,7 +12,7 @@ import math
 import re
 
 # 算子库当前能提供的实现（与 cgra/kernels/*.yaml 对应；换库时改这里）
-# 注意：仓库里只有 4096 点 FFT 镜像（sw/soc/ssb_fft.inc 的 FFT_N=4096），
+# 注意：仓库里只有 4096 点 FFT 镜像（sw/soc/lib/ssb_fft.inc 的 FFT_N=4096），
 # 不要在计划里声称存在 256/1024 点镜像。
 FFT_SIZES = (4096,)
 LDPC_ZC = (20, 64)          # cn20/bn24 与 zc64 两套
@@ -22,15 +22,15 @@ POLAR_PES = 16              # polar_node 微码固定 16 PE（与 target 的 wha
 T0_OVERHEAD = 32
 
 # ---------------------------------------------------------------------------
-# 新增 CGRA 镜像（docs/22 §2.3「仍缺阵列实现」四项，2026-11-11 补齐）
+# 新增 CGRA 镜像（docs/performance/README.md「仍缺阵列实现」四项，2026-11-11 补齐）
 #
 # 镜像都由 cgra/kernels/*.yaml -> gen_kernel_prog.py 生成，自带 ISA 级逐值
-# 自检，并由 tools/check_new_kernels.py（算法黄金）与
+# 自检，并由 tools/checks/check_new_kernels.py（算法黄金）与
 # sim/soc:run-new-kernels（SoC 硬件）双重对账。
 #
-# 默认不启用：docs/22 实测这些算法留在 CVA6 更快，或阵列被编排拖累
+# 默认不启用：docs/performance/README.md 实测这些算法留在 CVA6 更快，或阵列被编排拖累
 # （LDPC 阵列只忙 6%）。置 PROTO_NEW_ARRAY=1 才切到阵列，用于 A/B 与
-# docs/21 P4/P5 的后续优化，不改变任何默认 plan.h。
+# docs/performance/README.md P4/P5 的后续优化，不改变任何默认 plan.h。
 # ---------------------------------------------------------------------------
 NEW_ARRAY_IMAGES = {
     "modulate":        ("qam_map",        "qam_qpsk/qam_16qam/qam_64qam"),
@@ -475,13 +475,13 @@ def lower(ir, target):
                 st["array_runs"] = 1
                 st["notes"].append(
                     "PROTO_NEW_ARRAY=1：改用新增镜像 %s（%s）；"
-                    "默认落点见 docs/22 实测结论" % (images[0], images[1]))
+                    "默认落点见 docs/performance/README.md 实测结论" % (images[0], images[1]))
                 plan["search"].setdefault("new_array", []).append(
                     {"stage": nd["id"], "op": op, "images": images[1]})
 
         plan["stages"].append(st)
 
-    # 语义图必须与目标无关（docs/20 §4）：这里只做自检，不修改 IR
+    # 语义图必须与目标无关（docs/protocols/README.md）：这里只做自检，不修改 IR
     plan["ir_sha"] = __import__("hashlib").sha256(
         json.dumps(ir, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
     return plan, plan["ok"]

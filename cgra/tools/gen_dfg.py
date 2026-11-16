@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""生成 CGRA-ME 可直接读取的 DFG（dot 方言：属性值不加引号，见 docs/10 §5）。
+"""生成 CGRA-ME 可直接读取的 DFG（dot 方言：属性值不加引号，见 docs/compiler/README.md）。
 
 目前只有一类：N 抽头 FIR 的加法树
     y = sum_{k<N} mul_k(x_k, c_k)          —— N 个 mul + (N-1) 个 add = 2N-1 个算子
 输入/输出节点故意不生成：CGRA-ME 这个版本对 `input=1` 节点 feed 算子判 infeasible
-（实测见 docs/10 §7.2），本项目的真实 DFG 后面用 load/store 算子对接 spad。
+（实测见 docs/compiler/README.md），本项目的真实 DFG 后面用 load/store 算子对接 spad。
 
     python3 cgra/tools/gen_dfg.py fir 16 cgra/dfg/fir16.dot
 """
@@ -15,7 +15,7 @@ def close(text, last):
     """把最后一个 val 接到一个自环 sink 上，使 DFG 没有悬空输出。
 
     CGRA-ME 的退火映射器（AnnealMapper::routeVal）遇到 output.size()==0 的 val
-    会段错误（实测，见 docs/10 §7.3）；ILP 不受影响。sink 只有 1 条自环边，
+    会段错误（实测，见 docs/compiler/README.md）；ILP 不受影响。sink 只有 1 条自环边，
     II=1 时正好走 PE 内部寄存器（1 拍延迟后回绕），不引入额外时间约束。
     """
     body = text.rstrip()

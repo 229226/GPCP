@@ -5,7 +5,7 @@
     python3 cgra/tools/gen_kernel_prog.py --all            # 扫 cgra/kernels/*.yaml
     python3 cgra/tools/gen_kernel_prog.py --from-cgra kernel_zc_corr   # 兼容 path-A
 
-调度分发（见 docs/18）：
+调度分发（见 docs/compiler/README.md）：
   kind: bn  -> rule_map.schedule_bn_split + check_bn_split  （与仓库 pdsch_bn_prog.h 逐字节一致）
   kind: cn  -> rule_map.schedule_cn        + check_cn       （与仓库 pdsch_cn_prog.h 逐字节一致）
   kind: dfg -> kernel_spec.build_dfg + rule_map.schedule + check_dfg（新 kernel 走这里）
@@ -493,7 +493,7 @@ def run_from_cgra(func, out=None):
     if words is None or cycles is None or len(words) != cycles * NPES:
         print(f"{func} 不是预期的 Kernel（words/cycles 不匹配），跳过", file=sys.stderr)
         return 1
-    out = out or os.path.join(ROOT, "sw", "soc", f"{func}_prog.h")
+    out = out or os.path.join(ROOT, "sw", "soc", "gen", f"{func}_prog.h")
     sym = _sym(func)
     with open(out, "w", newline="\n") as f:
         f.write(f"/* 由 cgra/tools/gen_kernel_prog.py --from-cgra {func} 生成，勿手改。 */\n")

@@ -5,7 +5,7 @@
 all: test
 
 # One-command acceptance: kernels + a quick SoC subset
-# ---- 协议描述层（docs/20）----------------------------------------------------
+# ---- 协议描述层（docs/protocols/README.md）----------------------------------------------------
 # make proto-check : 静态检查（硬件无关 + 换厨房 + 落点 + 生成物），秒级
 # make proto PROTO=<name> : 完整流水（生成 -> 编译 -> 运行 -> 评估 -> 报告）
 proto-check:
@@ -55,18 +55,18 @@ verify-changed:
 
 # 铁律：微码只许编译器生成（AGENTS.md 4.18）。每次 verify 也会自动跑。
 handprog-check:
-	python3 tools/check_handprog.py
+	python3 tools/checks/check_handprog.py
 
-# 新增 kernel 的独立黄金模型对账（ISA 仿真 + 算法规格公式，docs/22 待补项）
+# 新增 kernel 的独立黄金模型对账（ISA 仿真 + 算法规格公式，docs/performance/README.md 待补项）
 new-kernels-check:
 	python3 cgra/tools/gen_kernel_prog.py --all
-	python3 tools/check_new_kernels.py
+	python3 tools/checks/check_new_kernels.py
 
 # 铁律：kernel YAML 不直接描述硬件（AGENTS.md 4.19）。每次 verify 也会自动跑。
 yaml-check:
-	python3 tools/check_yaml_coupling.py
-	python3 tools/check_contract.py
-	python3 tools/gen_cgra_desc.py --check
+	python3 tools/checks/check_yaml_coupling.py
+	python3 tools/checks/check_contract.py
+	python3 tools/gen/gen_cgra_desc.py --check
 
 # 开发工时台账：校验（每个功能/修复提交都要有记录）与汇总
 devcheck:
@@ -144,7 +144,7 @@ soc-run-rach: ; $(MAKE) -C sim/soc run-rach
 soc-run-pucch: ; $(MAKE) -C sim/soc run-pucch
 # P4 MCS-driven downlink: 16QAM PDSCH
 soc-run-pdsch-16qam: ; $(MAKE) -C sim/soc run-pdsch-16qam
-# docs/20 阶段 2：协议运行器（场景 -> plan.h -> 运行 -> 评估）
+# docs/protocols/README.md 阶段 2：协议运行器（场景 -> plan.h -> 运行 -> 评估）
 soc-run-proto-nr_pdcch: ; $(MAKE) -C sim/soc run-proto-nr_pdcch
 soc-run-proto-nr_pdsch: ; $(MAKE) -C sim/soc run-proto-nr_pdsch
 soc-run-proto-nr_csi: ; $(MAKE) -C sim/soc run-proto-nr_csi
@@ -168,7 +168,7 @@ soc-run-proto-wifi_11be: ; $(MAKE) -C sim/soc run-proto-wifi_11be
 linux:
 	$(MAKE) -C sim/soc linux
 
-# L1 微码自动化：按 cgra/kernels/*.yaml 批量生成 sw/soc/*_prog.h
+# L1 微码自动化：按 cgra/kernels/*.yaml 批量生成 sw/soc/gen/*_prog.h
 kernels:
 	python3 cgra/tools/gen_kernel_prog.py --all
 

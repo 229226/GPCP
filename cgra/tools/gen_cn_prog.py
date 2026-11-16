@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """薄壳：转发到统一入口 gen_kernel_prog.py（kernel_spec + rule_map）。
 
-    python3 cgra/tools/gen_cn_prog.py [--out sw/soc/pdsch_cn_prog.h]
+    python3 cgra/tools/gen_cn_prog.py [--out sw/soc/gen/pdsch_cn_prog.h]
 
-实际微码由 rule_map.schedule_cn 生成（见 docs/18-微码自动化.md）。
+实际微码由 rule_map.schedule_cn 生成（见 docs/compiler/README.md）。
 """
 import argparse
 import os

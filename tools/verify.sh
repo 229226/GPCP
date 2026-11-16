@@ -14,7 +14,7 @@
 #   bash tools/verify.sh smart --force    # ignore the cache (stage-end / release)
 #   GATES="model-la run-ring" bash tools/verify.sh smart   # manual gate override
 #   bash tools/verify.sh full --linux          # also boots Linux (10^8 cycles)
-#   bash tools/verify.sh full --jobs 8         # override parallelism (default 6)
+#   bash tools/verify.sh full --jobs 16        # override parallelism (default: nproc)
 #   CHANGED_REF=HEAD~3 bash tools/verify.sh changed
 #   CHANGED_ONLY=1     bash tools/verify.sh changed  # never fall back to full
 #
@@ -33,7 +33,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 MODE=${1:-quick}
 shift || true
 WITH_LINUX=0
-JOBS=${JOBS:-6}
+JOBS=${JOBS:-$(nproc 2>/dev/null || echo 6)}
 CHANGED_REF=${CHANGED_REF:-HEAD~1}
 CHANGED_ONLY=${CHANGED_ONLY:-0}
 GATE_OVERRIDE=${GATES:-}
@@ -69,24 +69,24 @@ ALL_MODELS=(model-pdcch model-ldpc model-mimo model-mac model-harq model-ul
             model-pusch model-sib1 model-link model-rach model-rrc model-conn
             model-pucch model-la model-qam model-amc model-reg model-pc)
 declare -A MODEL_CMD=(
-    [model-pdcch]="python3 tools/nr_pdcch.py"
-    [model-ldpc]="python3 tools/nr_ldpc.py"
-    [model-mimo]="python3 tools/nr_mimo.py"
-    [model-mac]="python3 tools/nr_mac.py"
+    [model-pdcch]="python3 tools/models/nr_pdcch.py"
+    [model-ldpc]="python3 tools/models/nr_ldpc.py"
+    [model-mimo]="python3 tools/models/nr_mimo.py"
+    [model-mac]="python3 tools/models/nr_mac.py"
     [model-harq]="python3 tools/pdsch_full_plan.py selftest-harq --snr 20 --seed 1"
-    [model-ul]="python3 tools/nr_ul.py"
-    [model-pusch]="python3 tools/nr_pusch.py selftest"
-    [model-sib1]="python3 tools/nr_sib1.py selftest"
-    [model-link]="python3 tools/nr_link.py --trials 2"
-    [model-rach]="python3 tools/nr_rach.py"
-    [model-rrc]="python3 tools/nr_rrc.py"
-    [model-conn]="python3 tools/nr_conn.py"
-    [model-pucch]="python3 tools/nr_pucch.py selftest"
-    [model-la]="python3 tools/nr_la.py"
-    [model-qam]="python3 tools/nr_qam.py"
-    [model-amc]="python3 tools/nr_pdsch_amc.py selftest"
-    [model-reg]="python3 tools/nr_pdcch_reg.py selftest"
-    [model-pc]="python3 tools/nr_pc.py selftest"
+    [model-ul]="python3 tools/models/nr_ul.py"
+    [model-pusch]="python3 tools/models/nr_pusch.py selftest"
+    [model-sib1]="python3 tools/models/nr_sib1.py selftest"
+    [model-link]="python3 tools/models/nr_link.py --trials 2"
+    [model-rach]="python3 tools/models/nr_rach.py"
+    [model-rrc]="python3 tools/models/nr_rrc.py"
+    [model-conn]="python3 tools/models/nr_conn.py"
+    [model-pucch]="python3 tools/models/nr_pucch.py selftest"
+    [model-la]="python3 tools/models/nr_la.py"
+    [model-qam]="python3 tools/models/nr_qam.py"
+    [model-amc]="python3 tools/models/nr_pdsch_amc.py selftest"
+    [model-reg]="python3 tools/models/nr_pdcch_reg.py selftest"
+    [model-pc]="python3 tools/models/nr_pc.py selftest"
 )
 SOCCORE_QUICK="run-new-kernels run-pbch-pack run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-ring run-rxchain run-pdsch run-pdsch-bn1 run-pdsch-gather run-pdsch-bg2 run-fft run-ssbfft run-ssb-fid run-ssb-slot"
 # run-rach is the single longest gate (~9 min, 11.8 M cycles); it lives in the
@@ -136,69 +136,69 @@ compute_changed() {
                     sed -E 's/^\+ *//; s/^soc-run-/run-/; s/ *:$//' | sort -u)
                 for x in $x; do add_soc "$x"; done
                 ;;
-            tools/nr_pdcch.py)      add_model model-pdcch; add_soc run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-sib1 ;;
-            tools/nr_pbch.py)       add_soc run-pbch-pack run-pbch-tx run-ssb-fid run-ssb-slot ;;
-            tools/nr_ofdm_tx.py)    add_soc run-ifft ;;
-            tools/nr_ldpc.py)       add_model model-ldpc; add_soc run-ldpc-enc ;;
-            tools/nr_dl_mod.py)     add_soc run-dl-mod ;;
-            tools/nr_pdcch_tx.py)   add_soc run-pdcch-tx ;;
-            tools/nr_pdcch_reg.py)  add_model model-reg; add_soc run-pdcch-tx ;;
-            sw/soc/ldpc_enc.inc|sw/soc/gold_seq.inc)
+            tools/models/nr_pdcch.py)      add_model model-pdcch; add_soc run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-sib1 ;;
+            tools/models/nr_pbch.py)       add_soc run-pbch-pack run-pbch-tx run-ssb-fid run-ssb-slot ;;
+            tools/models/nr_ofdm_tx.py)    add_soc run-ifft ;;
+            tools/models/nr_ldpc.py)       add_model model-ldpc; add_soc run-ldpc-enc ;;
+            tools/models/nr_dl_mod.py)     add_soc run-dl-mod ;;
+            tools/models/nr_pdcch_tx.py)   add_soc run-pdcch-tx ;;
+            tools/models/nr_pdcch_reg.py)  add_model model-reg; add_soc run-pdcch-tx ;;
+            sw/soc/lib/ldpc_enc.inc|sw/soc/lib/gold_seq.inc)
                 add_soc run-ldpc-enc run-pbch-pack run-dl-mod ;;
-            sw/soc/pdcch_stages.inc)
+            sw/soc/stages/pdcch_stages.inc)
                 add_soc run-pdcch-loop run-proto-nr_pdcch ;;
-            sw/soc/pdsch_stages.inc)
+            sw/soc/stages/pdsch_stages.inc)
                 add_soc run-pdsch-loop run-proto-nr_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam ;;
-            sw/soc/pdsch_harq_stages.inc)
+            sw/soc/stages/pdsch_harq_stages.inc)
                 add_soc run-proto-nr_pdsch_harq ;;
-            sw/soc/lte_ul_stages.inc|sw/soc/lte_ul_dft200_tab.h)
+            sw/soc/stages/lte_ul_stages.inc|sw/soc/gen/lte_ul_dft200_tab.h)
                 add_soc run-proto-lte_pusch ;;
-            sw/soc/lte_cell_stages.inc|sw/soc/lte_pss_tab.h)
+            sw/soc/stages/lte_cell_stages.inc|sw/soc/gen/lte_pss_tab.h)
                 add_soc run-proto-lte_cell_search ;;
-            sw/soc/wifi_stages.inc|sw/soc/wifi_cos256_tab.h|sw/soc/wifi_ldpc_648_r12.h|tools/wifi_ldpc.py)
+            sw/soc/stages/wifi_stages.inc|sw/soc/gen/wifi_cos256_tab.h|sw/soc/gen/wifi_ldpc_648_r12.h|tools/models/wifi_ldpc.py)
                 add_soc run-proto-wifi_11be ;;
-            sw/soc/csi_stages.inc)
+            sw/soc/stages/csi_stages.inc)
                 add_soc run-csi run-proto-nr_csi ;;
-            sw/soc/zc_corr.inc)
+            sw/soc/lib/zc_corr.inc)
                 add_soc run-prach run-pucch run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch ;;
-            sw/soc/mimo_stages.inc)
+            sw/soc/stages/mimo_stages.inc)
                 add_soc run-mimo run-proto-nr_mimo ;;
-            sw/soc/pusch_stages.inc)
+            sw/soc/stages/pusch_stages.inc)
                 add_soc run-pusch run-proto-nr_pusch ;;
-            sw/soc/ssb_stages.inc)
+            sw/soc/stages/ssb_stages.inc)
                 add_soc run-ssb-fid run-proto-nr_ssb ;;
-            sw/soc/lte_stages.inc)
+            sw/soc/stages/lte_stages.inc)
                 add_soc run-proto-lte_pdsch ;;
-            sw/soc/proto_runner.c|sw/soc/nr_*_ops.inc)
+            sw/soc/bench/proto_runner.c|sw/soc/nr_*_ops.inc)
                 add_soc run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be ;;
             proto/*)                add_soc run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be ;;
-            tools/nr_mimo.py)       add_model model-mimo ;;
-            tools/nr_mac.py)        add_model model-mac model-link model-rach model-conn ;;
+            tools/models/nr_mimo.py)       add_model model-mimo ;;
+            tools/models/nr_mac.py)        add_model model-mac model-link model-rach model-conn ;;
             tools/pdsch_full_plan.py) add_model model-harq; add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam run-proto-nr_pdsch_harq ;;
-            tools/nr_ul.py)         add_model model-ul ;;
-            tools/nr_pusch.py)      add_model model-pusch model-link model-conn; add_soc run-pusch run-proto-nr_pusch_tp ;;
-            tools/nr_sib1.py)       add_model model-sib1; add_soc run-sib1 ;;
-            tools/nr_link.py)       add_model model-link ;;
-            tools/nr_rach.py)       add_model model-rach; add_soc run-prach run-rach run-proto-lte_prach ;;
-            tools/nr_rrc.py)        add_model model-rrc model-conn ;;
-            tools/nr_conn.py)       add_model model-conn ;;
-            tools/nr_pucch.py)      add_model model-pucch; add_soc run-pucch ;;
-            tools/nr_la.py)         add_model model-la ;;
-            tools/nr_qam.py)        add_model model-qam ;;
-            tools/nr_pdsch_amc.py)  add_model model-amc; add_soc run-pdsch-16qam ;;
-            tools/nr_pdcch_reg.py)  add_model model-reg ;;
-            tools/nr_pc.py)         add_model model-pc ;;
-            tools/dump_*.py|tools/check_*.py)
+            tools/models/nr_ul.py)         add_model model-ul ;;
+            tools/models/nr_pusch.py)      add_model model-pusch model-link model-conn; add_soc run-pusch run-proto-nr_pusch_tp ;;
+            tools/models/nr_sib1.py)       add_model model-sib1; add_soc run-sib1 ;;
+            tools/models/nr_link.py)       add_model model-link ;;
+            tools/models/nr_rach.py)       add_model model-rach; add_soc run-prach run-rach run-proto-lte_prach ;;
+            tools/models/nr_rrc.py)        add_model model-rrc model-conn ;;
+            tools/models/nr_conn.py)       add_model model-conn ;;
+            tools/models/nr_pucch.py)      add_model model-pucch; add_soc run-pucch ;;
+            tools/models/nr_la.py)         add_model model-la ;;
+            tools/models/nr_qam.py)        add_model model-qam ;;
+            tools/models/nr_pdsch_amc.py)  add_model model-amc; add_soc run-pdsch-16qam ;;
+            tools/models/nr_pdcch_reg.py)  add_model model-reg ;;
+            tools/models/nr_pc.py)         add_model model-pc ;;
+            tools/dump_*.py|tools/checks/check_*.py)
                 x=${f##*/}; x=${x%.py}; x=${x#dump_}; x=${x#check_}; x=${x//_/-}
                 add_soc "run-$x" ;;
-            cgra/target.yaml|tools/check_yaml_coupling.py|sw/include/gpcp_layout.h|sw/soc/*_layout.h) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
-            tools/gen_kernel_prog.py|cgra/tools/*|cgra/kernels/*|sw/soc/*_prog.h) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
+            cgra/target.yaml|tools/checks/check_yaml_coupling.py|sw/include/gpcp_layout.h|sw/soc/gen/*_layout.h) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
+            tools/gen/gen_kernel_prog.py|cgra/tools/*|cgra/kernels/*|sw/soc/gen/*_prog.h) WANT_KERNELS=1; add_soc $SOCCORE_FULL ;;
             tools/fft_plan.py)       add_soc run-fft run-ssbfft run-ssb-fid run-ssb-slot ;;
-            sw/soc/prach_corr_prog.h) add_soc run-prach run-rach run-pucch ;;
-            sw/soc/pdcch_luts.h)    add_soc run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-sib1 run-rach ;;
-            sw/soc/link_e2e_bm.c)   add_soc run-link-e2e run-sib1 ;;
-            sw/soc/pdsch_full_bm.c) add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam ;;
-            sw/soc/*_bm.c)
+            sw/soc/gen/prach_corr_prog.h) add_soc run-prach run-rach run-pucch ;;
+            sw/soc/gen/pdcch_luts.h)    add_soc run-pdcch run-pdcch-loop run-pdsch-loop run-link-e2e run-sib1 run-rach ;;
+            sw/soc/bench/link_e2e_bm.c)   add_soc run-link-e2e run-sib1 ;;
+            sw/soc/bench/pdsch_full_bm.c) add_soc run-pdsch-full run-pdsch-harq run-pdsch-16qam ;;
+            sw/soc/bench/*_bm.c)
                 x=${f##*/}; x=${x%_bm.c}; x=${x//_/-}; add_soc "run-$x" ;;
             *)  # RTL, simulator, makefiles, shared headers, unknown sources:
                 # too wide to map safely -> fall back to the full tier.
@@ -232,7 +232,7 @@ esac
 # ---- iron rule: microcode is generated, never hand-assembled ---------------
 # Always runs and never cached: a fresh gpcp_cgra_inst() in sw/ must fail the
 # build even when the input fingerprint says every gate may be skipped.
-if ! HANDPROG_OUT=$(cd "$ROOT" && python3 tools/check_handprog.py 2>&1); then
+if ! HANDPROG_OUT=$(cd "$ROOT" && python3 tools/checks/check_handprog.py 2>&1); then
     printf '%s\n' "$HANDPROG_OUT"
     echo "verify aborted: hand-written microcode (AGENTS.md 4.18)" >&2
     exit 1
@@ -243,7 +243,7 @@ echo
 # ---- iron rule: kernel YAML must not describe the hardware ------------------
 # Also uncached: a physical spad coordinate in a new spec must fail the build
 # even when every gate is skipped by the input fingerprint.
-if ! COUPLING_OUT=$(cd "$ROOT" && python3 tools/check_yaml_coupling.py 2>&1); then
+if ! COUPLING_OUT=$(cd "$ROOT" && python3 tools/checks/check_yaml_coupling.py 2>&1); then
     printf '%s\n' "$COUPLING_OUT"
     echo "verify aborted: kernel YAML is coupled to hardware (AGENTS.md 4.19)" >&2
     exit 1
@@ -252,7 +252,7 @@ printf '%s\n' "$COUPLING_OUT" | sed -n '1p;$p'
 echo
 
 # ---- 新增 kernel 独立黄金模型对账（ISA 仿真 + 算法公式，秒级） ------------
-if ! NK_OUT=$(cd "$ROOT" && python3 tools/check_new_kernels.py 2>&1); then
+if ! NK_OUT=$(cd "$ROOT" && python3 tools/checks/check_new_kernels.py 2>&1); then
     printf '%s\n' "$NK_OUT"
     echo "verify aborted: 新增 CGRA kernel 的独立黄金模型对账失败" >&2
     exit 1
@@ -260,20 +260,20 @@ fi
 printf '%s\n' "$NK_OUT" | tail -1
 echo
 
-# ---- 协议描述层（docs/20）：硬件无关检查 + 换厨房测试（纯静态，秒级） ------
+# ---- 协议描述层（docs/protocols/README.md）：硬件无关检查 + 换厨房测试（纯静态，秒级） ------
 if ! PROTO_OUT=$(cd "$ROOT" && python3 proto/check_hll.py proto/scenarios/*.py 2>&1); then
     printf '%s\n' "$PROTO_OUT"
-    echo "verify aborted: 协议场景里出现了硬件概念（docs/20 §3）" >&2
+    echo "verify aborted: 协议场景里出现了硬件概念（docs/protocols/README.md）" >&2
     exit 1
 fi
 if ! PROTO_C_OUT=$(cd "$ROOT" && python3 proto/compile.py --all 2>&1); then
     printf '%s\n' "$PROTO_C_OUT" | tail -20
-    echo "verify aborted: 协议场景无法落点（docs/20 §6）" >&2
+    echo "verify aborted: 协议场景无法落点（docs/protocols/README.md）" >&2
     exit 1
 fi
 if ! PROTO_E_OUT=$(cd "$ROOT" && python3 proto/emit.py --all 2>&1); then
     printf '%s\n' "$PROTO_E_OUT" | tail -20
-    echo "verify aborted: 协议场景生成不了 plan.h / 激励（docs/20 §6 第 4 步）" >&2
+    echo "verify aborted: 协议场景生成不了 plan.h / 激励（docs/protocols/README.md 第 4 步）" >&2
     exit 1
 fi
 printf '%s\n' "$PROTO_OUT" | sed -n '1p;$p'

@@ -1,4 +1,4 @@
-"""nr_mimo 的物理层参照（tools/nr_mimo_ce.py + nr_mimo_link.py）。
+"""nr_mimo 的物理层参照（tools/models/nr_mimo_ce.py + nr_mimo_link.py）。
 
 激励 = 双天线的两块时域样本（nr_mimo_ce.dump）；
 黄金 = 同一信道上的浮点 MMSE 硬判（nr_mimo_link.link 的 raw LLR 符号）。
@@ -10,6 +10,9 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _TOOLS = os.path.join(_ROOT, "tools")
+_MODELS = os.path.join(_TOOLS, "models")
+if _MODELS not in sys.path:
+    sys.path.insert(0, _MODELS)
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 

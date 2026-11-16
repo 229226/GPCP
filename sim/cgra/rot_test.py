@@ -22,7 +22,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "cgra", "tools"))
 from cgra import Program, spad_idx  # noqa: E402
-import desc64                        # noqa: E402  描述符字段（tools/gen_cgra_desc.py 生成）
+import desc64                        # noqa: E402  描述符字段（tools/gen/gen_cgra_desc.py 生成）
 
 BIN = os.path.join(HERE, "build", "Vcgra_axi_lite")
 OUT = os.path.join(HERE, "build")

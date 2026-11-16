@@ -8,7 +8,7 @@
   3. **并行只来自"数据实例"**：第 w 个实例跑在第 w 个 PE 上（BN 里 w = 提升行号），
      与手写 BN 微码的并行方式一致；
   4. 叶子 k 读 spad `bank=k, word=实例号`；汇写回 `bank=k`（BN 的减法片），
-     或写到指定 bank（硬判决 → bank 25）。这套布局与 `sw/soc/pdsch_bn1_bm.c` 相同。
+     或写到指定 bank（硬判决 → bank 25）。这套布局与 `sw/soc/bench/pdsch_bn1_bm.c` 相同。
 
 不做的事（v1 再加）：link 路由、跨 PE 共享算子、PE 内多拍流水重叠、寄存器 spill。
 
@@ -491,7 +491,7 @@ def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK,
     每条边 8 拍：`LD / SHR(符号位) / XOR / SUB（|x|）/ XOR(sign 累加) /
     MIN / MAX / MIN（min1/min2 更新）`；两个 min 值成对更新只是把 lo/hi
     先算出来，**并不省指令**（插入 (min1,min2) 本身就要 4 拍）—— 真正省的是
-    "20 行一次跑完、程序只装一次"（见 docs/10 §13）。
+    "20 行一次跑完、程序只装一次"（见 docs/compiler/README.md）。
     寄存器：r3=min1, r4=min2, r5=sign；r0/r1/r2 与 r6/r7 是两条边的临时量。
 
     writeback=True 时追加一趟 m' 回写（用于去掉 CPU 的 reconstruct_gather）：

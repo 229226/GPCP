@@ -1,6 +1,6 @@
 """G2 场景 9（阶段 3 跨制式）：LTE PDSCH（36.212 Turbo），只写 HLL。
 
-实现库：sw/soc/lte_stages.inc（Turbo 编/译码、36.212 速率匹配、36.211 CRS）。
+实现库：sw/soc/stages/lte_stages.inc（Turbo 编/译码、36.212 速率匹配、36.211 CRS）。
 口径与 proto/models/lte_pdsch.py 一致（K=104、2 符号、CRS 每 6 RE）。
 """
 from proto.hll import scenario

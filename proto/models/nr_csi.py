@@ -1,7 +1,7 @@
 """nr_csi 的物理层参照（只给 proto/emit.py 与 proto/proto_eval.py 用）。
 
-激励 = tools/nr_csi.py dump 的裸时域样本（20 dB / seed 1）；
-黄金 = tools/nr_csi.py 的模型（CSI-RS 序列 + LS + 差值噪声 + CQI 门限）。
+激励 = tools/models/nr_csi.py dump 的裸时域样本（20 dB / seed 1）；
+黄金 = tools/models/nr_csi.py 的模型（CSI-RS 序列 + LS + 差值噪声 + CQI 门限）。
 """
 import math
 import os
@@ -11,6 +11,9 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _TOOLS = os.path.join(_ROOT, "tools")
+_MODELS = os.path.join(_TOOLS, "models")
+if _MODELS not in sys.path:
+    sys.path.insert(0, _MODELS)
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
@@ -24,7 +27,7 @@ REF_DUMP = "sim/soc/build/csi_dump.txt"
 # 周期门因此放宽到 2%，并在报告里写明。
 CYCLES_TOL = 0.02
 
-# 锚点块布局（与 sw/soc/nr_csi_ops.inc 的 write_anchors 一一对应）
+# 锚点块布局（与 sw/soc/ops/nr_csi_ops.inc 的 write_anchors 一一对应）
 SPEC = {
     "platform": {"dma": False, "busy": False},
     "scalars": [

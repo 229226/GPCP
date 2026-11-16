@@ -1,4 +1,4 @@
-"""nr_pusch 的物理层参照（tools/nr_pusch.py，阶段 A 黄金模型）。
+"""nr_pusch 的物理层参照（tools/models/nr_pusch.py，阶段 A 黄金模型）。
 
 激励 = 2 符号时域样本 + 尾部 rv 字（dump_td_bin）；
 黄金 = pusch_golden 的 1040 个硬判比特与 80 bit TB。
@@ -10,6 +10,9 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _TOOLS = os.path.join(_ROOT, "tools")
+_MODELS = os.path.join(_TOOLS, "models")
+if _MODELS not in sys.path:
+    sys.path.insert(0, _MODELS)
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 

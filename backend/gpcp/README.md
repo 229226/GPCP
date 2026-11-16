@@ -44,7 +44,7 @@ python3 backend/gpcp/run.py --bundle /home/zzq/wlbench/build/bundles/nr_mimo \
 - **仿真时钟 100 MHz**：`cgra/target.yaml` 的 `clock_hz`，只用于 `plan.h` 的
   `PROTO_CLOCK_HZ` 和预算周期，保证生成物与既有产物逐字节一致。
 - **后端运行频率**（`clocks.json`）：CGRA 1,053 MHz / CVA6 264 MHz，来自
-  `docs/08 §9.4` 的 pre-layout 综合结论，标注 `estimated-pre-layout`。
+  `docs/performance/README.md` 的 pre-layout 综合结论，标注 `estimated-pre-layout`。
   `metrics.json` 用这个，时间判定才有物理意义。
 
 Verilator dump 里的 `cycles` 是周期数，与频率相乘才得到时间；仿真时钟
@@ -72,11 +72,11 @@ make -C backend/gpcp ci        # regress + capabilities + 真跑一个 bundle + 
   这条保证 W1 的搬迁没有改变任何落点决定；
 - 账本 `compare_all.csv` 的冻结 sha 未变（1）。
 
-`compare_all.csv` 由 `tools/gen_proto_ledger.py` 从当前 dump 生成，**backend 只读不写**。
+`compare_all.csv` 由 `tools/gen/gen_proto_ledger.py` 从当前 dump 生成，**backend 只读不写**。
 
 ## 已知限制
 
-- **算子覆盖**：执行仍需要 `sw/soc/<场景>_ops.inc`——把算子序列翻译成 MMIO/
+- **算子覆盖**：执行仍需要 `sw/soc/ops/<场景>_ops.inc`——把算子序列翻译成 MMIO/
   DMA/微码调用的 C 实现。wlbench 的 17 个冻结场景都有；`mmse_scalable`
   这类新 workload 目前只能 lowering，跑不了。
   `adapter.py capabilities` 会逐个 bundle 报出能否执行与原因（当前 17/18），

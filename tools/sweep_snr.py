@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""SNR sweep for the sample-level SSB receiver (tools/ssb_plan.py models it).
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
+"""SNR sweep for the sample-level SSB receiver (tools/models/ssb_plan.py models it).
 
-Two modes, same geometry, both starting from tools/ssb_plan.build_td(snr_db=...):
+Two modes, same geometry, both starting from tools/models/ssb_plan.build_td(snr_db=...):
 
   --model   pure Python: noisy samples -> FFT -> PSS (3) -> SSS (336) ->
             DMRS/equalise/descramble -> polar SC.  Fast sanity baseline.
   --hw      the same noisy samples through the CGRA: the SoC model runs
-            sw/soc/ssb_fft_bm.c on the dumped samples and the result words are
-            decoded exactly like tools/check_ssb_fft.py does.
+            sw/soc/bench/ssb_fft_bm.c on the dumped samples and the result words are
+            decoded exactly like tools/checks/check_ssb_fft.py does.
 
 Reported per point: N_ID2 ok, N_ID1 ok, MIB bit errors (of 32) and, for --hw,
 the simulated cycles.  This is the first *quantitative* PHY metric of the
@@ -61,7 +71,7 @@ def model_point(snr, seed):
 def hw_point(snr, seed, bin_path, root):
     td_path = os.path.join(root, "build/ssb/td_snr.bin")
     os.makedirs(os.path.dirname(td_path), exist_ok=True)
-    sub = subprocess.run([sys.executable, os.path.join(root, "tools/ssb_plan.py"),
+    sub = subprocess.run([sys.executable, os.path.join(root, "tools/models/ssb_plan.py"),
                           "dump", td_path, "--snr", str(snr), "--seed", str(seed),
                           "--channel", CHANNEL],
                          capture_output=True, text=True, env={k: v for k, v in os.environ.items()

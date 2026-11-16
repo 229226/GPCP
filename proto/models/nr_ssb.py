@@ -1,4 +1,4 @@
-"""nr_ssb 的物理层参照（tools/ssb_plan_p1.py，P1 真映射）。
+"""nr_ssb 的物理层参照（tools/models/ssb_plan_p1.py，P1 真映射）。
 
 激励 = 四个符号的时域样本（dump）；
 黄金 = 真实 N_ID1/N_ID2、i_SSB/n_hf、PBCH DMRS c_init、32 bit MIB。
@@ -10,6 +10,9 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 _TOOLS = os.path.join(_ROOT, "tools")
+_MODELS = os.path.join(_TOOLS, "models")
+if _MODELS not in sys.path:
+    sys.path.insert(0, _MODELS)
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 

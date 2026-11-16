@@ -2,7 +2,7 @@ name: bn_24
 kind: bn
 desc: "LDPC 归一化最小和解码：24 槽 BN（直连 rule_map.schedule_bn_split）"
 rows: 20
-out: sw/soc/pdsch_bn_prog.h
+out: sw/soc/gen/pdsch_bn_prog.h
 # 以下为声明性描述（供人类阅读 + validate 引用完整性）；
 # 实际微码由 schedule_bn_split 生成，保证与仓库产物逐字节一致。
 leaves:

@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
 """FFT planning model for the GPCP CGRA (radix-4 / radix-16, Q15, tiled).
 
 The CGRA page holds 1024 scratchpad words and one array run is capped at 512
@@ -29,8 +39,8 @@ RAM layout is the natural index order g = 0..N-1 with two words per point, and
 every stage is in place, so the array stays in g-order; the result is in
 base-4 digit-reversed order (position i holds X[rev4(i)]).
 
-This module is the common reference for the microcode (sw/soc/fft_bm.c), the
-twiddle ROM image (tools/fft_plan.py lut) and the checker (tools/check_fft.py).
+This module is the common reference for the microcode (sw/soc/bench/fft_bm.c), the
+twiddle ROM image (tools/fft_plan.py lut) and the checker (tools/checks/check_fft.py).
 """
 
 import math
@@ -412,7 +422,7 @@ SEEDS = {256: 0x1357, 1024: 0x2468, 4096: 0x369C}
 
 
 def test_vector(n: int, seed: int = None, mod: int = 3000):
-    """Same LCG as fill_input() in sw/soc/fft_bm.c."""
+    """Same LCG as fill_input() in sw/soc/bench/fft_bm.c."""
     if seed is None:
         seed = SEEDS[n]
     rng = seed & 0xFFFFFFFF

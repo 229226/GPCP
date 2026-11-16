@@ -2,7 +2,7 @@
 """布局契约生成器（AGENTS.md 4.19 的 C 侧一半）。
 
     cgra/target.yaml -> sw/include/gpcp_layout.h   全局几何 / 命名区域 / ABI 位宽
-    kernel 编译结果  -> sw/soc/<name>_layout.h     每个 leaf/sink 的 flat spad 索引
+    kernel 编译结果  -> sw/soc/gen/<name>_layout.h     每个 leaf/sink 的 flat spad 索引
 
 C 代码不再写 bank/word 数字，只 include 契约、引用宏。换 target 时 ABI 宏、
 本地布局宏、DMA 描述符基址一起随编译产物重算。生成文件只在内容变化时重写。
@@ -12,7 +12,7 @@ import re
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 GLOBAL_PATH = os.path.join(ROOT, "sw", "include", "gpcp_layout.h")
-KERNEL_DIR = os.path.join(ROOT, "sw", "soc")
+KERNEL_DIR = os.path.join(ROOT, "sw", "soc", "gen")
 
 
 def sym(name):
