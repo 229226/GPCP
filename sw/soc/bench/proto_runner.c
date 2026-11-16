@@ -46,10 +46,10 @@ static int same(const char *a, const char *b)
 /* 性能计数块（结果区固定偏移，见 docs/protocols/README.md）：
  *   [1200] magic [1201] 阶段数 [1202] 每阶段键数
  *   每阶段 17 字：id + 16 个增量（9 个硬件计数 + 3 个互斥状态 + 4 个 CPU 子账本）
- *   [1400] magic [1401] 计数器个数 [1402..] 整跑快照
+ *   [1420] magic [1421] 计数器个数 [1422..] 整跑快照
  */
 #define PERF_STAGE_WORD 1200u
-#define PERF_FULL_WORD  1400u
+#define PERF_FULL_WORD  1420u
 #define PERF_MAGIC      0x50455246u      /* 'PERF' */
 #define PERF_KEYS       16u
 

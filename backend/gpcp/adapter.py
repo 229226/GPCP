@@ -28,6 +28,7 @@ CLOCKS = HERE / "clocks.json"
 TARGET_YAML = GPCP / "cgra" / "target.yaml"
 
 sys.path.insert(0, str(GPCP / "tools"))
+sys.path.insert(0, str(GPCP / "tools" / "checks"))
 from checklib import parse_dump, words32  # noqa: E402
 
 import lower as LOWER  # noqa: E402

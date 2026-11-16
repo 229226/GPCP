@@ -1166,13 +1166,6 @@ static void qs_ring_submit(uint32_t base, uint32_t n, uint32_t size)
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, 0u);
 }
 
-static void qs_imem_host_load(const uint32_t *prog, uint32_t words)
-{
-    uint32_t i;
-    for (i = 0; i < words; i++)
-        gpcp_cgra_write(CGRA_BASE, 0x2000u + i * 4u, prog[i]);
-}
-
 static int qs_decode_ring(void)
 {
     uint32_t it, r, b, i;
@@ -1214,9 +1207,11 @@ static int qs_decode_ring(void)
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_ROT_ZC, ZC);
 
     for (it = 0; it < qs_decode_iters; it++) {
-        qs_imem_host_load(cn_wb_prog, CN_WB_PROG_CYCLES * NPES);
+        if (gpcp_cgra_imem_load(CGRA_BASE, cn_wb_prog, CN_WB_PROG_CYCLES * NPES))
+            errs++;
         qs_ring_submit(DESC_BASE, 2u * BG2_ROWS, CN_RING_SIZE);
-        qs_imem_host_load(bn_rot_prog, BN_ROT_PROG_CYCLES * NPES);
+        if (gpcp_cgra_imem_load(CGRA_BASE, bn_rot_prog, BN_ROT_PROG_CYCLES * NPES))
+            errs++;
         qs_ring_submit(BN_RING_BASE, qs_bn_n, BN_RING_SIZE);
     }
 

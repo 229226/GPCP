@@ -57,12 +57,12 @@ def read_dump(path):
 
 
 PERF_STAGE_WORD = 1200
-PERF_FULL_WORD = 1400
+PERF_FULL_WORD = 1420
 PERF_MAGIC = 0x50455246
 
 
 def parse_perf(w):
-    """解析 proto_runner 写在结果区 1200/1400 的 CGRA 性能计数块。"""
+    """解析 proto_runner 写在结果区 1200/1420 的 CGRA 性能计数块。"""
     if len(w) < PERF_STAGE_WORD + 3 or w[PERF_STAGE_WORD] != PERF_MAGIC:
         return None
     nst = w[PERF_STAGE_WORD + 1]
