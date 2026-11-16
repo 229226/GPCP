@@ -598,7 +598,7 @@ env -u LD_LIBRARY_PATH make -C syn sta PDK_NAME=sky130hd CLK_FREQ_MHZ=50   # sky
 - 日常迭代一律 `make verify-smart`（见 §9）；**阶段末 / 提交前 / 发版**必须 `bash tools/verify.sh slow --force` 全量留档。改 RTL/ABI 时缓存自动全失效，无需人工挑选测试。
 - 新增 `run-*` 目标时，并行化要求：不得与其它目标共写同一 TD/dump；需要 twiddle 时复用带 `test -f` 守卫的那一行。
 - 新增 benchmark：C 程序 + `tools/checks/check_*.py` + `sim/soc/Makefile` 目标 + 顶层 `soc-run-*` + **§2 表格一行**。
-- **硬件/软件迭代必须留档**：任何影响周期、利用率或资源占用的改动（RTL、微码调度、DMA/描述符、阶段编排、驱动与运行时、编译器/落点）完成后，必须在 `docs/performance/iterations.md` 追加一行 `ITER-N`，至少记录：`commit`、wlbench `total_cycles`、CGRA 阶段/工作量/有效覆盖率、`PERF_ARRAY_BUSY / PERF_CYCLES` 利用率、CPU/DMA/CGRA 三态占比，以及关键性能计数器（DMA beats/waits/starts、issued/nop/ld/st/alu、spad 读写与 bank conflict）。数字必须来自同一 bundle、同一计数器口径，并附复现命令。
+- **硬件/软件迭代必须留档**：任何影响周期、利用率或资源占用的改动（RTL、微码调度、DMA/描述符、阶段编排、驱动与运行时、编译器/落点）完成后，必须在 `docs/performance/iterations.md` 追加一行 `ITER-N`，至少记录：`commit`、wlbench `total_cycles`、CGRA 阶段/工作量/有效覆盖率、`PERF_ARRAY_BUSY / PERF_CYCLES` 利用率、CPU/DMA/CGRA 三态占比，以及关键性能计数器（DMA beats/waits/starts、issued/nop/ld/st/alu、spad 读写与 bank conflict）。**同时在该文件的「综合（PPA）」表补一行**：两套 PDK（Nangate45 / sky130 HD）的逻辑面积、flop 数、关键路径、slack 与功耗；只改了软件、RTL 未动的迭代填「同上一行」。数字必须来自同一 bundle、同一计数器口径，并附复现命令。
 - 本文件 §2 的数字与 `docs/software/README.md` 的实测数字要同步更新（它们是下一个接手的唯一可信来源）。
 - 提交信息用英文短句 + 关键数字（例：`ssb: sample-level PBCH chain ... MIB 32/32, 4.33M cycles`）。
 

@@ -20,6 +20,7 @@ clock_hz = 1,053,000,000   (backend/gpcp/clocks.json，pre-layout 综合)
 | 有效覆盖率 | Σ max(0, CPU周期 − CGRA周期) / Σ CPU周期 | 同上 |
 | 利用率 | `PERF_ARRAY_BUSY / PERF_CYCLES` | 硬件性能计数器（全跑） |
 | CGRA/DMA/CPU 占比 | 互斥账本 `PERF_STATE_*`，三者之和 = `PERF_CYCLES` | 同上 |
+| 综合面积 / 关键路径 / 功耗 | 逻辑网表（阵列剔除）、pre-layout、`-toggle 0.1` | `make -C syn sta [PDK_NAME=sky130hd]` |
 
 计数器索引见 `sw/include/perf.h`；整跑快照在结果区 1420（ITER-0 在 1400）。
 **注意**：早期文档的 7.03% 用的是软件变量 `busy`，它只累计了译码阶段的
@@ -98,6 +99,29 @@ ITER-2 的 DMA beats 反而少 33,992，因为 IMEM 装载从 16 次降到 2 次
 ITER-0 的 decode DMA/CPU 分项无效：当时全量快照写在 1400，12 个阶段 ×17 字
 一直写到 1407，覆盖了最后一阶段的 DMA/CPU 字段。ITER-1 把快照移到 1420 后
 该分项才可用；因此 ITER-0 只记录 decode 的墙钟、阵列忙和 DMA beats。
+
+## 综合（PPA）
+
+每次迭代的综合结果单列在这里：同一份 HEAD RTL，Yosys+slang → ABC → iEDA，
+IMEM 与 spad 阵列在综合前剔除，所以面积**只含逻辑**（存储单列）。
+
+| 迭代 | PDK / 目标频率 | commit | 逻辑面积 | flop | 单元数 | 关键路径 | slack | 由路径推得 Fmax | 功耗 |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| ITER-0…3 | — | — | 未测 | — | — | — | — | — | — |
+| ITER-4 | Nangate45 / 500 MHz | `0d49d0f` | 78,499 µm² | 7,291 | 34,398 | 1.429 ns | +0.54 ns | ≈700 MHz | 37.5 mW |
+| ITER-4 | sky130 HD / 50 MHz | `0d49d0f` | 438,119 µm² | 7,291 | 40,621 | 10.762 ns | +8.49 ns | ≈87 MHz | 90.0 mW |
+
+（ITER-4 的 PPA 依赖两个提交：RTL 单驱动 `9251a8a` + 流程/库接入 `0d49d0f`；
+表里记后一个，因为网表由两者共同决定。）
+
+- ITER-0…3 没有 PPA：综合入口（yosys-slang）在 ITER-4 之前直接拒绝多驱动 RTL
+  （见下节），无法 elaborate；历史文档里的 54,148 µm² / Fmax 1.05 GHz /
+  23.8 mW 来自更早、触发器只有 5,072 的 RTL，不能和这张表混用。
+- 口径：pre-layout（无 LEF/SPEF、无时钟树、未做扇出缓冲）；功耗用
+  `report_power -toggle 0.1`，无 VCD；两套 PDK 用同一个 ABC 目标
+  （`ABC_D = 1000/f`，即最大努力映射）。
+- 复现：`make -C syn sta CLK_FREQ_MHZ=500` /
+  `make -C syn sta PDK_NAME=sky130hd CLK_FREQ_MHZ=50`。
 
 ## ITER-1 说明
 
