@@ -1,4 +1,4 @@
-// 由 tools/gen_cgra_desc.py 从 rtl/cgra/cgra_desc64.yml 生成，不要手改。
+// 由 tools/gen/gen_cgra_desc.py 从 rtl/cgra/cgra_desc64.yml 生成，不要手改。
 #ifndef GPCP_DESC64_H
 #define GPCP_DESC64_H
 

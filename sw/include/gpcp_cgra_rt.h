@@ -1,7 +1,7 @@
 /* -----------------------------------------------------------------------------
  * GPCP CGRA M1 运行时骨架：spad 双页 ping-pong + 拷贝引擎/阵列重叠
  *
- * 约定（来自 docs/07 §4 与 AGENTS §4 的硬规矩）：
+ * 约定（来自 docs/software/README.md 与 AGENTS §4 的硬规矩）：
  *   - 阵列用页 A（BUF_PAGE），拷贝引擎同时只能写/读**另一个**页（DMA_PAGE）；
  *   - 阵列是静态调度，`RT_MAX_CYCLES` 拍后自己停；启动后必须"先看到 BUSY 或 DONE，
  *     再等 BUSY 清零"（start 是 posted write，第一次轮询可能读到旧的 idle）；

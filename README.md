@@ -6,15 +6,15 @@
 > **接手开发请先读 [`AGENTS.md`](AGENTS.md)**：现状、硬规矩（15 条踩坑规则）、调试方法论、
 > 以及一条命令的全量验收 `bash tools/verify.sh quick|full`（`make verify` / `make verify-full`）。
 >
-> **每次开发都要记账**（耗时 + 领域，见 §10 与文末"开发规则"），`make devcheck` 是门禁。
-> 各 AI 工具入口：`CLAUDE.md` / `GEMINI.md` / `.cursorrules` / `.github/copilot-instructions.md`。
+> **每次开发都要记账**（耗时 + 领域，见 [`AGENTS.md`](AGENTS.md) §10），`make devcheck` 是门禁。
+> 开发规则只维护 [`AGENTS.md`](AGENTS.md)：现状、硬规矩、调试方法论与验收命令都在那里。
 
 ## 当前状态：M0 / B2 完成，L1 数据面 + DMA 双缓冲完成，B3 进行中
 
 - **M0**：4×4 CGRA 阵列 RTL（int16 MAC / int32 累加，最近邻 1 周期路由）、全局定序器、
   AXI4-Lite 从口、Verilator 模型、Python 微码汇编器 + 黄金模型比对；
   已通过 `matmul4x4`、`fir16`，以及 L1 数据面 `fft16`、`chnest16`、`mmse16`、`ldpc_cn`
-  （scratchpad + `LD/ST` 扩展，见 `docs/07-l1-dataplane.md`）。
+  （scratchpad + `LD/ST` 扩展，见 `docs/software/README.md`）。
 - **L1 数据面 + DMA**：scratchpad 扩到 64 banks / 8 KiB 双页，加描述符驱动拷贝引擎
   （RAM↔scratchpad、2D stride/row、页隔离），CVA6 可以「阵列算 page 0、DMA 填 page 1」；
   `make -C sim/soc run-dma` 跑 3 个 slot 的流水并逐位比对黄金模型。
@@ -38,7 +38,7 @@
 - **NR 同步 + Polar kernel（B4 骨架）**：`pss_corr` / `sss_corr`（127 点复相关，
   16 PE × 8 抽头，**52 拍**）、`polar_enc`（512 bit 蝶形编码，**43 拍**）、
   `polar_node`（min-sum f/g 节点更新，**22 拍**，`g` 不用 32 位乘法）；
-  序列按 38.211/38.212 生成（`tools/nr_seq.py`），四个 kernel 与黄金模型**逐位一致**；
+  序列按 38.211/38.212 生成（`tools/models/nr_seq.py`），四个 kernel 与黄金模型**逐位一致**；
   **SoC 级小区搜索已闭环**：PSS 检测（3 候选、2688 周期）与 SSS 336 假设搜索
   （218,894 周期）都检出正确的小区 ID，partial 逐位一致
   （`make -C sim/soc run-sync` / `run-sss`）；**采样级链路已闭环**：4 个符号的 4096 点 FFT →
@@ -154,16 +154,16 @@ riscv64-unknown-elf-gcc --specs=/usr/lib/picolibc/riscv64-unknown-elf/picolibc.s
 
 ## 文档
 
-- [docs/01-架构选型.md](docs/01-架构选型.md)：开源项目对比、引擎分工、带宽预算、许可策略
-- [docs/02-cgra-isa.md](docs/02-cgra-isa.md)：指令编码、link 语义、寄存器映射、kernel 映射
-- [docs/11-项目计划.md](docs/11-项目计划.md)：以协议过程为阶段的计划与验收标准（取代旧 `03-路线图.md`）
-- [docs/12-夜间批次.md](docs/12-夜间批次.md)：无人值守长跑框架与 T1–T5 夜间开发队列
-- [docs/13-重复实现审计.md](docs/13-重复实现审计.md)：重复造轮子的量化审计（800 函数 / 17 簇 / 6.9% 冗余）与分级解法
-- [docs/14-CGRA编译器方案.md](docs/14-CGRA编译器方案.md)：程序 → 微码的编译器设计（MRRG 建模、II 搜索、影子验证、M0–M4 里程碑）
-- [docs/15-Morpher-II基线.md](docs/15-Morpher-II基线.md)：开源 Morpher 实测（FIR/GEMM II=4，RecMin 锁死在访存回环）+ 对自研编译器的三条约束
-- [docs/04-环境搭建.md](docs/04-环境搭建.md)：工具链版本、安装命令与两个必踩的坑
-- [docs/05-soc-b2.md](docs/05-soc-b2.md)：CVA6 + CGRA SoC 的地址映射、AXI 从机实现、复现步骤
-- [docs/06-linux-b3.md](docs/06-linux-b3.md)：Linux 版 SoC、OpenSBI 补丁、AXI 原子/LR-SC、镜像布局
+文档按功能块组织，总入口见 [docs/README.md](docs/README.md)：
+
+- [硬件架构](docs/architecture/README.md)：系统组成、地址空间、主机接口、平台状态
+- [CGRA 微架构](docs/architecture/cgra.md)：阵列、spad、ISA、描述符
+- [编译器与微码](docs/compiler/README.md)：kernel YAML → 微码、映射与自检
+- [软件栈](docs/software/README.md)：描述符环、DMA、双页运行时、内存布局
+- [协议链](docs/protocols/README.md)：HLL 动词、17 个场景、Proto 运行器
+- [验证体系](docs/verification/README.md)：三层验证、门禁、失败排查
+- [性能与 PPA](docs/performance/README.md)：基线数字、利用率、面积/频率/功耗
+- [项目与流程](docs/project/README.md)：里程碑、目录地图、开发规则
 
 ## 下一步
 
@@ -173,44 +173,5 @@ riscv64-unknown-elf-gcc --specs=/usr/lib/picolibc/riscv64-unknown-elf/picolibc.s
 
 ## 开发规则（人与 AI 共同遵守）
 
-<!-- devlog-rule:v1 -->
-### 强制规则：开发工时台账
-
-每次开发都必须记录**这项任务花了多久**与**它属于哪个领域**：写 RTL、做综合、验证测试、
-写软件（裸机 C / 驱动）、写微码、写协议模型、搭基建、写文档 —— 都算开发。
-
-单一事实来源是 `docs/dev-log.csv`，工具是 `tools/devlog.py`。**不要手写 CSV**，用工具。
-
-```bash
-python3 tools/devlog.py start <domain> "<任务>"        # 开工立即记
-python3 tools/devlog.py stop  --commit <hash> --evidence "<周期数 / 门数 / [OK] 行>"
-python3 tools/devlog.py add --domain <domain> --kind <kind> --minutes N \
-        --task "<任务>" --commit <hash> --confidence measured|estimate|backfill
-python3 tools/devlog.py report                         # 按领域 / 类型 / 天 / 周汇总
-make devcheck                                          # 提交前必须 0 error
-```
-
-`domain`（写什么）：`arch` `rtl` `microcode` `model` `sw` `verif` `synth` `pd` `infra` `doc` `wait`
-`kind`（为什么花时间）：`feature` `fix` `infra` `experiment` `doc` `wait`
-
-**四条不可协商：**
-1. 功能 / 修复 / 基建提交都必须有台账行，`commit` 填提交哈希（多个用 `;` 分隔）。
-2. 必须有 `evidence`（周期数、门数、`[OK]`、PASS 汇总至少一项），否则按**未完成**处理。
-3. 精度不得伪装：`estimate`（事后估算 ±25%）不许写成 `measured`（有明确起止）。
-4. 负结果也要记（`kind=experiment`，可以没有 commit）——它比成功的实验更能防止重复踩坑。
-
-**口径细节**（wall-clock 到验收通过；纯等待单列 `domain=wait`；并行按投入比例不重复计；
-单条 ≤3 h 否则拆分；跨领域必须拆成多条）：见 `AGENTS.md` §10。
-
-### 完成定义（DoD）
-
-一个任务要同时满足三条才算完成，缺一条不算：
-1. 相关门绿 —— `make verify-smart`，或对应的 `make -C sim/soc run-*`；
-2. `make devcheck` **0 error**；
-3. 文档与实测数字同步（`AGENTS.md` §2 的数字、`docs/11` 的基线与变更记录）。
-<!-- /devlog-rule -->
-
-各 AI 工具的入口都内联了同一份规则块：`CLAUDE.md`（Claude Code）、
-`GEMINI.md`（Gemini CLI）、`.cursorrules`（Cursor）、
-`.github/copilot-instructions.md`（Copilot）、`README.md`（本文件），
-`AGENTS.md` 是唯一事实来源。`make devcheck` 会校验它们始终一致。
+规则只在 [`AGENTS.md`](AGENTS.md) 维护，包括工时台账、验收命令与硬规矩。
+本文件不再内联规则块，也不再有 CLAUDE/GEMINI/Cursor/Copilot 的重复入口文件。

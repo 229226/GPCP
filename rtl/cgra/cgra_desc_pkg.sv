@@ -1,4 +1,4 @@
-// 由 tools/gen_cgra_desc.py 从 rtl/cgra/cgra_desc64.yml 生成，不要手改。
+// 由 tools/gen/gen_cgra_desc.py 从 rtl/cgra/cgra_desc64.yml 生成，不要手改。
 // 64B 复合描述符字段访问器：每个字段只在 YAML 里定义一次。
 package cgra_desc_pkg;
 

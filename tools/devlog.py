@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# --- tools path bootstrap (subdirs import root modules) ---
+import os as _os, sys as _sys
+_T = _os.path.dirname(_os.path.abspath(__file__))
+_TOOLS = _T if _os.path.basename(_T) == "tools" else _os.path.dirname(_T)
+for _p in (_TOOLS, _os.path.join(_TOOLS, "models"), _os.path.join(_TOOLS, "checks"),
+           _os.path.join(_os.path.dirname(_TOOLS), "cgra", "tools")):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+_ROOT = _os.path.dirname(_TOOLS)
+# --- end bootstrap ---
 """开发工时台账 —— 按领域记录每个任务花了多久、产出是什么。
 
 单一事实来源是 docs/dev-log.csv（append-only，进 git，可 diff 可审计）。
@@ -34,7 +44,7 @@ DOMAINS = {
     "arch":      "架构 / 方案设计与评估（不落代码的推演、选型、取舍）",
     "rtl":       "RTL 设计（Verilog / SystemVerilog）",
     "microcode": "CGRA 微码与查表程序（*_prog.h、*_luts.h）",
-    "model":     "协议参考模型（tools/nr_*.py 黄金模型）",
+    "model":     "协议参考模型（tools/models/nr_*.py 黄金模型）",
     "sw":        "裸机 C / 驱动 / SoC 软件",
     "verif":     "验证与测试（checker、回归档、testbench）",
     "synth":     "综合 / 时序 / 面积",
@@ -53,9 +63,8 @@ KINDS = {
     "wait":       "纯等待（与 domain=wait 配对使用）",
 }
 
-# 各 AI 工具的入口文档都必须内联同一份规则块（字节一致），由 check 机械校验。
-ENTRY_DOCS = ["AGENTS.md", "README.md", "CLAUDE.md", "GEMINI.md",
-              ".cursorrules", ".github/copilot-instructions.md"]
+# 规则块只在 AGENTS.md 维护（不再复制到各 AI 工具入口），由 check 机械校验。
+ENTRY_DOCS = ["AGENTS.md"]
 BLOCK_BEGIN = "<!-- devlog-rule:v1 -->"
 BLOCK_END = "<!-- /devlog-rule -->"
 

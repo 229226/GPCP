@@ -19,7 +19,7 @@ $(BUILD)/gpcp.dtb: gpcp.dts | $(BUILD)
 
 # Same tree, but the 16550 is not used as a console (earlycon=sbi only): the
 # 8250 console stops producing output part-way through the boot on this SoC,
-# which hides the rest of the log (see docs/06 section 10).
+# which hides the rest of the log (see docs/architecture/README.md section 10).
 $(BUILD)/gpcp-earlycon.dtb: gpcp.dts | $(BUILD)
 	sed 's/console=ttyS0 earlycon=sbi/earlycon=sbi/' $< > $(BUILD)/gpcp-earlycon.dts
 	dtc -I dts -O dtb -o $@ $(BUILD)/gpcp-earlycon.dts 2>/dev/null

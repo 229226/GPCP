@@ -96,7 +96,7 @@ module cgra_top #(
 );
 
   import cgra_pkg::*;
-  import cgra_desc_pkg::*;   // 64B 描述符字段访问器（tools/gen_cgra_desc.py 生成）
+  import cgra_desc_pkg::*;   // 64B 描述符字段访问器（tools/gen/gen_cgra_desc.py 生成）
 
   localparam int NPES   = CGRA_NPES;
   localparam int MAXCYC = CGRA_MAX_CYCLES;
@@ -316,7 +316,7 @@ module cgra_top #(
 
   // the beat is consumed only on the handshake (valid && ready), never on valid alone
   // dma_tgt = IMEM: the same beat stream feeds the instruction memory instead of
-  // the scratchpad (bulk program load; see docs/02 §3.1).
+  // the scratchpad (bulk program load; see docs/architecture/cgra.md).
   assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && (dma_tgt == 2'd0);
   assign spad_dma_addr0  = dma_cur[9:0];
   assign spad_dma_wdata0 = m_axi_rdata[31:0];
@@ -815,7 +815,7 @@ module cgra_top #(
         end else if (wr_addr == REG_NUM_CYCLES) begin
           // "run" register: NUM_CYCLES | page<<16 | start<<31.  Doing all three
           // in one store keeps the ABI safe against the CPU merging adjacent
-          // 32-bit stores into a single 64-bit AXI write (see docs/02).
+          // 32-bit stores into a single 64-bit AXI write (see docs/architecture/cgra.md).
           automatic logic [15:0] cyc;
           cyc = (wr_data[15:0] > MAXCYC) ? 16'(MAXCYC) : wr_data[15:0];
           if (DBG)
@@ -1073,7 +1073,7 @@ module cgra_top #(
                  (rd_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
       // IMEM is write-only for the host: a readback port would make the SRAM
       // 2R1W instead of 1R1W (~1.5x area), and no software reads microcode
-      // back (see docs/08).  The write port still lets a loader verify by run.
+      // back (see docs/performance/README.md).  The write port still lets a loader verify by run.
       rd_data = 32'b0;
     end
   end

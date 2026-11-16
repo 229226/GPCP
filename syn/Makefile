@@ -33,7 +33,7 @@ all: sta
 # synthesis script and the sdc are all derived from DESIGN at parse time, so
 # DESIGN must be set on the command line: re-invoke make instead of using a
 # target-specific variable.  NOTE: synthesis (area) completes, but the bundled
-# iEDA cannot link this 321k-cell netlist for STA - see docs/08 section 9.4.
+# iEDA cannot link this 321k-cell netlist for STA - see docs/performance/README.md section 9.4.
 cpu:
 	$(MAKE) sta DESIGN=cpu_top CLK_FREQ_MHZ=$(CLK_FREQ_MHZ)
 

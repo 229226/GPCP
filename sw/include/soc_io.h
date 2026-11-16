@@ -6,7 +6,7 @@
  * goes through them, so the ABI belongs in exactly one place: change it here
  * and every benchmark picks it up on the next build.
  *
- * It has already drifted once (sw/soc/cgra_bm.c carries a u64/u32 variant),
+ * It has already drifted once (sw/soc/bench/cgra_bm.c carries a u64/u32 variant),
  * which is exactly what duplication does over time.
  *
  * No libc: safe with -nostdlib, same rule as gpcp_cgra.h.

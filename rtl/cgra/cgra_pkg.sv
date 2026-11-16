@@ -73,7 +73,7 @@ package cgra_pkg;
   localparam logic [15:0] REG_STATUS     = 16'h0000; // R: [0] busy, [1] done, [2] idle
   localparam logic [15:0] REG_NUM_CYCLES = 16'h0004; // W: [15:0] cycles, [16] buffer page,
                                                      //    [31] start in this write (atomic
-                                                     //    "run" register, see docs/02)
+                                                     //    "run" register, see docs/architecture/cgra.md)
   localparam logic [15:0] REG_CYCLE_CNT  = 16'h0008;
   localparam logic [15:0] REG_ID         = 16'h000C; // R: {magic, isa_ver, n, n}
 
