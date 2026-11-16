@@ -57,6 +57,11 @@ package cgra_desc_pkg;
     return b[16:16];
   endfunction
 
+  // arr_imem: word 6 [17:17]（beat3 [17:17]）
+  function automatic logic [0:0] d64_arr_imem(input logic [63:0] b);
+    return b[17:17];
+  endfunction
+
   // arr_en: word 6 [31:31]（beat3 [31:31]）
   function automatic logic [0:0] d64_arr_en(input logic [63:0] b);
     return b[31:31];

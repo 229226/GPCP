@@ -1121,6 +1121,7 @@ static uint32_t qs_bn_block_build(uint32_t b)
     gpcp_d64_set_in_len(d, ZC);
     gpcp_d64_set_cycles(d, BN_ROT_PROG_CYCLES);
     gpcp_d64_set_arr_en(d, 1u);
+    gpcp_d64_set_arr_imem(d, 1u);            /* BN 微码常驻 IMEM bank1 */
     gpcp_d64_set_out_len(d, ZC);
     gpcp_d64_set_out_en(d, 1u);
     gpcp_d64_set_out_dst(d, (uint32_t)(uintptr_t)&msg[blk_r[b][0]][blk_k[b][0]][0]);
@@ -1206,12 +1207,21 @@ static int qs_decode_ring(void)
     /* 旋转表的模 = ZC；不写这个寄存器时硬件默认 32 */
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_ROT_ZC, ZC);
 
+    /* ---- IMEM 双 bank：CN 常驻 bank0、BN 常驻 bank1，环内不再重装微码 ----
+     * 以前每次迭代都重装两段微码（CN 452×16 + BN 155×16 字，走拷贝引擎仍
+     * 各 ~3.6K 拍），16 次迭代白烧 ~388K 周期。现在一次装载、整段复用；
+     * 主机/拷贝引擎写哪个 bank 由 REG_IMEM_BANK 选择。 */
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BANK, 0u);
+    if (gpcp_cgra_imem_load(CGRA_BASE, cn_wb_prog, CN_WB_PROG_CYCLES * NPES))
+        errs++;
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BANK, 1u);
+    if (gpcp_cgra_imem_load(CGRA_BASE, bn_rot_prog, BN_ROT_PROG_CYCLES * NPES))
+        errs++;
+    /* 恢复写 bank=0：后续阶段/主机逐字写一律落 bank0，避免悄悄写进 bank1。 */
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_IMEM_BANK, 0u);
+
     for (it = 0; it < qs_decode_iters; it++) {
-        if (gpcp_cgra_imem_load(CGRA_BASE, cn_wb_prog, CN_WB_PROG_CYCLES * NPES))
-            errs++;
         qs_ring_submit(DESC_BASE, 2u * BG2_ROWS, CN_RING_SIZE);
-        if (gpcp_cgra_imem_load(CGRA_BASE, bn_rot_prog, BN_ROT_PROG_CYCLES * NPES))
-            errs++;
         qs_ring_submit(BN_RING_BASE, qs_bn_n, BN_RING_SIZE);
     }
 
@@ -1253,6 +1263,10 @@ static int qs_decode(void)
                 msg[r2][kk][i] = (kk < bg2_deg[r2])
                                  ? llr[bg2_col[r2][kk]][(i + bg2_sh[r2][kk]) % ZC]
                                  : SENTINEL;
+    /* gath（BN 的 gather 累加缓冲）只有 CPU 对照路径和旧的逐步路径用；
+     * 环路径里 BN 的累加与硬判都在阵列/spad 里完成，这里清零是纯浪费——
+     * 52 块 × 25 行 × ZC 字 ≈ 25K 个写，实测占掉 decode 的 ~240K 周期。 */
+#if !defined(GPCP_RING_DECODE) || defined(PROTO_CPU_ONLY)
     for (uint32_t b = 0; b < BG2_COLS; b++) {
         int32_t (*gath)[ZC] = (int32_t (*)[ZC])(g_all + b * GSPAD);
         for (k = 0; k < 24; k++)
@@ -1261,6 +1275,7 @@ static int qs_decode(void)
         for (i = 0; i < ZC; i++)
             gath[24][i] = llr[b][i];
     }
+#endif
 #ifdef PROTO_CPU_ONLY
     /* 对照路径：同一 min-sum / BN 公式全在 CVA6 上跑，不碰阵列 */
     for (uint32_t it = 0; it < qs_decode_iters; it++) {

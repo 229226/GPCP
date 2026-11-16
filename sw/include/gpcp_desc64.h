@@ -116,6 +116,16 @@ static inline uint32_t gpcp_d64_arr_page(const uint32_t *d)
     return (d[6] >> 16) & 0x00000001u;
 }
 
+/* arr_imem: word 6 [17:17] */
+static inline void gpcp_d64_set_arr_imem(uint32_t *d, uint32_t v)
+{
+    d[6] = (d[6] & ~0x00020000u) | ((v & 0x00000001u) << 17);
+}
+static inline uint32_t gpcp_d64_arr_imem(const uint32_t *d)
+{
+    return (d[6] >> 17) & 0x00000001u;
+}
+
 /* arr_en: word 6 [31:31] */
 static inline void gpcp_d64_set_arr_en(uint32_t *d, uint32_t v)
 {

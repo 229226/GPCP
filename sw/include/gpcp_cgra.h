@@ -46,6 +46,7 @@
 #define GPCP_CGRA_DMA_PAGE     0x0024u   /* W: copy-engine page select (0/1)   */
 #define GPCP_CGRA_DMA_STRIDE   0x0028u   /* W: 2D copy, spad stride between rows */
 #define GPCP_CGRA_DMA_ROW      0x002Cu   /* W: 2D copy, words per row (0 = linear) */
+#define GPCP_CGRA_IMEM_BANK    0x0074u   /* R/W: [0] IMEM bank for host/DMA writes */
 
 #define GPCP_CGRA_DMA_START    (1u << 0)
 #define GPCP_CGRA_DMA_DIR_OUT  (1u << 1)   /* spad -> RAM */

@@ -14,6 +14,7 @@ FIELDS = {
     "row": (3, 16, 16),
     "cycles": (6, 0, 16),
     "arr_page": (6, 16, 1),
+    "arr_imem": (6, 17, 1),
     "arr_en": (6, 31, 1),
     "out_len": (8, 0, 16),
     "out_spad": (8, 16, 16),

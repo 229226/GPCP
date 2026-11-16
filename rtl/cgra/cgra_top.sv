@@ -13,6 +13,7 @@
 //   0x001C  W: DMA_CTRL {start, dir, clr_done}  R: {busy, done}
 //   0x0020  W: BUF_PAGE  (array page select, 0/1)
 //   0x0024  W: DMA_PAGE  (copy-engine page select, 0/1)
+//   0x0074  R/W: IMEM_BANK (bank 0/1 targeted by host and copy-engine IMEM writes)
 //   0x1000  PE register window  (pe*32 + reg*4), reg 0..7
 //   0x1200  PE accumulator window (pe*4)
 //   0x2000  instruction memory (word index = cycle*NPES + pe), 0x2000..0x9FFF
@@ -110,9 +111,16 @@ module cgra_top #(
   // on the same single write port.
   // Host word index w = (addr - REG_IMEM_BASE) >> 2 -> row w >> 4, lane w[3:0],
   // which keeps the existing software ABI (word cycle*16 + pe).
+  //
+  // Two banks (0/1): host and copy-engine writes go to REG_IMEM_BANK, a run
+  // reads the bank latched at start (descriptor bit `arr_imem`, 0 for the
+  // register-start path).  With CN in bank0 and BN in bank1 the decode loop no
+  // longer reloads microcode between iterations.  Cost: +1 macro (IMEM area
+  // 0.138 -> 0.276 mm^2, docs/performance/README.md §4).
   localparam int IMEM_ROWS = CGRA_IMEM_WORDS / CGRA_NPES;   // 512 rows
   localparam int IMEM_AW   = $clog2(IMEM_ROWS);             // 9
-  logic [CGRA_NPES-1:0][31:0] imem [0:IMEM_ROWS-1];
+  logic [CGRA_NPES-1:0][31:0] imem [0:1][0:IMEM_ROWS-1];
+  logic                       imem_wbank, imem_run_bank;
   logic [CGRA_NPES-1:0][31:0] inst_flat;
 
   // ---------------- sequencer ----------------
@@ -155,7 +163,6 @@ module cgra_top #(
   // still takes exactly num_cycles cycles (no extra fetch cycle).
   logic [IMEM_AW-1:0] imem_raddr;
   assign imem_raddr = busy ? (cycle_cnt[IMEM_AW-1:0] + 1'b1) : '0;
-  always_ff @(posedge clk) inst_flat <= imem[imem_raddr];
 
   // ---------------- copy engine state ----------------
   // Descriptor registers (host written) are latched into the *_run copies when
@@ -188,6 +195,7 @@ module cgra_top #(
   logic [31:0] desc_addr;
   // 复合描述符：desc_buf[3] = {en<<31, page<<16, cycles}，传输完成后可选跑一次阵列
   logic        arr_en_q, arr_req;
+  logic        arr_imem_q;      // 描述符选择的 IMEM bank
   logic [1:0]  arr_phase;      // 0=发启动 1=等 busy 2=等 done
   logic        arr_page_q;
   logic [15:0] arr_cycles_q;
@@ -197,6 +205,22 @@ module cgra_top #(
   // and the engine re-executes the first descriptors of the batch.
   logic [15:0] ring_tail_n;
   assign ring_tail_n = (ring_size != 16'd0 && ring_tail >= ring_size) ? 16'd0 : ring_tail;
+
+  // 取指 bank：阵列运行时用启动时锁存的 bank；空闲时预取"下一次运行"的 bank。
+  // 下一次运行可能来自描述符（arr_imem），也可能来自寄存器启动（固定 bank0），
+  // 优先级与下面启动分支一致，保证 busy 拉高的那一拍预取的已经是正确 bank 的
+  // 第 0 行（否则会先执行旧 bank 的微码再切过去）。
+  logic imem_sel_bank;
+  always_comb begin
+    imem_sel_bank = imem_run_bank;
+    if (!busy) begin
+      if (wr_en && ((wr_addr == REG_CTRL) || (wr_addr == REG_NUM_CYCLES)))
+        imem_sel_bank = 1'b0;
+      else if (arr_req)
+        imem_sel_bank = arr_imem_q;
+    end
+  end
+  always_ff @(posedge clk) inst_flat <= imem[imem_sel_bank][imem_raddr];
 
   // descriptor buffer: 4 beats = 32 bytes (the only buffering in the engine -
   // data beats are streamed straight into / out of the scratchpad)
@@ -515,6 +539,7 @@ module cgra_top #(
           arr_en_q       <= d64_arr_en(desc_buf[3]);
           arr_en_desc_q  <= d64_arr_en(desc_buf[3]);
           arr_page_q     <= d64_arr_page(desc_buf[3]);
+          arr_imem_q     <= d64_arr_imem(desc_buf[3]);
           arr_cycles_q   <= (d64_cycles(desc_buf[3]) > 16'(MAXCYC))
                           ? 16'(MAXCYC) : d64_cycles(desc_buf[3]);
           dma_idx        <= 16'd0;
@@ -798,6 +823,9 @@ module cgra_top #(
       arr_en_q   <= 1'b0;
       arr_req    <= 1'b0;
       arr_phase  <= 2'd0;
+      arr_imem_q <= 1'b0;
+      imem_wbank <= 1'b0;
+      imem_run_bank <= 1'b0;
       desc64     <= 1'b0;
       out_en_q   <= 1'b0;
       arr_run_q  <= 1'b0;
@@ -811,6 +839,7 @@ module cgra_top #(
             busy      <= 1'b1;
             done      <= 1'b0;
             cycle_cnt <= 16'd0;
+            imem_run_bank <= 1'b0;   // 寄存器启动固定跑 bank0
           end
         end else if (wr_addr == REG_NUM_CYCLES) begin
           // "run" register: NUM_CYCLES | page<<16 | start<<31.  Doing all three
@@ -827,22 +856,25 @@ module cgra_top #(
             done      <= 1'b0;
             cycle_cnt <= 16'd0;
             buf_page  <= wr_data[16];   // page travels with the start
+            imem_run_bank <= 1'b0;      // 寄存器启动固定跑 bank0
           end
         end else if (wr_addr == REG_BUF_PAGE) begin
           buf_page <= wr_data[0];
+        end else if (wr_addr == REG_IMEM_BANK) begin
+          imem_wbank <= wr_data[0];
         end else if ((wr_addr >= REG_IMEM_BASE) &&
                      (wr_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
           // word index w = (wr_addr - base) >> 2 -> row w >> 4, lane w[3:0]
-          imem[((wr_addr - REG_IMEM_BASE) >> 6)][((wr_addr - REG_IMEM_BASE) >> 2) & 16'hF]
-              <= wr_data;
+          imem[imem_wbank][((wr_addr - REG_IMEM_BASE) >> 6)]
+                           [((wr_addr - REG_IMEM_BASE) >> 2) & 16'hF] <= wr_data;
         end
       end else if (dma_imem_we) begin
         // 拷贝引擎直接写 IMEM：一个 8B beat 装两条指令（cur 与 cur+1）
         if (DBG) $display("[cgra-imem] dma idx=%0d lo=%h hi=%h", dma_imem_idx,
                           m_axi_rdata[31:0], m_axi_rdata[63:32]);
-        imem[dma_imem_idx[12:4]][dma_imem_idx[3:0]] <= m_axi_rdata[31:0];
+        imem[imem_wbank][dma_imem_idx[12:4]][dma_imem_idx[3:0]] <= m_axi_rdata[31:0];
         if (!dma_last_odd)
-          imem[dma_imem_nidx[12:4]][dma_imem_nidx[3:0]] <= m_axi_rdata[63:32];
+          imem[imem_wbank][dma_imem_nidx[12:4]][dma_imem_nidx[3:0]] <= m_axi_rdata[63:32];
       end else if (dma_tbl_we) begin
         // 一个 8B beat 装两个 7-bit 旋转条目（低字 = 偶数下标）
         rot_tbl[dma_cur[4:0]]     <= m_axi_rdata[6:0];
@@ -854,6 +886,7 @@ module cgra_top #(
         done       <= 1'b0;
         cycle_cnt  <= 16'd0;
         buf_page   <= arr_page_q;
+        imem_run_bank <= arr_imem_q;
       end else if (busy) begin
         if (cycle_cnt == num_cycles - 16'd1) begin
           busy <= 1'b0;
@@ -1059,6 +1092,7 @@ module cgra_top #(
                           dma_bcnt[3:0]};
         7'h68: rd_data = 32'b0;
         7'h70: rd_data = {31'b0, win_err};
+        7'h74: rd_data = {31'b0, imem_wbank};
         default: rd_data = 32'b0;
       endcase
     end else if ((rd_addr >= REG_PERF_BASE) &&

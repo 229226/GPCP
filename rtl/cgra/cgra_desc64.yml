@@ -22,6 +22,7 @@ fields:
   row:       {word: 3,  hi: 31, lo: 16}    # 每行字数（0 = 线性）
   cycles:    {word: 6,  hi: 15, lo: 0}     # 阵列拍数
   arr_page:  {word: 6,  hi: 16, lo: 16}    # 阵列读哪个 spad page
+  arr_imem:  {word: 6,  hi: 17, lo: 17}    # 阵列从哪个 IMEM bank 取指（0/1）
   arr_en:    {word: 6,  hi: 31, lo: 31}    # 搬入后是否跑一次阵列
   out_len:   {word: 8,  hi: 15, lo: 0}     # 搬出字数
   out_spad:  {word: 8,  hi: 31, lo: 16}    # 搬出起点（spad 索引）

@@ -114,6 +114,7 @@ package cgra_pkg;
   localparam logic [15:0] REG_DBG_STATE = 16'h0060; // R: engine FSM state (debug)
   localparam logic [15:0] REG_DESC_MODE = 16'h0064; // W: [0] 1 = 64B 复合描述符
   localparam logic [15:0] REG_WIN_STATUS = 16'h0070; // R: [0] 输出写窗口越界（sticky）
+  localparam logic [15:0] REG_IMEM_BANK  = 16'h0074; // R/W: [0] IMEM 写/装载 bank（0/1）
                                                      // W: [0] 写 1 清除
 
   // ---------------- 每 bank 的循环旋转表（LDPC 的 CN/BN 视图转置） ----------------
