@@ -7,22 +7,29 @@
 | 总周期 | 程序从开始到结束的时钟拍数 | 仿真台架 / 程序计数器 |
 | 阵列运行次数 | `array_runs`，一次静态调度的启动 | 结果区 |
 | DMA 次数 | `dma`，一次描述符或寄存器搬运 | 结果区 |
-| 阵列忙拍数 | `busy`，阵列实际工作的拍数 | 结果区 / 性能计数器 |
-| 利用率 | `busy / cycles` | 计算 |
+| 阵列忙拍数 | `PERF_ARRAY_BUSY`，硬件计数（全跑）；不要用软件 `busy`（只含译码） | 性能计数器 |
+| 利用率 | `PERF_ARRAY_BUSY / PERF_CYCLES` | 性能计数器 |
+| CGRA 覆盖率 | 阶段 / 工作量 / 有效覆盖，定义见 `tools/cgra_coverage.py` | 同左 |
 | 按时率 | 1 ms 时隙内完成的传输块比例 | `proto/load.py` |
 
 频率校正：Verilator 周期比隐含 CPU 与 CGRA 同频。实测 CVA6 fmax 约 264 MHz，
 CGRA 约 1.05 GHz，**时间比 ≈ 周期比 × 4**。对外引用必须带这个校正。
 
-## 2. 当前基线（2026-11-16 复核）
+## 2. 当前基线（2026-11-16，ITER-1 `d082938`）
+
+逐提交的优化记录（commit / wlbench 周期 / 覆盖率 / CPU-DMA-CGRA 占比 /
+全部性能计数器）见 [iterations.md](iterations.md)。
 
 | 场景 | 周期 | 阵列运行 | DMA | 备注 |
 |---|---:|---:|---:|---|
-| `run-proto-nr_pdsch` | 3,077,988 | 1200 | 4656 | 阵列忙 216,352 拍 → 利用率 **7.03%** |
-| `run-proto-nr_pdsch_16qam` | 2,242,702 | 976 | 4656 | Qm=4 |
-| `run-proto-nr_pdsch_64qam` | 2,327,236 | 976 | 4656 | Qm=6 |
-| `run-proto-nr_pdsch_harq` | 2,622,794 | 1200 | 4656 | rv=0/2 Chase 合并 |
-| `run-pdsch-loop` | 3,222,112（台架退出拍） | 1200 | 4656 | 手写自环参照 |
+| `run-proto-nr_pdsch` | 2,649,155 | 1200 | 4656 | 阵列忙 388,384 → 利用率 **14.66%** |
+| `run-proto-nr_pdsch_16qam` | 1,813,472 | 976 | 4656 | Qm=4 |
+| `run-proto-nr_pdsch_64qam` | 1,898,439 | 976 | 4656 | Qm=6 |
+| `run-proto-nr_pdsch_harq` | 2,193,520 | 1200 | 4656 | rv=0/2 Chase 合并 |
+| `run-pdsch-loop` | 2,633,117（程序内计数） | 1200 | 4656 | 手写自环参照 |
+
+ITER-0（`da434fd`）为 3,077,988 周期 / 利用率 12.62%；早期文档里的 7.03%
+只统计了译码阶段的软件 `busy`，已废弃。
 
 其他参考数字：
 
