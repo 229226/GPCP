@@ -15,6 +15,7 @@
 #include "fft_stage_prog.h"   /* 编译器 image：与 fft_bm.c 共用 */
 #include "fft_block_prog.h"
 #include "rev4_lut.h"         /* 4096 点 base-4 位反序查表（编译期常量） */
+#include "../include/gpcp_desc64.h"   /* 字段契约生成物：setter 是唯一的位定义 */
 #define FFT_LUT_4096     3456ul
 #define FFT_LUT_1024     384ul
 #define FFT_LUT_256      0ul
@@ -47,15 +48,22 @@ static void fe_load(uint32_t which)
 static void fe_dsc(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
                    uint32_t out, uint32_t stride, uint32_t row)
 {
-    /* 描述符按 4 个 64-bit 字写：8 次 32-bit 存储减半，字段布局不变。
+    /* 32B 描述符就是 64B 描述符的前 4 个字，所以字段用同一套生成 setter 组包；
+     * 位定义只在 rtl/cgra/cgra_desc64.yml，这里不再手写掩码/移位。
+     * 先在局部缓冲组包，再一次 4 个 64-bit 字写回环（8 次 32-bit 存储减半）；
      * DESC_BASE 与 32B 步进都 8 字节对齐，可以安全用 64-bit 存。 */
     typedef uint64_t __attribute__((may_alias)) fe_u64;
+    uint32_t b[4] = {0, 0, 0, 0};
+    gpcp_d64_set_src(b, ram);
+    gpcp_d64_set_spad(b, spad);
+    gpcp_d64_set_page(b, page);
+    gpcp_d64_set_dir(b, out);
+    gpcp_d64_set_in_len(b, len);
+    gpcp_d64_set_stride(b, stride);
+    gpcp_d64_set_row(b, row);
     fe_u64 *d = (fe_u64 *)desc[f_ndesc];
-    uint64_t w1 = (spad & 0xFFFFu) | (page ? GPCP_DMA_DESC_PAGE1 : 0u) |
-                  (out ? GPCP_DMA_DESC_OUT : 0u);
-    uint64_t w3 = (stride & 0xFFFFu) | ((row & 0xFFFFu) << 16);
-    d[0] = (uint64_t)ram | (w1 << 32);
-    d[1] = (uint64_t)(len & 0xFFFFu) | (w3 << 32);
+    d[0] = (uint64_t)b[0] | ((uint64_t)b[1] << 32);
+    d[1] = (uint64_t)b[2] | ((uint64_t)b[3] << 32);
     d[2] = 0;
     d[3] = 0;
     f_ndesc++;

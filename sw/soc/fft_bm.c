@@ -69,6 +69,7 @@
  * clear of the result area at 0x8001_0000 (the linker would otherwise put a
  * 100 KB .bss right on top of it). */
 #include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#include "../include/gpcp_desc64.h"  /* 字段契约生成物：setter 是唯一的位定义 */
 #define DESC_BASE     GPCP_DESC_BASE
 #define DATA_256    0x80030000ul          /* 512 words  (2 KB) -> 0x80030800 */
 #define DATA_1024   0x80031000ul          /* 2048 words (8 KB) -> 0x80033000 */
@@ -117,12 +118,18 @@ static void load_prog(uint32_t which)
 static void dsc(uintptr_t ram, uint32_t spad, uint32_t len, uint32_t page,
                 uint32_t out, uint32_t stride, uint32_t row)
 {
+    /* 32B 描述符 = 64B 描述符的前 4 个字；字段用生成的 setter 组包，
+     * 位定义只在 rtl/cgra/cgra_desc64.yml，这里不再手写掩码/移位。 */
+    uint32_t b[4] = {0, 0, 0, 0};
+    gpcp_d64_set_src(b, (uint32_t)ram);
+    gpcp_d64_set_spad(b, spad);
+    gpcp_d64_set_page(b, page);
+    gpcp_d64_set_dir(b, out);
+    gpcp_d64_set_in_len(b, len);
+    gpcp_d64_set_stride(b, stride);
+    gpcp_d64_set_row(b, row);
     uint32_t *d = desc[n_desc];
-    d[0] = (uint32_t)ram;
-    d[1] = (spad & 0xFFFFu) | (page ? GPCP_DMA_DESC_PAGE1 : 0u) |
-           (out ? GPCP_DMA_DESC_OUT : 0u);
-    d[2] = len & 0xFFFFu;
-    d[3] = (stride & 0xFFFFu) | ((row & 0xFFFFu) << 16);
+    d[0] = b[0]; d[1] = b[1]; d[2] = b[2]; d[3] = b[3];
     d[4] = 0; d[5] = 0; d[6] = 0; d[7] = 0;
     n_desc++;
 }

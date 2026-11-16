@@ -25,6 +25,7 @@
 #include "../include/soc_io.h"
 #include "cplx_mul_prog.h"      /* 编译器生成的单抽头复乘/LS 估计 */
 #include "cplx_mul_layout.h"
+#include "../include/gpcp_desc64.h"  /* 字段契约生成物：setter 是唯一的位定义 */
 
 #define CGRA_BASE    0x50000000ul
 #define PLIC_BASE    0x0C000000ul
@@ -126,13 +127,20 @@ static void load_program(void)
 static void desc_set(int idx, uintptr_t src, uint32_t dst, uint32_t len,
                      uint32_t page, uint32_t dir_out, uint32_t stride, uint32_t row)
 {
-    desc[idx][0] = (uint32_t)src;
-    desc[idx][1] = (dst & 0xFFFFu) | (page ? GPCP_DMA_DESC_PAGE1 : 0u) |
-                   (dir_out ? GPCP_DMA_DESC_OUT : 0u) | GPCP_DMA_DESC_IRQ;
-    desc[idx][2] = len & 0xFFFFu;
-    desc[idx][3] = (stride & 0xFFFFu) | (row << 16);
-    desc[idx][4] = 0;
-    for (int i = 5; i < 8; i++)
+    /* 32B 描述符 = 64B 描述符的前 4 个字；字段用生成的 setter 组包，
+     * 位定义只在 rtl/cgra/cgra_desc64.yml。本程序每条描述符都开完成中断。 */
+    uint32_t b[4] = {0, 0, 0, 0};
+    gpcp_d64_set_src(b, (uint32_t)src);
+    gpcp_d64_set_spad(b, dst);
+    gpcp_d64_set_page(b, page);
+    gpcp_d64_set_dir(b, dir_out);
+    gpcp_d64_set_irq(b, 1);
+    gpcp_d64_set_in_len(b, len);
+    gpcp_d64_set_stride(b, stride);
+    gpcp_d64_set_row(b, row);
+    desc[idx][0] = b[0]; desc[idx][1] = b[1];
+    desc[idx][2] = b[2]; desc[idx][3] = b[3];
+    for (int i = 4; i < 8; i++)
         desc[idx][i] = 0;
 }
 

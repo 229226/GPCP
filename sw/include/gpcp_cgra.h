@@ -94,11 +94,10 @@
  *   +0x00 src (u32, 8-byte aligned)      +0x04 dst | page<<16 | dir<<17 |
  *   +0x08 len (u16 words)                       irq<<18
  *   +0x0C stride (u16) | row<<16         +0x10 status (engine writes 0xC0DE0000|len)
- *   +0x14..+0x1F reserved                                                */
+ *   +0x14..+0x1F reserved
+ * 字段位定义只在 rtl/cgra/cgra_desc64.yml；软件一律用 gpcp_desc64.h 的
+ * gpcp_d64_set_*（32B 描述符就是 64B 描述符的前 4 个字），不要再加裸位移宏。 */
 #define GPCP_DMA_DESC_BYTES   32u
-#define GPCP_DMA_DESC_PAGE1   (1u << 16)
-#define GPCP_DMA_DESC_OUT     (1u << 17)   /* scratchpad -> RAM */
-#define GPCP_DMA_DESC_IRQ     (1u << 18)   /* raise the completion interrupt */
 #define GPCP_DMA_DESC_MAGIC   0xC0DE0000u
 
 #define GPCP_CGRA_CTRL_START   (1u << 0)
