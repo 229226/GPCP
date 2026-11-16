@@ -1,10 +1,12 @@
-# Synthesis script for cpu_top (CVA6 / ariane) on Nangate45 (45 nm open cell
-# library).  Run with:  yosys -m slang -c syn/cpu_syn.tcl
+# Synthesis script for cpu_top (CVA6 / ariane).  Tech-maps onto whichever
+# liberty the Makefile selects (Nangate45 by default, sky130_fd_sc_hd with
+# PDK_NAME=sky130hd).  Run with:  yosys -m slang -c syn/cpu_top_syn.tcl
 #
 # Inputs come from the environment (see syn/Makefile):
-#   LIB    - Nangate45 typical liberty file
+#   LIB    - standard-cell liberty file
 #   OUT    - result directory
-#   ABC_D  - ABC delay target in ps (1000 / CLK_FREQ_MHZ)
+#   ABC_D  - ABC delay target
+#   HI_CELL/LO_CELL/HI_PIN/LO_PIN - constant cells of that library
 #
 # The RTL is the full CVA6 (SystemVerilog with packages and wildcard imports),
 # so the classic yosys frontend cannot parse it: read_slang (yosys-slang
@@ -60,7 +62,7 @@ foreach l $raw {
 lappend srcs [file join $ROOT syn/cpu_top.sv]
 
 yosys -import
-read_slang --top $DESIGN {*}$INCDIRS {*}$srcs
+read_slang --top $DESIGN -DSYNTHESIS {*}$INCDIRS {*}$srcs
 
 yosys proc
 opt
@@ -88,7 +90,13 @@ dfflibmap -liberty $LIB
 opt -undriven
 abc -D $ABC_D -liberty $LIB \
     -script "+strash;ifraig;retime,{D},-M,6;strash;dch,-f;map,-p,-M,1,{D},-f;topo;dnsize;buffer,-p,-N,16;upsize;"
-hilomap -singleton -hicell LOGIC1_X1 Z -locell LOGIC0_X1 Z
+# constant nets -> the library's tie cells (Nangate: LOGIC1_X1/LOGIC0_X1 pin Z,
+# sky130: sky130_fd_sc_hd__conb_1 with HI/LO outputs); env comes from the Makefile
+set HI_CELL [expr {[info exists ::env(HI_CELL)] ? $::env(HI_CELL) : "LOGIC1_X1"}]
+set LO_CELL [expr {[info exists ::env(LO_CELL)] ? $::env(LO_CELL) : "LOGIC0_X1"}]
+set HI_PIN  [expr {[info exists ::env(HI_PIN)]  ? $::env(HI_PIN)  : "Z"}]
+set LO_PIN  [expr {[info exists ::env(LO_PIN)]  ? $::env(LO_PIN)  : "Z"}]
+hilomap -singleton -hicell $HI_CELL $HI_PIN -locell $LO_CELL $LO_PIN
 setundef -zero
 opt_clean -purge
 

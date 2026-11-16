@@ -1,10 +1,12 @@
-# Synthesis script for cgra_top on Nangate45 (45 nm open cell library).
-# Run with:  yosys -c syn/cgra_syn.tcl -l build/syn/.../yosys.log
+# Synthesis script for cgra_top.  Tech-maps onto whichever liberty the Makefile
+# selects (Nangate45 by default, or sky130_fd_sc_hd with PDK_NAME=sky130hd).
+# Run with:  yosys -c syn/cgra_top_syn.tcl -l build/syn/.../yosys.log
 #
 # Inputs come from the environment (see syn/Makefile):
-#   LIB    - Nangate45 typical liberty file
+#   LIB    - standard-cell liberty file
 #   OUT    - result directory
-#   ABC_D  - ABC delay target in ps (1000 / CLK_FREQ_MHZ)
+#   ABC_D  - ABC delay target
+#   HI_CELL/LO_CELL/HI_PIN/LO_PIN - constant cells of that library
 #
 # The RTL is SystemVerilog with a package and wildcard imports, which the
 # classic yosys frontend cannot parse: read_slang (yosys-slang plugin) is used.
@@ -24,8 +26,11 @@ set ABC_D  $::env(ABC_D)
 set RTL    [file join [file dirname [info script]] .. rtl cgra]
 
 yosys -import
-read_slang --top $DESIGN $RTL/cgra_pkg.sv $RTL/cgra_pe.sv \
-           $RTL/cgra_array.sv $RTL/cgra_axi_lite.sv $RTL/cgra_top.sv
+# -DSYNTHESIS drops the simulation-only blocks (`ifndef SYNTHESIS`): the
+# transaction assertions use $error, which the slang frontend does not lower.
+read_slang --top $DESIGN -DSYNTHESIS $RTL/cgra_pkg.sv $RTL/cgra_desc_pkg.sv \
+           $RTL/cgra_pe.sv $RTL/cgra_array.sv $RTL/cgra_axi_lite.sv \
+           $RTL/cgra_top.sv
 
 yosys proc
 opt
@@ -50,7 +55,13 @@ dfflibmap -liberty $LIB
 opt -undriven
 abc -D $ABC_D -liberty $LIB \
     -script "+strash;ifraig;retime,{D},-M,6;strash;dch,-f;map,-p,-M,1,{D},-f;topo;dnsize;buffer,-p,-N,16;upsize;"
-hilomap -singleton -hicell LOGIC1_X1 Z -locell LOGIC0_X1 Z
+# constant nets -> the library's tie cells (Nangate: LOGIC1_X1/LOGIC0_X1 pin Z,
+# sky130: sky130_fd_sc_hd__conb_1 with HI/LO outputs)
+set HI_CELL [expr {[info exists ::env(HI_CELL)] ? $::env(HI_CELL) : "LOGIC1_X1"}]
+set LO_CELL [expr {[info exists ::env(LO_CELL)] ? $::env(LO_CELL) : "LOGIC0_X1"}]
+set HI_PIN  [expr {[info exists ::env(HI_PIN)]  ? $::env(HI_PIN)  : "Z"}]
+set LO_PIN  [expr {[info exists ::env(LO_PIN)]  ? $::env(LO_PIN)  : "Z"}]
+hilomap -singleton -hicell $HI_CELL $HI_PIN -locell $LO_CELL $LO_PIN
 setundef -zero
 opt_clean -purge
 

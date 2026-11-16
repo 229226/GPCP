@@ -61,14 +61,34 @@ ITER-2（`84f2f7b`）2,482,309 / 15.65%；早期文档里的 7.03% 只统计了�
 （ITER-2/3 插桩）：环执行 ~460K（阵列 216K + DMA 244K，串行）、环构建/校验
 ~148K（一次性 CPU）、`msg` 先验初始化 ~94K（CPU）。
 
-## 4. PPA（Nangate45）
+## 4. PPA（Nangate45 + sky130 HD）
 
-| 项 | 值 |
+`cgra_top` 的逻辑网表：IMEM 与 spad 两个阵列在综合前被剔除（宽字 IMEM 需要
+16 份复制宏；降成触发器会让网表爆掉），所以下表只含逻辑，存储面积单列在
+下面。两套开放 PDK 走同一个 Yosys+slang → ABC → iEDA 流程，只换 liberty：
+
+| 项 | Nangate45（45 nm，1.1 V） | sky130 HD（130 nm，1.8 V） |
+|---|---|---|
+| 标准单元库 | `NangateOpenCellLibrary_typical.lib` | `sky130_fd_sc_hd__tt_025C_1v80.lib` |
+| 逻辑面积 | 78,499 µm²（7,291 flop，占 49.3%） | 438,119 µm²（7,291 flop，占 41.8%） |
+| 单元数 | 34,398 | 40,621 |
+| 关键路径（pre-layout） | 1.429 ns | 10.762 ns |
+| 综合目标 / slack | 500 MHz（2 ns）/ +0.54 ns | 50 MHz（20 ns）/ +8.49 ns |
+| 由关键路径推得 Fmax | ≈ 700 MHz | ≈ 87 MHz |
+| 功耗（toggle 0.1，无 VCD） | 37.5 mW @ 500 MHz | 90.0 mW @ 50 MHz |
+| 复现 | `make -C syn sta CLK_FREQ_MHZ=500` | `make -C syn sta PDK_NAME=sky130hd CLK_FREQ_MHZ=50` |
+
+**口径**：两组数字都是本次在 HEAD（ITER-3）上复测的。旧记录里的 54,148 µm² /
+Fmax 1.05 GHz / 23.8 mW 是更早的 RTL（描述符契约、窗口检查、性能计数器、
+IMEM 双 bank 之前）测的，触发器从 5,072 涨到 7,291，不能与上表混用。
+
+sky130 的 90 mW 看着高，但换算成每周期能量是 1.8 µJ/cycle，对 Nangate45 的
+75 nJ/cycle 约 24×，与 `C·V²` 的 130 nm/1.8 V 对 45 nm/1.1 V 的比值（≈22×）
+一致。两条关键路径都卡在**未被扇出缓冲的高扇出网**上（sky130 那条 87 扇出、
+10.9 ns 转换），真实布线后会明显改善，此处只作 pre-layout 对比。
+
+| 存储与参考 | 值 |
 |---|---|
-| 逻辑面积 | 54,148 µm²（flop 5,072，占 49.6%） |
-| 关键路径 | 0.911 ns pre-layout → Fmax 1.05 GHz |
-| 1 GHz slack | +0.05 ns |
-| 功耗 | 23.8 / 28.7 / 32.1 mW @ 500 / 800 / 1000 MHz |
 | IMEM | 0.276 mm²（2 bank × 512×512，1R1W；ITER-2 起双 bank） |
 | spad | 约 2.6 mm²（当前每 bank 16R/16W） |
 | CPU 参考 | CVA6 fmax 约 264 MHz（关键路径在 FPU FMA） |

@@ -29,7 +29,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | P4 下行数据面（MCS 驱动 + 16QAM） | ✅ **`nr_la.py`（38.214 MCS/CQI 表 + CSI 上报 + OLLA 收敛到 10% BLER）**、**`nr_qam.py`（QPSK/16QAM/64QAM Gray 映射 + 整数 max-log LLR，三阶功率归一化）**、**`nr_pdsch_amc.py`（MCS→Qm→PDSCH 全链，5 个 MCS × rv0/2 × 2 SNR 全对，3 类注入门）**、**`run-pdsch-16qam`（`pdsch_full_bm.c -DQAM16`：16QAM max-log 软解调落硬件；4 点 `[OK]`，rv=2 → k0=492，QPSK `run-pdsch-full` 回归不变）** |
 | L1/L2 缺口补齐（本轮，模型级为主） | ✅ **HARQ/RV 软合并已上硬件**（`run-pdsch-harq`，rv=0/2 Chase 合并，4.19 M 周期）；`nr_pdcch.py`（DCI+CRC24C+Polar+RNTI 盲检）、`nr_ldpc.py`（Zc=64 分页 + 分层调度）、`nr_mimo.py`（2×2 层映射/预编码/MMSE）、`nr_mac.py`（MAC PDU + HARQ 实体）均**模型级自检通过，未落 CGRA**；剩余缺口见 §6 ；**DCI 驱动双向闭环 `nr_link.py` 已封口**（DL = PDCCH+PDSCH+PUCCH；UL = DCI reserved 10 bit UL grant 驱动的 PUSCH；−8 dB 双向 HARQ 各自救回）；**上行 PUSCH 硬件整链 `run-pusch` 已打通**（20 dB 0 errors、1040/1040 硬判、TB 80/80、3.07 M 周期） |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
-| PPA 综合（Nangate45 / Yosys+slang / iEDA-STA） | ✅ 逻辑 54,148 µm²、**Fmax 1.05 GHz**（0.911 ns pre-layout，1 GHz +0.05 ns slack）、23.8/28.7/32.1 mW @500/800/1000 MHz；IMEM 已重构为 512×512 宽字 1R1W；**spad 实测每 bank 需 16R/16W（~2.6 mm²，bank 化必须先改 kernel 数据布局）**（`docs/performance/README.md` §3.2、§4.1） |
+| PPA 综合（Nangate45 + sky130 HD / Yosys+slang / iEDA-STA） | ✅ 同一 RTL 两套 PDK（`make -C syn sta [PDK_NAME=sky130hd]`）：**HEAD 复测** Nangate45 逻辑 78,499 µm²、关键路径 1.429 ns（≈700 MHz，500 MHz +0.54 ns）、37.5 mW @500 MHz；**sky130 HD 438,119 µm²、10.762 ns（≈87 MHz，50 MHz +8.49 ns）、90.0 mW @50 MHz**；两者都是 7,291 flop、IMEM/spad 阵列剔除后只算逻辑。**旧记录 54,148 µm² / 1.05 GHz / 23.8 mW 是更早 RTL（描述符契约、性能计数器、IMEM 双 bank 之前）**；IMEM 双 bank 0.276 mm²、spad 约 2.6 mm²（16R/16W，bank 化必须先改 kernel 数据布局）（`docs/performance/README.md` §4） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
 | M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`，每跳 1 拍）+ CGRA-ME 库驱动/自动切块（`cgra/tools/`）已打通：24 槽 BN 切成 18 片在 3×3 上 **18/18 mapped**（48 s）。**规则映射器**：BN 118 拍（v0）/ **155 拍（4 PE/行 link 版，1.61×）**；**CN 172 拍单程序跑完 20 行 → `run-pdsch-bg2` 631,360 → 19,097 周期（≈33×，M1 双页重叠后）**。微码改由 `gen_bn_prog.py` / `gen_cn_prog.py` 生成，bench 只 include 头文件。CGRA-ME 仍给不出可靠落点，退火不可用。见 `docs/compiler/README.md` §7.3~§13 |
 
@@ -75,9 +75,13 @@ make proto PROTO=nr_pdcch            # 全流水：生成 -> 编译 -> 运行器
 # 3) 只跑某个基准
 env -u LD_LIBRARY_PATH make -C sim/soc run-ssbfft
 
-# 4) PPA：综合 + STA/功耗（Nangate45，~2 分钟；结果进 build/syn/<design>-<freq>MHz）
+# 4) PPA：综合 + STA/功耗（~5 分钟；结果进 build/syn/<design>[-sky130]-<freq>MHz）
 env -u LD_LIBRARY_PATH make -C syn tools                 # 一次性：拉本项目自己的 yosys+slang / iEDA / Nangate45（~2.3 GB，gitignore）
-env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
+env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500                    # Nangate45（默认）
+env -u LD_LIBRARY_PATH make -C syn tools-sky130                            # 一次性：sky130 HD liberty（13 MB）
+env -u LD_LIBRARY_PATH make -C syn sta PDK_NAME=sky130hd CLK_FREQ_MHZ=50   # sky130 HD
+# 换库只换 liberty；tie cell/单元命名/结果目录由 syn/Makefile 按 PDK_NAME 决定。
+# 只跑 STA（不重综合）：直接调 iEDA，见 docs/performance/README.md §4。
 ```
 
 验收指标（**期望输出里的关键数字**，改动后若变了要同步本文档）：
@@ -174,7 +178,7 @@ env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
 | `tools/` | 黄金模型、检查器、生成器与仿真基础设施（分类见 `tools/README.md`） | 核心：`cgra.py`（ISA/几何/自检）、`fft_plan.py`、`verify.sh`、`devlog.py`；模型：`tools/models/nr_*.py` / `ssb_*` / `wifi_ldpc.py`；检查器：`tools/checks/check_*.py`；生成器：`tools/gen/gen_*.py` |
 | `proto/` | **协议描述层（docs/protocols/README.md）**：`hll.py` 的 15 个协议动词、`check_hll.py` 的硬件无关检查、`lower.py` 的落点与可行性、`emit.py`（`plan.h` + `stimulus.bin` + `golden.json`）、`proto_eval.py`（判据/按时率/阶段占比/差距表/等价对账）、`load.py`（40 格时间轴 + 单服务器队列）、`models/` 每个场景的激励/黄金/SPEC、`scenarios/` 的场景文件、`targets/whatif-8x8.yaml` 换厨房配置 | `scenario()` / `make proto-check` / `make proto PROTO=nr_pdsch` |
 | `cgra/` | CGRA 自动映射（CGRA-ME 在仓库外）：`arch/`（8×8 与 3×3 ADL）、`dfg/`（示例 DFG） | `tools/rule_map.py`（**DFG→微码 + ISA 自检**：`--bn`/`--bn-split`/`--cn`/`--dfg`）、`tools/gen_bn_prog.py` / `tools/gen_cn_prog.py`（生成 `sw/soc/gen/pdsch_*_prog.h`）、`tools/bn_chunks.py`、`tools/map.sh`、`tools/check_rule_{bn,cn}.py`；`target.yaml`（硬件真相：几何/ISA/命名区域）与 `tools/target.py`（逻辑地址 → flat 的唯一换算层）、`tools/image_spec.py`、`tools/fft_image.py` |
-| `syn/` | PPA 流程（Yosys+slang → Nangate45 → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta CLK_FREQ_MHZ=…`）、`cgra_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/performance/README.md` |
+| `syn/` | PPA 流程（Yosys+slang → Nangate45 或 sky130 HD → iEDA STA/功耗） | `Makefile`（`make syn` / `make sta [PDK_NAME=sky130hd] CLK_FREQ_MHZ=…`）、`cgra_top_syn.tcl`、`cgra_top.sdc`；数字与局限见 `docs/performance/README.md` §4 |
 | `docs/` | 按功能块组织：`architecture/`、`compiler/`、`software/`、`protocols/`、`verification/`、`performance/`、`project/`；入口 `docs/README.md` | — |
 
 ---

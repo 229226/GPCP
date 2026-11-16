@@ -19,7 +19,7 @@
 | PDSCH（QPSK/16QAM/64QAM/HARQ） | 完成 | `run-pdsch-*`、`run-proto-nr_pdsch*` |
 | PUSCH / PUCCH / PRACH / RACH | 完成 | `run-pusch*`、`run-pucch`、`run-prach`、`run-rach` |
 | SIB1（Type0-PDCCH → PDSCH） | 完成 | `run-sib1` |
-| PPA 综合（Nangate45） | 完成 | `make -C syn sta` |
+| PPA 综合（Nangate45 + sky130 HD） | 完成 | `make -C syn sta`（Nangate45）/ `make -C syn sta PDK_NAME=sky130hd CLK_FREQ_MHZ=50` |
 | B3：Linux（OpenSBI + 6.6 + BusyBox） | 进行中 | 内核到 `late_init`，未到用户态 |
 | M3：8×8 扩展 + 自动映射 | 部分 | 8×8 ADL 与规则映射可用；自动映射不可靠 |
 

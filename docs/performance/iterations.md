@@ -34,6 +34,7 @@ clock_hz = 1,053,000,000   (backend/gpcp/clocks.json，pre-layout 综合)
 | ITER-1 | `d082938` | LDPC 微码改走拷贝引擎（DMA） | **2,649,155** | **−13.9%** | 388,384 | **14.66%** | 25.0% | 96.8% | 84.8% |
 | ITER-2 | `84f2f7b` | IMEM 双 bank（CN/BN 常驻）+ 删环路径死初始化 | 2,482,309 | −19.3% | 388,384 | 15.65% | 25.0% | 96.8% | 84.8% |
 | ITER-3 | `56df22b` | `build_tables` 只建一次（encode 已建过） | **2,351,954** | **−23.6%** | 388,384 | **16.52%** | 25.0% | 96.8% | 84.8% |
+| ITER-4 | `9251a8a` | RTL 单驱动整理（为综合入口）+ PPA 双 PDK 复测 | 2,351,954 | −23.6% | 388,384 | 16.52% | 25.0% | 96.8% | 84.8% |
 
 覆盖率来自 CPU-only 参考（`tools/cgra_coverage.py`）：阵列阶段 3/12，
 CPU 参考总计 23,714,242 拍，CGRA 总计 3,622,982 拍，阵列加速比 8.06×，
@@ -146,6 +147,21 @@ ITER-0 的 decode DMA/CPU 分项无效：当时全量快照写在 1400，12 个�
 - **剩余 decode 账**（ITER-3 实测）：阵列 216K + DMA 244K（串行）+ CPU 332K
   （环构建/校验 ~148K、`msg` 初始化 ~94K、环内轮询外的杂项 ~90K）。
 
+## ITER-4 说明
+
+- **改动（RTL）**：描述符 FSM 与阵列序列器原来同时驱动 `arr_en_q / arr_req /
+  arr_phase / arr_imem_q / desc64 / out_en_q / arr_run_q / out_run_q /
+  rep_left / rot_tbl`。Verilator 容忍多驱动，但综合入口（yosys-slang）直接报
+  “driven by always_ff procedure cannot be written to by any other process”，
+  整个 PPA 流程无法 elaborate。把 FSM 自己的复位收进 FSM 复位块、把
+  `REG_ROT_BASE` 的写搬到与 `dma_tbl_we` 同一个 always_ff。
+- **周期**：完全不变（`run-proto-nr_pdsch` 2,351,954，5 个门全过）。
+- **附带**：`read_slang` 加 `-DSYNTHESIS`（仿真专用的 `$error` 事务断言
+  不被 slang 支持），并补读 `cgra_desc_pkg.sv`。
+- **PPA 复测（HEAD）**：Nangate45 78,499 µm² / 1.429 ns / 37.5 mW @500 MHz；
+  sky130 HD 438,119 µm² / 10.762 ns / 90.0 mW @50 MHz（`README.md` §4）。
+  旧记录 54,148 µm² / 1.05 GHz 来自更早的 RTL（5,072 flop → 现 7,291）。
+
 ## 复现
 
 ```bash
@@ -162,7 +178,11 @@ python3 tools/cgra_coverage.py --scenario nr_pdsch --json
 
 # 利用率与计数器汇总
 python3 tools/cgra_utilization.py --scenario nr_pdsch --json
+
+# PPA（两套 PDK）
+env -u LD_LIBRARY_PATH make -C syn sta CLK_FREQ_MHZ=500
+env -u LD_LIBRARY_PATH make -C syn sta PDK_NAME=sky130hd CLK_FREQ_MHZ=50
 ```
 
-下一轮候选：IMEM 双缓冲（把下一段微码装载藏到当前环执行后面）与 FFT 逐
-tile 控制开销合并；见 `docs/performance/README.md` 的“优化方向”。
+下一轮候选：环内 DMA 与阵列重叠（P1 第二项）、FFT 逐 tile 控制开销合并；
+见 `docs/performance/README.md` §6。
