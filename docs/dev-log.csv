@@ -103,3 +103,7 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-15,,,60,doc,doc,账本 v4 刷新（150 行）、docs/20 动词表 / docs/21 B2.1 / docs/22 / docs/24 / docs/25 数字同步，新增 docs/26 已知门禁问题记录,0314ca0,measured,tools/verify.sh full 83/84；唯一失败 run-pdcch 为历史遗留 Polar 盲检问题，在完全干净的 HEAD 工作树上可复现（详见 docs/26），非本轮引入
 2026-11-15,,,120,rtl,feature,每 bank 循环旋转表（rot/invalid/keep）+ CN/BN 旋转微码,c7de7e9,estimate,make -C sim/cgra rot-test 9/9；默认 rot=0 行为不变
 2026-11-15,,,90,verif,infra,纯 RTL 旋转/CN/BN/描述符九项回归 + 64B/8KiB 台架,c7de7e9,estimate,rot-test 9/9；nr_pdsch/nr_pusch/nr_pdsch_harq/lte_pdsch 全 OK
+2026-11-16,,,120,verif,feature,台架护栏：--watch-writes 区间外逐字不变 + 12 组 4 KiB 尾部边界扫描,8eae9f3,measured,含旧 RTL 变异验证（返 7/8 确定性失败）；rot-test 15/15
+2026-11-16,,,180,rtl,fix,DMA 突发规划收敛为 dma_plan_burst() 唯一实现；64B 描述符字段改由 cgra_desc64.yml 生成访问器；输出写窗口 + AW/AR 对齐/4K/长度账断言,8eae9f3,measured,LDPC row10 越界根因消除；8 个 proto 场景与 15 个 bm 门禁全过
+2026-11-16,,,150,sw,feature,PDSCH 阶段内存区域契约：qs_regions 区域表 + qs_layout_check + qs_desc_validate + 阶段末 canary,8eae9f3,measured,实施中抓到 .bss 越过 0x80020000 覆盖 errs 的真实事故；环迁至 0x80042000 后门禁恢复
+2026-11-16,,,60,infra,fix,描述符环基址统一：15 个 bm + 8 个 stage 改用链接期 _ring_base；.inc 纳入公共依赖；ifft/ssb_tx 结果区上移 0x80040000 并删除 _ring_base_hi,8eae9f3,measured,run-ifft/run-ssb-tx/run-ssb 全 OK；环基址 0x80020000、链接期 ASSERT 兜底
