@@ -214,6 +214,12 @@ static uint16_t edge_off[BG2_ROWS][MAXD];
 
 static void build_tables(void)
 {
+    /* 表只由协议常量决定：encode 阶段已经建过，decode 不必再建一遍。
+     * 这个循环是 52×42×deg ≈ 11K 次条件判断，实测一次 127K 周期——纯接收
+     * 场景（没有 encode）仍然由第一次调用建好。 */
+    static int built;
+    if (built) return;
+    built = 1;
     for (uint32_t b = 0; b < BG2_COLS; b++) {
         uint8_t n = 0;
         for (uint32_t r = 0; r < BG2_ROWS; r++)
