@@ -57,7 +57,7 @@ NETLIST   := $(OUT)/$(DESIGN).netlist.syn.v
 ABC_D     := $(shell echo $$((1000 / $(CLK_FREQ_MHZ))))
 export LIB OUT CLK_FREQ_MHZ ABC_D HI_CELL LO_CELL HI_PIN LO_PIN PDK_NAME
 
-.PHONY: all tools tools-sky130 syn sta clean show cpu
+.PHONY: all tools tools-sky130 syn sta area clean show cpu
 all: sta
 
 # CPU (CVA6/ariane) PPA: synthesize the core logic fabric.  OUT, NETLIST, the
@@ -90,9 +90,19 @@ $(LIB):
 	@echo "run 'make -C syn tools' (nangate45) or 'make -C syn tools-sky130' (sky130hd)" >&2
 	@exit 1
 
+# Area distribution of the PPA netlist: registers keep their RTL names, so they
+# can be attributed to a functional block; ABC-named combinational cells cannot
+# (the slang frontend flattens at read time, see syn/area_report.py).
+area: $(NETLIST) $(LIB)
+	python3 $(ROOT)/syn/area_report.py $(NETLIST) $(LIB) | tee $(OUT)/area_groups.txt
+
+$(NETLIST):
+	$(MAKE) syn DESIGN=$(DESIGN) PDK_NAME=$(PDK_NAME) CLK_FREQ_MHZ=$(CLK_FREQ_MHZ)
+
 show:
 	@echo "area:  $(OUT)/synth_stat.txt"
 	@echo "timing: $(OUT)/$(DESIGN).rpt"
+	@echo "breakdown: $(OUT)/area_groups.txt（make area 生成）"
 
 clean:
 	rm -rf $(ROOT)/build/syn
