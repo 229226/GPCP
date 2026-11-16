@@ -51,8 +51,9 @@ static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 #define CGRA_BASE   0x50000000ul
 #define NPES        16
 #define RING_DEPTH  1024
-#define DESC_BASE   0x80020000ul
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE   GPCP_DESC_BASE
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static void wait_desc(uint32_t want)
 {
     uint32_t spins = 0, got;

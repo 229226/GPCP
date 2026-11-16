@@ -15,6 +15,7 @@ BIN     := $(OBJ_DIR)/V$(TOP)
 
 RTL_SRCS := \
 	$(RTL_DIR)/cgra_pkg.sv \
+	$(RTL_DIR)/cgra_desc_pkg.sv \
 	$(RTL_DIR)/cgra_pe.sv \
 	$(RTL_DIR)/cgra_array.sv \
 	$(RTL_DIR)/cgra_top.sv \

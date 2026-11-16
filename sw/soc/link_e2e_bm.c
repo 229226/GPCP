@@ -52,7 +52,8 @@
 /* ---- ssb_fft.inc prerequisites (shared by both chains) ---- */
 #define NPES          16
 #define RING_DEPTH    1024
-#define DESC_BASE     0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define TD_RAM        0x80400000ul
 #define NFFT          4096
 #define CP_LEN        288
@@ -136,7 +137,7 @@ static const uint32_t candidates[NCAND] = {
 #define BUF_BASE      0x80393000ul
 #define DEINT_BASE    0x80394000ul
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static uint32_t *gold_x1 = (uint32_t *)GOLD_BASE;
 static uint32_t *gold_x2 = (uint32_t *)(GOLD_BASE + 4 * GOLD_LEN);
 static int32_t *ain = (int32_t *)LC_IN_BASE;

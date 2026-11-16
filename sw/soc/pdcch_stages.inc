@@ -23,7 +23,8 @@
  * polar SC 节点微码，镜像总长 67 KB，.bss 尾部到 0x8001_0740，放在 0x8001_0000
  * 会被 .bss 压住（与 run-pusch / run-pdsch-full 同一处理，AGENTS 4.13）。 */
 #define RESULT_BASE   ((uint32_t *)0x80070000ul)
-#define DESC_BASE     0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define RING_DEPTH    1024
 
 #define PARAM_BASE    0x80600000ul        /* nr_pdcch_tx.dump_td */
@@ -87,7 +88,7 @@ static int32_t *llr_e = (int32_t *)WS(0x2000);       /* E_BITS */
 static int32_t *pre   = (int32_t *)WS(0x2800);       /* NPOL */
 static int32_t *sym   = (int32_t *)WS(0x3000);       /* 2*MAX_SYM (I,Q) */
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static uint32_t *gold_x1 = (uint32_t *)GOLD_BASE;
 static uint32_t *gold_x2 = (uint32_t *)(GOLD_BASE + 4 * GOLD_LEN);
 static int32_t *ain = (int32_t *)LC_IN_BASE;

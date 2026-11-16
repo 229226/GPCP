@@ -68,12 +68,13 @@
 /* Buffers live at fixed addresses outside .bss: the program image must stay
  * clear of the result area at 0x8001_0000 (the linker would otherwise put a
  * 100 KB .bss right on top of it). */
-#define DESC_BASE   0x80020000ul          /* 1024 descriptors x 32 B = 32 KB */
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define DATA_256    0x80030000ul          /* 512 words  (2 KB) -> 0x80030800 */
 #define DATA_1024   0x80031000ul          /* 2048 words (8 KB) -> 0x80033000 */
 #define DATA_4096   0x80034000ul          /* 8192 words (32 KB) -> 0x8003C000 */
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static int32_t *d256  = (int32_t *)DATA_256;
 static int32_t *d1024 = (int32_t *)DATA_1024;
 static int32_t *d4096 = (int32_t *)DATA_4096;

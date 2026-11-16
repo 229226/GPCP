@@ -33,12 +33,13 @@
 #define DEPTH            6               /* log2 N */
 #define AMP              3000
 
-#define DESC_BASE        0x80020000ul          /* 16 descriptors x 32 B */
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define IN_BASE          0x80030000ul          /* a[16] b[16] beta[16] */
 #define OUT_BASE         0x80100000ul          /* rotating fresh blocks */
 #define OUT_BLOCKS       160                   /* 32 words each */
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static int32_t *ain  = (int32_t *)IN_BASE;
 static int32_t *bin  = (int32_t *)(IN_BASE + 64);
 static int32_t *bet  = (int32_t *)(IN_BASE + 128);

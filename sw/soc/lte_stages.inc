@@ -21,11 +21,11 @@
 
 #define NPES          16
 #define RING_DEPTH    1024
-/* 描述符/环区放在 .bss 之上：Turbo 粗粒度微码加入后 .bss 变大，
- * 0x80020000 会与 e_bits/e_sc 重叠（FFT 状态字 0xC0DE_xxxx 写坏加扰码字）。 */
-#ifndef DESC_BASE
-#define DESC_BASE     0x80040000ul
-#endif
+/* 描述符/环区跟着 .bss 走（link.ld 的 _ring_base）：Turbo 粗粒度微码加入后
+ * .bss 变大，旧的硬编码 0x80020000 曾与 e_bits/e_sc 重叠（FFT 状态字
+ * 0xC0DE_xxxx 写坏加扰码字）。 */
+#include "../include/gpcp_ring.h"
+#define DESC_BASE     GPCP_DESC_BASE
 #define TD_RAM        0x80400000ul
 
 #define NSYM          2
@@ -64,7 +64,7 @@
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t errs, runs, dmas, busy;
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static uint32_t n_desc, done;
 
 static void wait_desc(uint32_t want)

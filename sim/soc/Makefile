@@ -27,6 +27,7 @@ INC := \
 	-Ithird_party/cva6/corev_apu/tb
 
 SRCS := rtl/cgra/cgra_pkg.sv \
+	rtl/cgra/cgra_desc_pkg.sv \
 	rtl/cgra/cgra_pe.sv \
 	rtl/cgra/cgra_array.sv \
 	rtl/cgra/cgra_top.sv \
@@ -689,7 +690,7 @@ run-ifft: all
 		--load $(ROOT)/build/sw/ifft_bm.bin@0x80000000 \
 		--load $(IFFT_TD)@0x80400000 \
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
-		--results 0x80010000 --nwords 16976 \
+		--results 0x80040000 --nwords 16976 \
 		--dump $(ROOT)/$(OBJ)/ifft_dump.txt \
 		--max-cycles 40000000
 	python3 $(ROOT)/tools/check_ifft.py $(ROOT)/$(OBJ)/ifft_dump.txt $(IFFT_TD)
@@ -722,7 +723,7 @@ run-ssb-tx: all
 		--load $(ROOT)/build/sw/ssb_tx_bm.bin@0x80000000 \
 		--load $(SSB_TX_CONJ_TD)@0x80400000 \
 		--load $(ROOT)/build/fft/twiddle.bin@0x80100000 \
-		--results 0x80010000 --nwords 35088 \
+		--results 0x80040000 --nwords 35088 \
 		--dump $(ROOT)/$(OBJ)/ssb_tx_dump.txt \
 		--max-cycles 40000000
 	python3 $(ROOT)/tools/check_ssb_tx.py $(ROOT)/$(OBJ)/ssb_tx_dump.txt $(SSB_TX_CONJ_TD) $(SSB_LOOP_TD)

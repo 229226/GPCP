@@ -45,7 +45,8 @@
 #define NPSS_RE0         56
 #define NSYM             4
 
-#define DESC_BASE        0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define PSS_REF_BASE     0x80040000ul          /* 3 x 128 words (one per N_ID2) */
 #define RX_BASE          0x80050000ul          /* 254 packed words     */
 #define OUT_BASE         0x80060000ul          /* rotating result blocks */
@@ -85,7 +86,7 @@
 #define NODE_OUT_STRIDE  32                    /* words per block              */
 #define GOLD_LEN         (NPOL + 1600 + 31)
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static int32_t *pref = (int32_t *)PSS_REF_BASE;
 static int32_t *rxp = (int32_t *)RX_BASE;
 static int32_t *oblk = (int32_t *)OUT_BASE;

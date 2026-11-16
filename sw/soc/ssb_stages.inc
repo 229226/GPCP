@@ -24,7 +24,8 @@
 #define NPSS_RE0         56
 #define NSYM             4
 
-#define DESC_BASE        0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE        GPCP_DESC_BASE
 #define PSS_REF_BASE     0x80040000ul          /* 3 x 128 words (one per N_ID2) */
 #define RX_BASE          0x80050000ul          /* 254 packed words     */
 #define OUT_BASE         0x80060000ul          /* rotating result blocks */
@@ -77,7 +78,7 @@ static uint32_t re_bin(uint32_t r)
 #define NODE_OUT_STRIDE  32                    /* words per block              */
 #define GOLD_LEN         (RM_LEN + 1600 + 31)
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static int32_t *pref = (int32_t *)PSS_REF_BASE;
 static int32_t *rxp = (int32_t *)RX_BASE;
 static int32_t *oblk = (int32_t *)OUT_BASE;
@@ -424,6 +425,8 @@ static int ss_setup(const uint32_t *par)
 {
     (void)par;
     errs = runs = n_desc = out_idx = done = dmas = busy = 0;
+    /* 环窗口必须留在 0x80030000 起的固定缓冲区（Y_BASE 等）之前。 */
+    if (DESC_BASE + RING_DEPTH * 32u > Y_BASE) errs++;
     dbg_wait = dbg_corr_spin = dbg_array_spin = dbg_nblk = 0;
     ss_nid2 = ss_nid1 = ss_dmrs_ci = 0;
     ss_sbest10 = ss_strue10 = 0;

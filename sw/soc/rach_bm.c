@@ -77,7 +77,8 @@
 /* ---- ssb_fft.inc prerequisites ---- */
 #define NPES          16
 #define RING_DEPTH    1024
-#define DESC_BASE     0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define TD_MSG        0x80400000ul
 #define TD_PRACH      0x80480000ul
 
@@ -195,7 +196,7 @@
 #define CR_ID_BYTES   6u             /* 38.321 6.2.1: 48-bit identity */
 #define CAUSE_MO_SIGNALLING 4u
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static uint32_t *gold_x1 = (uint32_t *)GOLD_BASE;
 static uint32_t *gold_x2 = (uint32_t *)(GOLD_BASE + 4 * GOLD_LEN);
 static int32_t *ain = (int32_t *)LC_IN_BASE;

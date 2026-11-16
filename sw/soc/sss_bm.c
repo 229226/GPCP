@@ -37,7 +37,8 @@
 #define TRUE_NID1        200
 #define TRUE_NID2        1
 
-#define DESC_BASE        0x80020000ul          /* 16 descriptors x 32 B */
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define RX_BASE          0x80030000ul          /* 254 words -> 0x8003_03F8 */
 #define REF_BASE         0x80030400ul          /* one 128-word block (8-byte aligned) */
 #define OUT_BASE         0x80030800ul          /* 32 words */
@@ -51,7 +52,7 @@
 #define OUT_ALL          0x80180000ul
 #define OUT_STRIDE       32
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static int32_t *rxw  = (int32_t *)RX_BASE;
 
 static int32_t *outw = (int32_t *)OUT_BASE;

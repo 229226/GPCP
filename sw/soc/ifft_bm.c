@@ -29,10 +29,11 @@
 
 #define CGRA_BASE    0x50000000ul
 #define EXIT_ADDR    0x40010000ul
-#define RESULT_BASE  ((uint32_t *)0x80010000ul)
+#define RESULT_BASE  ((uint32_t *)0x80040000ul)   /* 结果区 67 KB：挪到环(0x80020000)之上 */
 #define INPUT_BASE   0x80400000ul
 #define WORK_RAM     0x80300000ul
-#define DESC_BASE    0x80040000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define RING_DEPTH   1024
 #define NPES         16
 #define CP_LEN       288
@@ -40,7 +41,7 @@
 #define HDR_WORDS    8
 #define MAGIC        0x1FF70001ul
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static uint32_t errs, runs;
 
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }

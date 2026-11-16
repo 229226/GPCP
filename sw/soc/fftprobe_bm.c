@@ -17,7 +17,8 @@
 #define EXIT_ADDR        0x40010000ul
 #define RESULT_BASE      ((uint32_t *)0x80010000ul)
 
-#define DESC_BASE        0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define RING_DEPTH       1024
 #define FFT_N            4096
 #define SYM_BASE         0x80408000ul          /* symbol 1 of build/ssb/td.bin */
@@ -26,7 +27,7 @@
 /* globals expected by ssb_fft.inc */
 #define NPES             16
 static uint32_t prog[1];
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static uint32_t errs, runs;
 
 static void wait_desc(uint32_t want)

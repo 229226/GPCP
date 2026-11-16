@@ -49,7 +49,8 @@
 #define CH_RE            2
 #define CH_IM            1
 
-#define DESC_BASE        0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define Y_BASE           0x80030000ul          /* 4 x 240 complex = 1920 words */
 #define SSS_REF_BASE     0x80100000ul          /* 336 x 128 words */
 #define OUT_BASE         0x80200000ul          /* rotating result blocks (never revisited:
@@ -58,7 +59,7 @@
 #define OUT_BLOCKS       2048
 #define LC_IN_BASE       0x80040000ul          /* a/b/beta staging (3 x 16) */
 
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static int32_t *yw = (int32_t *)Y_BASE;
 static int32_t *sssref = (int32_t *)SSS_REF_BASE;
 static int32_t *oblk = (int32_t *)OUT_BASE;

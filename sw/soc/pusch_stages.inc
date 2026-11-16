@@ -19,7 +19,8 @@
 
 #define NPES          16
 #define RING_DEPTH    1024
-#define DESC_BASE     0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 #define TD_RAM        0x80400000ul
 #define PARAM_BASE    0x80600000ul
 
@@ -84,7 +85,7 @@ static const uint32_t rv_k0[HARQ_TX] = { 0u };
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t errs, runs, dmas, busy;
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 
 static void wait_desc(uint32_t want)
 {
@@ -125,6 +126,8 @@ static int us_setup(const uint32_t *par)
 {
     (void)par;
     errs = runs = dmas = busy = 0;
+    /* 环窗口必须留在 0x80030000 起的固定缓冲区（MSG/Y_*）之前。 */
+    if (DESC_BASE + RING_DEPTH * 32u > MSG_BASE) errs++;
     us_crc_ok = us_k0 = 0;
     us_dbg_spec_re = us_dbg_spec_im = us_dbg_yw_re = us_dbg_yw_im = 0;
     for (int i = 0; i < 8; i++) { us_raw0[i] = 0; us_descr0[i] = 0; }

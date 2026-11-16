@@ -22,6 +22,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "cgra", "tools"))
 from cgra import Program, spad_idx  # noqa: E402
+import desc64                        # noqa: E402  描述符字段（tools/gen_cgra_desc.py 生成）
 
 BIN = os.path.join(HERE, "build", "Vcgra_axi_lite")
 OUT = os.path.join(HERE, "build")
@@ -143,19 +144,24 @@ def build_cn_inputs():
     rnd = random.Random(7)
     vals = {}
     pre = []
+    real = 5
     for w in range(20):
         for k in range(10):
-            if k < 8:
+            if k < real:
                 v = rnd.randint(-5000, 5000)
             else:
                 v = SENTINEL
             vals[(k, w)] = v
-            pre.append((spad_addr(k, w), v & 0xFFFFFFFF))
         pre.append((spad_addr(30, w), SENTINEL))
-    for k in range(8):
+    # 精确复现协议 row10/word3：两个 0、123、124、-124
+    for k, v in enumerate([0, 0, 123, 124, -124]):
+        vals[(k, 3)] = v
+    for (k, w), v in vals.items():
+        pre.append((spad_addr(k, w), v & 0xFFFFFFFF))
+    for k in range(real):
         pre.append((0x0080 + k * 4, 0))
-    pre.append((0x0080 + 8 * 4, ROT_KEEP))
-    pre.append((0x0080 + 9 * 4, ROT_KEEP))
+    for k in range(real, 10):
+        pre.append((0x0080 + k * 4, ROT_KEEP))
     for k in (10, 11, 12, 30):
         pre.append((0x0080 + k * 4, 0))
     pre.append((0x006C, ZC))
@@ -168,6 +174,7 @@ def build_cn_inputs():
 
 def check_cn(spad, vals):
     bad = 0
+    real = 5
 
     def want(addr, v, what):
         nonlocal bad
@@ -184,7 +191,7 @@ def check_cn(spad, vals):
         m1, m2 = mags[0], mags[1]
         sg = -1 if sum(1 for x in col if x < 0) % 2 else 0
         for k in range(10):
-            if k >= 8:                       # keep：哨兵边不被 m' 覆盖
+            if k >= real:                    # keep：哨兵边不被 m' 覆盖
                 want(spad_addr(k, w), SENTINEL, "CN keep 哨兵边")
                 continue
             x = col[k]
@@ -285,7 +292,7 @@ def run_desc(tag, prog_path, pre_path, cycles, ring, mem):
            "--preload", pre_path, "--spad-dump", "0xA000", "832",
            "--ring-desc", ring_path, "--ring-base", "0x200", "--ring-size", "16",
            "--desc64", "--no-start", "--dma-mem", mem_path,
-           "--dma-dump", dma_dump, "--dump", dump]
+           "--dma-dump", dma_dump, "--dump", dump, "--watch-writes"]
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                        env={k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"})
     if r.returncode != 0:
@@ -681,6 +688,241 @@ def check_desc_cn4k(dma, msg, msg_addr=0xF00):
     return bad
 
 
+def _burst_plan(start, ln, beats=32, buggy=False):
+    """逐段推进 RTL 的突发规划，返回最终写到的字数（旧实现会超过 ln）。
+
+    buggy=True 复刻旧实现：dma_4k < DMA_BEATS 时直接拿"到 4 KiB 边界的拍数"
+    当突发长度（而不是取 min），传输只剩 4 拍时会多写 24 拍。
+    """
+    idx = 0
+    for _ in range(4096):
+        if idx >= ln:
+            break
+        left = ln - idx
+        nb_raw = beats if left >= 2 * beats else (left + 1) // 2
+        odd_full = (left & 1) if left < 2 * beats else 0
+        lo = (start + idx * 4) & 0xFFF
+        to4k = (4096 - lo) >> 3
+        nb = (nb_raw if to4k >= beats else max(to4k, 1)) if buggy \
+            else min(nb_raw, max(to4k, 1))
+        idx += 2 * nb - (odd_full if nb == nb_raw else 0)
+    return idx
+
+
+def build_desc_sweep(ncase=12):
+    """4 KiB 尾部扫描：挑出"旧实现会越界"的 (start, len)，每组放独立页尾。
+
+    越界会写到下一页开头（那里没有声明窗口），由台架的 --watch-writes 抓。
+    """
+    cand = []
+    for end_off in range(0xE00, 0x1000, 0x20):        # 传输结束落在页尾
+        for ln in (8, 16, 24, 32, 48, 64, 96, 128, 160, 200, 240, 260):
+            lo = end_off - ln * 4
+            if lo < 0x400 or lo >= 0x1000:
+                continue
+            if _burst_plan(lo, ln) != ln:             # 新实现必须恰好写完
+                continue
+            if _burst_plan(lo, ln, buggy=True) <= ln:  # 旧实现要越界
+                continue
+            cand.append((lo, ln))
+    cand = sorted(set(cand))
+    step = max(1, len(cand) // ncase)
+    cases = cand[::step][:ncase]
+
+    src = 0x0800
+    maxlen = max(ln for _lo, ln in cases)
+    pattern = [(0x1000 + i * 7) & 0xFFFFFFFF for i in range(maxlen)]
+    mem = [0] * 1024
+    for i, v in enumerate(pattern):
+        mem[src // 4 + i] = v
+
+    ring = []
+    for i, (lo, ln) in enumerate(cases):
+        ring.append(desc64.make(src=src, in_len=ln, out_len=ln, out_en=1,
+                                out_dst=0x2000 + i * 0x1000 + lo, rep=1))
+
+    prog_path = os.path.join(OUT, "desc_sweep_prog.hex")
+    with open(prog_path, "w") as f:
+        for _ in range(16):
+            f.write("0x00000000\n")
+    pre_path = os.path.join(OUT, "desc_sweep_preload.txt")
+    open(pre_path, "w").close()
+    return prog_path, pre_path, 1, ring, mem, cases, pattern
+
+
+def check_desc_sweep(dma, cases, pattern):
+    bad = 0
+    for i, (lo, ln) in enumerate(cases):
+        base = (0x2000 + i * 0x1000 + lo) // 4
+        for j in range(ln):
+            if dma[base + j] != pattern[j]:
+                if bad < 8:
+                    print("  FAIL sweep[%d] dst=0x%x +%d got=0x%08x want=0x%08x"
+                          % (i, base * 4, j, dma[base + j], pattern[j]))
+                bad += 1
+    return bad
+
+
+def build_desc_cn_ring84():
+    """84 条 CN 整环（42 行 × [表, 复合]），复用同一 msg/表以适配 8 KiB 模型。"""
+    import rule_map as rm
+    mc = rm.schedule_cn(writeback=True)
+    prog_path = os.path.join(OUT, "desc_cn_ring84_prog.hex")
+    with open(prog_path, "w") as f:
+        for w in mc.build():
+            f.write("0x%08x\n" % w)
+    msg_addr = 0x1800
+    mem = [0] * (msg_addr // 4 + 200)
+    for i in range(200):
+        mem[msg_addr // 4 + i] = (i * 37 - 4000) & 0xFFFFFFFF
+    ring = []
+    for _ in range(42):
+        t = [0] * 16
+        t[0] = 0x000
+        t[1] = 1 << 19
+        t[2] = 32
+        d = [0] * 16
+        d[0] = msg_addr
+        d[2] = 200
+        d[3] = 32 | (20 << 16)
+        d[6] = mc.cycles | (1 << 31)
+        d[8] = 200
+        d[9] = 1
+        d[10] = msg_addr
+        d[12] = 1
+        ring += [t, d]
+    pre = [(spad_addr(30, w), SENTINEL) for w in range(20)]
+    pre.append((0x006C, ZC))
+    pre_path = os.path.join(OUT, "desc_cn_ring84_preload.txt")
+    with open(pre_path, "w") as f:
+        for a, v in pre:
+            f.write("%04x %08x\n" % (a, v))
+    return prog_path, pre_path, mc.cycles, ring, mem
+
+
+def run_desc_ring84(tag, prog_path, pre_path, cycles, ring, mem):
+    dump = os.path.join(OUT, tag + "_dump.txt")
+    dma_dump = os.path.join(OUT, tag + "_dma.txt")
+    ring_path = os.path.join(OUT, tag + "_ring.txt")
+    mem_path = os.path.join(OUT, tag + "_mem.txt")
+    with open(ring_path, "w") as f:
+        for d in ring:
+            f.write(" ".join("0x%08x" % x for x in d) + "\n")
+    with open(mem_path, "w") as f:
+        for v in mem:
+            f.write("0x%08x\n" % v)
+    cmd = [BIN, "--prog", prog_path, "--cycles", str(cycles),
+           "--preload", pre_path, "--spad-dump", "0xA000", "832",
+           "--ring-desc", ring_path, "--ring-base", "0x200", "--ring-size", "128",
+           "--desc64", "--no-start", "--dma-mem", mem_path,
+           "--dma-dump", dma_dump, "--dump", dump]
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                       env={k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"})
+    if r.returncode != 0:
+        print(r.stdout)
+        print(r.stderr)
+        sys.exit("台架运行失败，returncode=%d" % r.returncode)
+    return r.stderr
+
+
+def build_desc_bn_ring():
+    """52 块 × 10 条 = 520 条 BN 整环，覆盖协议规模的描述符数量。"""
+    import rule_map as rm
+    mc = rm.schedule_bn_split(rows=20, rot=True)
+    prog_path = os.path.join(OUT, "desc_bn_ring_prog.hex")
+    with open(prog_path, "w") as f:
+        for w in mc.build():
+            f.write("0x%08x\n" % w)
+    n = 4
+    sh = [(e * 3 + 1) % ZC for e in range(n)]
+    rnd = random.Random(19)
+    edge_addr, llr_addr, hard_addr, table_addr = 0xE000, 0xE400, 0xE500, 0x000
+    mem = [0] * (0xE600 // 4)
+    tab = [0] * 32
+    for e in range(n):
+        tab[e] = (ZC - sh[e]) % ZC
+    for e in range(n, 24):
+        tab[e] = ROT_INVALID
+    for i in range(32):
+        mem[table_addr // 4 + i] = tab[i]
+    for e in range(n):
+        for w in range(ZC):
+            mem[(edge_addr + e * 80) // 4 + w] = rnd.randint(-3000, 3000) & 0xFFFFFFFF
+    for w in range(ZC):
+        mem[llr_addr // 4 + w] = rnd.randint(-3000, 3000) & 0xFFFFFFFF
+
+    ring = []
+    for _ in range(52):
+        t = [0] * 16
+        t[0] = table_addr
+        t[1] = 1 << 19
+        t[2] = 32
+        ring.append(t)
+        d = [0] * 16
+        d[0] = llr_addr
+        d[1] = spad_idx(24, 0)
+        d[2] = ZC
+        ring.append(d)
+        for e in range(n - 1):
+            d = [0] * 16
+            d[0] = edge_addr + e * 80
+            d[1] = spad_idx(e, 0)
+            d[2] = ZC
+            ring.append(d)
+        d = [0] * 16
+        d[0] = edge_addr + (n - 1) * 80
+        d[1] = spad_idx(n - 1, 0)
+        d[2] = ZC
+        d[6] = mc.cycles | (1 << 31)
+        d[8] = ZC
+        d[9] = 1
+        d[10] = edge_addr
+        d[12] = 1
+        ring.append(d)
+        for e in range(1, n):
+            d = [0] * 16
+            d[0] = edge_addr + e * 80
+            d[1] = spad_idx(e, 0) | (1 << 17)
+            d[2] = ZC
+            ring.append(d)
+        d = [0] * 16
+        d[0] = hard_addr
+        d[1] = spad_idx(25, 0) | (1 << 17)
+        d[2] = ZC
+        ring.append(d)
+    pre = [(0x006C, ZC)]
+    pre_path = os.path.join(OUT, "desc_bn_ring_preload.txt")
+    with open(pre_path, "w") as f:
+        for a, v in pre:
+            f.write("%04x %08x\n" % (a, v))
+    return prog_path, pre_path, mc.cycles, ring, mem
+
+
+def run_desc_bn_ring(tag, prog_path, pre_path, cycles, ring, mem):
+    dump = os.path.join(OUT, tag + "_dump.txt")
+    dma_dump = os.path.join(OUT, tag + "_dma.txt")
+    ring_path = os.path.join(OUT, tag + "_ring.txt")
+    mem_path = os.path.join(OUT, tag + "_mem.txt")
+    with open(ring_path, "w") as f:
+        for d in ring:
+            f.write(" ".join("0x%08x" % x for x in d) + "\n")
+    with open(mem_path, "w") as f:
+        for v in mem:
+            f.write("0x%08x\n" % v)
+    cmd = [BIN, "--prog", prog_path, "--cycles", str(cycles),
+           "--preload", pre_path, "--spad-dump", "0xA000", "832",
+           "--ring-desc", ring_path, "--ring-base", "0x1000", "--ring-size", "1024",
+           "--desc64", "--no-start", "--dma-mem", mem_path,
+           "--dma-dump", dma_dump, "--dump", dump, "--watch-writes"]
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                       env={k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"})
+    if r.returncode != 0:
+        print(r.stdout)
+        print(r.stderr)
+        sys.exit("台架运行失败，returncode=%d" % r.returncode)
+    return r.stderr, len(ring)
+
+
 def main():
     if not os.path.exists(BIN):
         sys.exit("先构建台架：make -C sim/cgra")
@@ -730,6 +972,15 @@ def main():
         return 1
     print("[OK] desc-cn2-test：两行连续 CN 环全部通过")
 
+    # 相邻行：row0 结束地址正好是 row1 起始地址
+    p, pr, cyc, ring, mem, rows = build_desc_cn2((0x400, 0x720), 2048)
+    _, dma = run_desc("desc_cn2_adj", p, pr, cyc, ring, mem)
+    bad = check_desc_cn2(dma, rows, (0x400, 0x720))
+    if bad:
+        print("[FAIL] desc-cn2-adj-test：%d 个值不符（相邻行被上一行输出覆盖）" % bad)
+        return 1
+    print("[OK] desc-cn2-adj-test：两行地址相邻、无越界覆盖")
+
     p, pr, cyc, ring, mem, rows = build_desc_cn2((0xA00, 0xF00), 2048)
     _, dma = run_desc("desc_cn2_4k", p, pr, cyc, ring, mem)
     bad = check_desc_cn2(dma, rows, (0xA00, 0xF00))
@@ -754,6 +1005,33 @@ def main():
         return 1
     print("[OK] desc-cn4k-partial-test：4 KiB 边界前部分 burst 全部通过")
 
+    # 回归：最后一次突发只剩 4 拍，但离 4 KiB 边界还有 28 拍。旧 RTL 会直接拿
+    # “到边界的拍数”当突发长度，把 4 拍扩成 28 拍，多写 48 个字覆盖紧邻缓冲区
+    # （协议里 msg[9] 的输出就是这样盖掉 msg[10] 的）。
+    p, pr, cyc, ring, mem, msg = build_desc_cn4k(0x1C20)
+    _, dma = run_desc("desc_cn_tail", p, pr, cyc, ring, mem)
+    bad = check_desc_cn4k(dma, msg, 0x1C20)
+    if bad:
+        print("[FAIL] desc-cn-tail-test：%d 个值不符" % bad)
+        return 1
+    tail = [i for i in range(0x1F40 // 4, 0x2000 // 4) if dma[i] != mem[i]]
+    if tail:
+        print("[FAIL] desc-cn-tail-test：末突发越界写 %d 个字（首地址 0x%x）"
+              % (len(tail), tail[0] * 4))
+        return 1
+    print("[OK] desc-cn-tail-test：末突发止于描述符长度，无越界写")
+
+    # 4 KiB 尾部扫描：旧突发规划在这些点上会多写（最坏 48 字），
+    # 台架的 --watch-writes 会报"窗口外被写"。
+    p, pr, cyc, ring, mem, cases, pattern = build_desc_sweep()
+    _, dma = run_desc("desc_sweep", p, pr, cyc, ring, mem)
+    bad = check_desc_sweep(dma, cases, pattern)
+    if bad:
+        print("[FAIL] desc-sweep-test：%d 个值不符" % bad)
+        return 1
+    print("[OK] desc-sweep-test：%d 组 4 KiB 尾部组合，数据正确且窗口外无写入"
+          % len(cases))
+
     p, pr, cyc, ring, mem, case = build_desc_bn()
     _, dma = run_desc("desc_bn", p, pr, cyc, ring, mem)
     bad = check_desc_bn(dma, case)
@@ -761,6 +1039,26 @@ def main():
         print("[FAIL] desc-bn-test：%d 个值不符" % bad)
         return 1
     print("[OK] desc-bn-test：描述符环 + 旋转 + 硬判搬出全部通过")
+
+    p, pr, cyc, ring, mem = build_desc_cn_ring84()
+    err = run_desc_ring84("desc_cn_ring84", p, pr, cyc, ring, mem)
+    m = re.search(r"\[ring\] (\d+) descriptors, size=(\d+), done=(\d+)", err)
+    if not m or int(m.group(3)) != 84:
+        print(err)
+        print("[FAIL] desc-cn-ring84-test：整环未全部退休（done=%s）" %
+              (m.group(3) if m else "?"))
+        return 1
+    print("[OK] desc-cn-ring84-test：84 条 CN 描述符整环全部退休")
+
+    p, pr, cyc, ring, mem = build_desc_bn_ring()
+    err, want = run_desc_bn_ring("desc_bn_ring", p, pr, cyc, ring, mem)
+    m = re.search(r"\[ring\] (\d+) descriptors, size=(\d+), done=(\d+)", err)
+    if not m or int(m.group(3)) != want:
+        print(err)
+        print("[FAIL] desc-bn-ring-test：整环未全部退休（done=%s / %d）" %
+              (m.group(3) if m else "?", want))
+        return 1
+    print("[OK] desc-bn-ring-test：%d 条 BN 描述符整环全部退休" % want)
     return 0
 
 

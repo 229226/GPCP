@@ -24,7 +24,8 @@
 
 #define NPES          16
 #define RING_DEPTH    1024
-#define DESC_BASE     0x80020000ul
+#include "../include/gpcp_ring.h"   /* 描述符环基址跟着 .bss 走（不再硬编码） */
+#define DESC_BASE     GPCP_DESC_BASE
 
 #define NFFT          4096
 #define CP_LEN        288
@@ -45,7 +46,7 @@
 static inline uint32_t mtime(void) { return mmio_r(0x0200BFF8ul); }
 
 static uint32_t errs, runs, dmas;
-static uint32_t (*desc)[8] = (uint32_t (*)[8])DESC_BASE;
+static uint32_t (*desc)[8] = (uint32_t (*)[8])_ring_base;
 static uint32_t gold_x1[GOLD_LEN], gold_x2[GOLD_LEN];
 
 static void wait_desc(uint32_t want)

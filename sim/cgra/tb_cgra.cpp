@@ -27,10 +27,12 @@
 #include <string>
 #include <vector>
 
+#include "../../sw/include/gpcp_desc64.h"   // 描述符字段（tools/gen_cgra_desc.py 生成）
+
 static Vcgra_axi_lite* dut = nullptr;
 static std::vector<uint32_t> g_din;
 static bool g_stream = false;
-static std::vector<uint32_t> g_dma_mem(2048, 0);   // copy-engine backing store (8 KiB, allows 4 KiB crossing tests)
+static std::vector<uint32_t> g_dma_mem(16384, 0);   // copy-engine backing store (64 KiB)
 
 // ---------------------------------------------------------------------------
 // Tiny AXI4 slave for the copy-engine master: one outstanding INCR burst,
@@ -44,7 +46,16 @@ struct AxiSlave {
     bool     b_pending = false;
 } g_slv;
 
-static uint32_t mem_w(uint32_t byte_addr) { return (byte_addr >> 2) & 0x7FF; }
+static uint32_t mem_w(uint32_t byte_addr) { return (byte_addr >> 2) & 0x3FFF; }
+
+// 性质检查用：一次传输声明允许写的内存窗口 [lo, hi)
+struct Win { uint32_t lo, hi; };
+
+static bool in_windows(const std::vector<Win>& w, uint32_t addr) {
+    for (const auto& x : w)
+        if (addr >= x.lo && addr + 4 <= x.hi) return true;
+    return false;
+}
 
 static uint64_t mem_ld64(uint32_t byte_addr) {
     return (uint64_t)g_dma_mem[mem_w(byte_addr)] |
@@ -179,6 +190,7 @@ int main(int argc, char** argv) {
     int spad_count = 0;
     bool desc64 = false;               // ring uses 64-byte composite descriptors
     bool no_start = false;             // ring already ran the array; skip the trailing RUN
+    bool watch_writes = false;         // 性质检查：窗口外的 RAM 必须逐字不变
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -198,6 +210,7 @@ int main(int argc, char** argv) {
         else if (a == "--ring-size") ring_size = (uint32_t)strtoul(next().c_str(), nullptr, 0);
         else if (a == "--desc64") desc64 = true;
         else if (a == "--no-start") no_start = true;
+        else if (a == "--watch-writes") watch_writes = true;
         else if (a == "--buf-page") buf_page = std::atoi(next().c_str());
         else if (a == "--cycles") cycles = std::atoi(next().c_str());
         else if (a == "--spad-dump") {
@@ -308,7 +321,32 @@ int main(int argc, char** argv) {
         uint32_t base_w = mem_w(ring_base);
         for (size_t i = 0; i < descs.size(); i++)
             for (size_t k = 0; k < dw; k++)
-                g_dma_mem[(base_w + (uint32_t)(i * dw + k)) & 0x3FF] = descs[i][k];
+                g_dma_mem[(base_w + (uint32_t)(i * dw + k)) & 0x3FFF] = descs[i][k];
+
+        // ---- 性质检查：描述符声明的窗口外，RAM 必须逐字不变 --------------
+        // 引擎会往每个槽的 d[4]/d[5]（槽内偏移 16）写 8 字节状态字，也列入白名单。
+        std::vector<Win> wins;
+        std::vector<uint32_t> snap;
+        size_t nchanged = 0;
+        if (watch_writes) {
+            for (size_t i = 0; i < descs.size(); i++) {
+                const uint32_t *d = descs[i].data();
+                if (desc64) {
+                    if (gpcp_d64_dir(d) && gpcp_d64_in_len(d))
+                        wins.push_back({gpcp_d64_src(d),
+                                        gpcp_d64_src(d) + 4u * gpcp_d64_in_len(d)});
+                    if (gpcp_d64_out_en(d) && gpcp_d64_out_len(d))
+                        wins.push_back({gpcp_d64_out_dst(d),
+                                        gpcp_d64_out_dst(d) + 4u * gpcp_d64_out_len(d)});
+                } else if (gpcp_d64_dir(d) && gpcp_d64_in_len(d)) {
+                    wins.push_back({gpcp_d64_src(d),
+                                    gpcp_d64_src(d) + 4u * gpcp_d64_in_len(d)});
+                }
+                uint32_t sa = ring_base + (uint32_t)(i * (desc64 ? 64 : 32)) + 16;
+                wins.push_back({sa, sa + 8});
+            }
+            snap = g_dma_mem;
+        }
         if (desc64) axil_wr(0x0064, 1);   // 64-byte composite descriptor mode
         axil_wr(0x0048, ring_base);
         axil_wr(0x004C, ring_size);
@@ -321,6 +359,33 @@ int main(int argc, char** argv) {
         axil_wr(0x0058, 0x0);
         std::fprintf(stderr, "[ring] %zu descriptors, size=%u, done=%u\n", descs.size(),
                      ring_size, axil_rd(0x005C) & 0xFFFF);
+
+        if (watch_writes) {
+            uint32_t wstat = axil_rd(0x0070);
+            if (wstat & 1u) {
+                std::fprintf(stderr,
+                             "[watch] FAIL: 硬件写窗口拦截了越界写（REG_WIN_STATUS=0x%08x）\n",
+                             wstat);
+                return 8;
+            }
+            int bad = 0;
+            for (size_t i = 0; i < g_dma_mem.size(); i++) {
+                if (g_dma_mem[i] == snap[i]) continue;
+                nchanged++;
+                uint32_t a = (uint32_t)i * 4;
+                if (in_windows(wins, a)) continue;
+                if (bad < 8)
+                    std::fprintf(stderr,
+                                 "[watch] 窗口外被写: addr=0x%04x 0x%08x -> 0x%08x\n",
+                                 a, snap[i], g_dma_mem[i]);
+                bad++;
+            }
+            if (bad) {
+                std::fprintf(stderr, "[watch] FAIL: %d 个字写在描述符窗口之外\n", bad);
+                return 7;
+            }
+            std::fprintf(stderr, "[watch] ok: %zu 个字变化，全部在声明窗口内\n", nchanged);
+        }
     }
     axil_wr(0x0020, (uint32_t)buf_page);  // array page
 

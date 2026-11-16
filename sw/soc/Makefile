@@ -15,15 +15,18 @@ PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_b
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
-# 共享运行时头：任何改动都必须触发全部基准重编，否则会悄悄跑旧二进制
+# 共享运行时头 + 阶段实现 .inc：任何改动都必须触发全部基准重编，否则会悄悄跑旧
+# 二进制（2026-11-15：改 *_stages.inc 后 make 不重建，把“描述符环基址改动”测成了
+# 一次假失败）。.inc 一律当公共依赖，保守但正确。
 COMMON_HDRS := ../include/soc_io.h ../include/gpcp_cgra.h \
-               ../include/gpcp_layout.h $(wildcard *_layout.h)
+               ../include/gpcp_layout.h ../include/gpcp_ring.h ../include/gpcp_desc64.h \
+               $(wildcard *_layout.h) $(wildcard *.inc)
 $(PROGS:%=$(BUILD)/%.elf): $(COMMON_HDRS)
 
 $(BUILD):
 	mkdir -p $@
 
-$(BUILD)/%.elf: %.c start.S link.ld | $(BUILD)
+$(BUILD)/%.elf: %.c start.S link.ld $(COMMON_HDRS) | $(BUILD)
 	env -u LD_LIBRARY_PATH $(CC) $(CFLAGS) $(LDFLAGS) start.S $< -o $@
 	env -u LD_LIBRARY_PATH $(OBJDUMP) -d $@ > $(BUILD)/$*.dis
 
@@ -233,7 +236,7 @@ $(BUILD)/proto_runner_$(PROTO)$(PROTO_SUF).elf: proto_runner.c start.S link.ld \
 		polar_word_d1_prog.h polar_word_d2_prog.h polar_word_d4_prog.h \
 		polar_word_d8_prog.h pdsch_cn_prog.h pdsch_bn_prog.h \
 		../include/ldpc_bg2.h ../include/ldpc_enc_tables.h csi_cqi_tab.h \
-		../include/perf.h \
+		../include/perf.h ../include/gpcp_ring.h ../include/gpcp_desc64.h \
 		ldpc_enc.inc pdsch_stages.inc pdsch_qam_rx_ops.inc pdcch_stages.inc csi_stages.inc zc_corr.inc mimo_stages.inc \
 		ssb_stages.inc lte_stages.inc pdsch_harq_stages.inc \
 		lte_ul_stages.inc lte_ul_dft200_tab.h lte_cell_stages.inc lte_pss_tab.h \

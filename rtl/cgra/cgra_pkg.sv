@@ -113,6 +113,8 @@ package cgra_pkg;
   localparam logic [15:0] REG_RING_DONE = 16'h005C; // R: descriptors completed so far
   localparam logic [15:0] REG_DBG_STATE = 16'h0060; // R: engine FSM state (debug)
   localparam logic [15:0] REG_DESC_MODE = 16'h0064; // W: [0] 1 = 64B 复合描述符
+  localparam logic [15:0] REG_WIN_STATUS = 16'h0070; // R: [0] 输出写窗口越界（sticky）
+                                                     // W: [0] 写 1 清除
 
   // ---------------- 每 bank 的循环旋转表（LDPC 的 CN/BN 视图转置） ----------------
   // 32 个条目，每个 7 bit：rot[4:0] / invalid[5] / keep[6]。
@@ -171,6 +173,34 @@ package cgra_pkg;
   // scratchpad address: {bank[4:0], word[4:0]} in the low 10 bits of imm
   function automatic logic [15:0] spad_addr(input logic [4:0] bank, input logic [4:0] word);
     spad_addr = {6'b0, bank, word};
+  endfunction
+
+  // ---------------- 拷贝引擎：突发规划（唯一实现） ----------------
+  // 一次传输按 AXI 规则切成若干 INCR 突发：每突发 <= DMA_BEATS 拍、不跨
+  // 4 KiB 边界、且不超过剩余字数。读通道和写通道都只消费这里的结果，
+  // 长度/奇偶/裁剪不再各算一遍（2026-11-15 的越界 bug 就出在裁剪那一步）。
+  typedef struct packed {
+    logic [7:0]  nb;    // 本突发 beat 数（1..DMA_BEATS）
+    logic        odd;   // 最后一拍只有低 32 bit（字数为奇数）
+    logic [15:0] bw;    // 本突发的字数 = 2*nb - odd
+  } dma_burst_t;
+
+  function automatic dma_burst_t dma_plan_burst(
+      input logic [15:0] wleft,   // 剩余字数
+      input logic [11:0] lo,      // 当前地址低 12 位
+      input int unsigned beats);  // DMA_BEATS
+    logic [15:0] to4k, words;
+    dma_burst_t p;
+    to4k  = (16'd4096 - {4'b0, lo}) >> 3;                 // 到 4 KiB 边界的拍数
+    words = (wleft >= 16'(2 * beats)) ? 16'(2 * beats) : wleft;
+    p.nb  = 8'((words + 16'd1) >> 1);
+    p.odd = (wleft < 16'(2 * beats)) ? wleft[0] : 1'b0;
+    if ({8'b0, p.nb} > to4k) begin                        // 4 KiB 裁剪（取 min）
+      p.nb  = 8'(to4k);
+      p.odd = 1'b0;
+    end
+    p.bw = {8'b0, p.nb} * 16'd2 - {15'b0, p.odd};
+    dma_plan_burst = p;
   endfunction
 
 endpackage

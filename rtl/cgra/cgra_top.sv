@@ -96,6 +96,7 @@ module cgra_top #(
 );
 
   import cgra_pkg::*;
+  import cgra_desc_pkg::*;   // 64B 描述符字段访问器（tools/gen_cgra_desc.py 生成）
 
   localparam int NPES   = CGRA_NPES;
   localparam int MAXCYC = CGRA_MAX_CYCLES;
@@ -201,6 +202,19 @@ module cgra_top #(
   // data beats are streamed straight into / out of the scratchpad)
   localparam int DESC_BEATS = 8;
   logic [63:0] desc_buf [0:DESC_BEATS-1];
+  // 常用描述符字段（组合；字段定义只来自 cgra_desc_pkg，RTL 里不再出现裸切片）
+  logic [31:0] d0_src, d0_out_dst;
+  logic [15:0] d1_in_len, d1_len_clamped, d4_out_len, d4_out_spad;
+  logic        d0_dir, d0_tgt_rot, d4_out_en;
+  assign d0_src         = d64_src(desc_buf[0]);
+  assign d0_dir         = d64_dir(desc_buf[0]);
+  assign d0_tgt_rot     = d64_tgt_rot(desc_buf[0]);
+  assign d1_in_len      = d64_in_len(desc_buf[1]);
+  assign d1_len_clamped = (d1_in_len > 16'd1024) ? 16'd1024 : d1_in_len;
+  assign d4_out_en      = d64_out_en(desc_buf[4]);
+  assign d4_out_len     = d64_out_len(desc_buf[4]);
+  assign d4_out_spad    = d64_out_spad(desc_buf[4]);
+  assign d0_out_dst     = d64_out_dst(desc_buf[5]);
   logic [2:0]  dma_beat;      // descriptor beat during the fetch
   logic        desc64;        // REG_DESC_MODE[0]：64 字节复合描述符
   logic        out_en_q, arr_run_q, out_run_q, arr_en_desc_q;
@@ -219,8 +233,8 @@ module cgra_top #(
 
   // burst sizing for the words that are left (clamped to the 4 KiB page so the
   // INCR burst never crosses an AXI 4 KiB boundary, and to DMA_BEATS)
-  logic [7:0]  dma_nb_raw;
-  logic [15:0] dma_wleft, dma_bw, dma_nidx, dma_4k;
+  // 规划只在 cgra_pkg::dma_plan_burst 里实现一次（长度 / 奇偶 / 4 KiB 裁剪）。
+  logic [15:0] dma_bw, dma_nidx;
   // registered burst plan: the burst length used to be derived combinationally
   // from (run_len - idx) and (src + idx*4), which was the critical path in
   // synthesis (idx -> subtract -> <=32 -> mux -> 4 KiB edge -> mux -> nb).
@@ -234,7 +248,9 @@ module cgra_top #(
   // address phase (D_AR/D_AW, at least one cycle before the first data beat).
   logic        dma_last_q;
   logic [31:0] dma_baddr;
-  logic        dma_odd, dma_odd_full, dma_last_odd;
+  logic        dma_odd, dma_last_odd;
+  // 突发规划的单一出口
+  dma_burst_t  dma_bp;
   // copy-engine FSM state (declared before dstate_q: strict SV frontends
   // reject the forward reference that Verilator tolerated)
   typedef enum logic [3:0] {
@@ -255,17 +271,12 @@ module cgra_top #(
   logic [3:0]  dstate_q;
   always_ff @(posedge clk or negedge rst_n)
     if (!rst_n) dstate_q <= D_IDLE; else dstate_q <= dstate;
-  assign dma_wleft     = dma_run_len - dma_idx;
-  assign dma_nb_raw    = (dma_wleft_q >= 16'(2 * DMA_BEATS))
-                         ? 8'(DMA_BEATS)
-                         : ((dma_wleft_q + 16'd1) >> 1);
-  assign dma_odd_full  = (dma_wleft_q < 16'(2 * DMA_BEATS)) ? dma_wleft_q[0] : 1'b0;
   assign dma_baddr     = dma_run_src + {16'b0, dma_idx} * 4;
-  assign dma_4k        = (16'd4096 - {4'b0, dma_baddr_lo_q}) >> 3;    // beats to the 4 KiB edge
-  assign dma_nb        = (dma_4k >= 16'(DMA_BEATS)) ? dma_nb_raw
-                                                    : ((dma_4k >= 16'd1) ? 8'(dma_4k) : 8'd1);
-  assign dma_odd       = (dma_nb == dma_nb_raw) ? dma_odd_full : 1'b0;
-  assign dma_bw        = {8'b0, dma_nb} * 16'd2 - {15'b0, dma_odd};
+  // nb / odd / bw 全部来自同一个规划函数（读、写通道共用）
+  assign dma_bp        = dma_plan_burst(dma_wleft_q, dma_baddr_lo_q, DMA_BEATS);
+  assign dma_nb        = dma_bp.nb;
+  assign dma_odd       = dma_bp.odd;
+  assign dma_bw        = dma_bp.bw;
   assign dma_nidx      = dma_idx + dma_bw;
   assign dma_last_odd  = dma_odd && (dma_bcnt == dma_nb - 8'd1);
 
@@ -326,6 +337,24 @@ module cgra_top #(
   logic        dma_tbl_we;
   assign dma_tbl_we = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && (dma_tgt == 2'd2);
 
+  // ---------------- 输出写窗口（DMA 的“地址空间保护”） ----------------
+  // 描述符只允许写自己声明的窗口 [win_lo, win_hi)。任何越过窗口的写拍被丢弃
+  // （wstrb=0）并置 sticky 错误位——即使描述符/突发规划算错，也写不坏相邻缓冲区。
+  logic [31:0] win_lo, win_hi;
+  logic        win_err, win_bad;
+  logic [31:0] beat_addr;
+  assign beat_addr = dma_baddr + {23'b0, dma_bcnt} * 32'd8;
+  // 奇数字数的末拍只写低 4 字节（wstrb=0x0F），窗口判定要按 4 字节算，
+  // 否则会把合法的“奇尾”判成越界、丢掉最后一个字。
+  assign win_bad   = (dstate == D_SOUT) && !wr_status &&
+                     ((beat_addr < win_lo) ||
+                      ((beat_addr + (dma_last_odd ? 32'd4 : 32'd8)) > win_hi));
+
+  // 突发字节数（给下面的断言用）
+  logic [31:0] aw_bytes, ar_bytes;
+  assign aw_bytes = 32'd8 * ({24'b0, m_axi_awlen} + 32'd1);
+  assign ar_bytes = 32'd8 * ({24'b0, m_axi_arlen} + 32'd1);
+
   // ---------------- AXI4 master ----------------
   always_comb begin
     // read channel: one INCR burst per descriptor chunk (data beats are streamed)
@@ -355,7 +384,9 @@ module cgra_top #(
     m_axi_wvalid  = (dstate == D_SOUT);
     m_axi_wdata   = wr_status ? {32'b0, DESC_STATUS_MAGIC[31:16], dma_run_len}
                               : {spad_rd_data1, spad_rd_data0};
-    m_axi_wstrb   = (wr_status || dma_last_odd) ? 8'h0F : 8'hFF;
+    // 越窗的整拍丢弃（wstrb 全 0 = 不写任何字节）
+    m_axi_wstrb   = win_bad ? 8'h00
+                            : ((wr_status || dma_last_odd) ? 8'h0F : 8'hFF);
     m_axi_wlast   = wr_status ? 1'b1 : (dma_bcnt == dma_nb - 8'd1);
     m_axi_bready  = (dstate == D_BRESP);
   end
@@ -388,6 +419,9 @@ module cgra_top #(
       dma_page    <= 1'b0;
       dma_tgt     <= 2'd0;
       rot_zc      <= 6'd32;
+      win_lo      <= 32'b0;
+      win_hi      <= 32'hFFFF_FFFF;
+      win_err     <= 1'b0;
       for (int i = 0; i < ROT_ENTRIES; i++) rot_tbl[i] <= 7'd0;
       ring_base   <= 32'b0;
       ring_size   <= 16'd0;
@@ -403,6 +437,7 @@ module cgra_top #(
       for (int i = 0; i < DESC_BEATS; i++) desc_buf[i] <= 64'b0;
     end else begin
       dma_irq_evt <= 1'b0;
+      if (win_bad) win_err <= 1'b1;
 
       if (DBG && m_axi_arvalid && m_axi_arready)
         $display("[cg-dma] AR addr=%h len=%0d rd_desc=%b", m_axi_araddr, m_axi_arlen, rd_desc);
@@ -441,46 +476,52 @@ module cgra_top #(
           end
         end
         D_DESC_SET: begin
-          dma_run_src    <= desc_buf[0][31:0];
-          dma_run_len    <= (desc_buf[1][15:0] > 16'd1024) ? 16'd1024 : desc_buf[1][15:0];
-          dma_wleft_q    <= (desc_buf[1][15:0] > 16'd1024) ? 16'd1024 : desc_buf[1][15:0];
-          dma_baddr_lo_q <= desc_buf[0][11:0];
-          dma_run_stride <= desc_buf[1][47:32];
-          dma_run_row    <= desc_buf[1][63:48];
-          dma_cur        <= desc_buf[0][47:32];
-          dma_page       <= desc_buf[0][48];
-          dma_dir        <= desc_buf[0][49];
-          desc_irq       <= desc_buf[0][50];
-          /* 描述符发起的传输默认写 scratchpad；word0[51] 置位时改为装旋转表。
+          dma_run_src    <= d0_src;
+          dma_run_len    <= d1_len_clamped;
+          dma_wleft_q    <= d1_len_clamped;
+          dma_baddr_lo_q <= d0_src[11:0];
+          dma_run_stride <= d64_stride(desc_buf[1]);
+          dma_run_row    <= d64_row(desc_buf[1]);
+          dma_cur        <= d64_spad(desc_buf[0]);
+          dma_page       <= d64_page(desc_buf[0]);
+          dma_dir        <= d0_dir;
+          desc_irq       <= d64_irq(desc_buf[0]);
+          /* 描述符发起的传输默认写 scratchpad；tgt_rot 置位时改为装旋转表。
            * dma_tgt 只由寄存器 START 的 CTRL[3] 置位，若不清，前面跑过
            * gpcp_cgra_imem_load（IMEM 目标）的程序会把之后所有 DMA 静默改道
            * 去写 IMEM，阵列只看到旧 spad 数据。 */
-          dma_tgt        <= desc_buf[0][51] ? 2'd2 : 2'd0;
+          dma_tgt        <= d0_tgt_rot ? 2'd2 : 2'd0;
+          /* 方向 = spad→RAM 的描述符：窗口就是 [src, src+len*4)，写拍只允许落在里面。
+           * 复合描述符的搬出段会在 D_OUT 里重新装载。 */
+          if (d0_dir) begin
+            win_lo <= d0_src;
+            win_hi <= d0_src + ({16'b0, d1_len_clamped} << 2);
+          end
           desc_addr      <= ring_base + (desc64 ? {ring_head, 6'b0}
                                                  : {ring_head, 5'b0});
-          in_len_q       <= desc_buf[1][15:0];
-          in_src_q       <= desc_buf[0][31:0];
-          in_dir_q       <= desc_buf[0][49];
-          out_en_q       <= desc64 ? desc_buf[4][32]   : 1'b0;
-          out_len_q      <= desc64 ? desc_buf[4][15:0] : 16'd0;
-          out_spad_q     <= desc64 ? desc_buf[4][31:16]: 16'd0;
-          out_dst_q      <= desc64 ? desc_buf[5][31:0] : 32'd0;
-          rep_left       <= (desc64 && (desc_buf[6][15:0] != 16'd0))
-                          ? desc_buf[6][15:0] : 16'd1;
-          in_step_q      <= desc64 ? desc_buf[6][31:16] : 16'd0;
-          out_step_q     <= desc64 ? desc_buf[6][47:32] : 16'd0;
+          in_len_q       <= d1_in_len;
+          in_src_q       <= d0_src;
+          in_dir_q       <= d0_dir;
+          out_en_q       <= desc64 ? d4_out_en   : 1'b0;
+          out_len_q      <= desc64 ? d4_out_len  : 16'd0;
+          out_spad_q     <= desc64 ? d4_out_spad : 16'd0;
+          out_dst_q      <= desc64 ? d0_out_dst : 32'd0;
+          rep_left       <= (desc64 && (d64_rep(desc_buf[6]) != 16'd0))
+                          ? d64_rep(desc_buf[6]) : 16'd1;
+          in_step_q      <= desc64 ? d64_in_step(desc_buf[6])  : 16'd0;
+          out_step_q     <= desc64 ? d64_out_step(desc_buf[6]) : 16'd0;
           arr_run_q      <= 1'b0;
           out_run_q      <= 1'b0;
-          arr_en_q       <= desc_buf[3][31];
-          arr_en_desc_q  <= desc_buf[3][31];
-          arr_page_q     <= desc_buf[3][16];
-          arr_cycles_q   <= (desc_buf[3][15:0] > MAXCYC) ? 16'(MAXCYC)
-                                                         : desc_buf[3][15:0];
+          arr_en_q       <= d64_arr_en(desc_buf[3]);
+          arr_en_desc_q  <= d64_arr_en(desc_buf[3]);
+          arr_page_q     <= d64_arr_page(desc_buf[3]);
+          arr_cycles_q   <= (d64_cycles(desc_buf[3]) > 16'(MAXCYC))
+                          ? 16'(MAXCYC) : d64_cycles(desc_buf[3]);
           dma_idx        <= 16'd0;
           dma_row_cnt    <= 16'd0;
           dma_bcnt       <= 8'd0;
           rd_desc        <= 1'b0;
-          dstate         <= desc_buf[0][49] ? D_AW : D_AR;
+          dstate         <= d0_dir ? D_AW : D_AR;
         end
         D_SIN: begin
           // streaming in: the beat that arrives is written to the scratchpad
@@ -599,6 +640,8 @@ module cgra_top #(
           dma_run_len    <= out_len_q;
           dma_wleft_q    <= out_len_q;
           dma_baddr_lo_q <= out_dst_q[11:0];
+          win_lo         <= out_dst_q;
+          win_hi         <= out_dst_q + ({16'b0, out_len_q} << 2);
           dma_dir        <= 1'b1;
           dma_idx        <= 16'd0;
           dma_row_cnt    <= 16'd0;
@@ -652,6 +695,7 @@ module cgra_top #(
       case (wr_addr)
         REG_ROT_ZC:     rot_zc     <= (wr_data[5:0] > 6'd32) ? 6'd32 : wr_data[5:0];
         REG_DESC_MODE:  desc64     <= wr_data[0];
+        REG_WIN_STATUS: win_err    <= wr_data[0] ? 1'b0 : win_err;
         REG_DMA_SRC:    dma_src    <= wr_data;
         REG_DMA_DST:    dma_dst    <= wr_data[15:0];
         REG_DMA_LEN:    dma_len    <= (wr_data[15:0] > 16'd1024) ? 16'd1024 : wr_data[15:0];
@@ -686,6 +730,10 @@ module cgra_top #(
             dma_run_row    <= dma_row;
             dma_wleft_q    <= dma_len;          // idx = 0 after this edge
             dma_baddr_lo_q <= dma_src[11:0];
+            if (wr_data[1]) begin               // spad→RAM：窗口 = [src, src+len*4)
+              win_lo <= dma_src;
+              win_hi <= dma_src + ({16'b0, dma_len} << 2);
+            end
             dstate <= wr_data[1] ? D_AW : D_AR;
           end
         end
@@ -695,6 +743,49 @@ module cgra_top #(
     end
     end
   end
+
+  // ---------------- 事务级断言：长度 / 窗口 / 4 KiB 的可执行契约 ----------------
+  // 只在仿真里生效（综合忽略）。任何一条触发都说明突发规划或描述符越界，
+  // 不要等到下游数据算错才发现。
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (m_axi_awvalid && m_axi_awready && !wr_status) begin
+        if (m_axi_awaddr[2:0] != 3'b0)
+          $error("[cgra] 写地址未 8 字节对齐: addr=%h", m_axi_awaddr);
+        if ({20'b0, m_axi_awaddr[11:0]} + aw_bytes > 32'd4096)
+          $error("[cgra] 写突发跨 4 KiB: addr=%h beats=%0d", m_axi_awaddr,
+                 {24'b0, m_axi_awlen} + 32'd1);
+        // 字数口径（不是字节）：奇数字数的末拍会覆盖 8 字节但只有 4 字节有效，
+        // 用字节比较会把合法的“奇尾”误判成越界。
+        if (dma_idx + dma_bw > dma_run_len)
+          $error("[cgra] 写突发越过 run_len: idx=%0d bw=%0d len=%0d",
+                 dma_idx, dma_bw, dma_run_len);
+      end
+      if (m_axi_arvalid && m_axi_arready && !rd_desc) begin
+        if (m_axi_araddr[2:0] != 3'b0)
+          $error("[cgra] 读地址未 8 字节对齐: addr=%h", m_axi_araddr);
+        if ({20'b0, m_axi_araddr[11:0]} + ar_bytes > 32'd4096)
+          $error("[cgra] 读突发跨 4 KiB: addr=%h beats=%0d", m_axi_araddr,
+                 {24'b0, m_axi_arlen} + 32'd1);
+        if (dma_idx + dma_bw > dma_run_len)
+          $error("[cgra] 读突发越过 run_len: idx=%0d bw=%0d len=%0d",
+                 dma_idx, dma_bw, dma_run_len);
+      end
+      if ((dstate == D_SIN) && m_axi_rvalid && m_axi_rready && m_axi_rlast && dma_last_q)
+        if (dma_idx + dma_bw != dma_run_len)
+          $error("[cgra] 搬入长度不符: idx=%0d bw=%0d len=%0d",
+                 dma_idx, dma_bw, dma_run_len);
+      if ((dstate == D_BRESP) && m_axi_bvalid && m_axi_bready && dma_last_q && !wr_status)
+        if (dma_idx + dma_bw != dma_run_len)
+          $error("[cgra] 搬出长度不符: idx=%0d bw=%0d len=%0d",
+                 dma_idx, dma_bw, dma_run_len);
+      if ((dstate == D_SOUT) && m_axi_wvalid && m_axi_wready && !wr_status && !win_bad)
+        if ((m_axi_wstrb != 8'hFF) && !dma_last_odd)
+          $error("[cgra] 非末拍出现部分 wstrb: bcnt=%0d nb=%0d", dma_bcnt, dma_nb);
+    end
+  end
+`endif
 
   // ---------------- array sequencer ----------------
   always_ff @(posedge clk or negedge rst_n) begin
@@ -967,6 +1058,7 @@ module cgra_top #(
         7'h60: rd_data = {16'b0, dbg_soc_state, wr_status, rd_desc, 2'b0, 4'(dstate),
                           dma_bcnt[3:0]};
         7'h68: rd_data = 32'b0;
+        7'h70: rd_data = {31'b0, win_err};
         default: rd_data = 32'b0;
       endcase
     end else if ((rd_addr >= REG_PERF_BASE) &&

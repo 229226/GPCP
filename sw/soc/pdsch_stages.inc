@@ -22,7 +22,10 @@
 
 #define NPES          16
 #define RING_DEPTH    1024
-#define DESC_BASE     0x80020000ul
+/* 描述符环放在 bn_tab（0x80041A00 结束）与 hard_all（0x80059000）之间的空闲段：
+ * 以前放在 0x80020000，程序 .bss 一长过 0x80020000 就会被描述符覆盖（errs 正好
+ * 落在 0x800203A0）。qs_layout_check() 现在把程序镜像也算作一个区域，重叠会报错。 */
+#define DESC_BASE     0x80042000ul
 #define TD_RAM        0x80400000ul
 /* 两个符号各占一块 32 KB 的频域工作区：map_to_grid 建整格的图，
  * ofdm_modulate 再逐符号做 IFFT（原程序复用一块，阶段化后必须分开）。 */
@@ -68,7 +71,7 @@
 /* LDPC BG2/Zc=20（与 ldpc_bg2.h 的 42x52 基图一致） */
 #define ZC            20
 #define MAXD          10
-#define SENTINEL      32767
+#define SENTINEL      0x40000000   /* 必须大于 LLR 饱和值（32767），否则真实饱和边与缺失边无法区分 */
 #define SENTINEL_BANK GPCP_LAYOUT_REGION_SENTINEL
 #define ITERS         8
 #define MSG_BASE      0x80030000ul
@@ -126,6 +129,9 @@ static void wait_desc(uint32_t want)
 }
 
 #include "ssb_fft.inc"          /* fft4096() + rev4() */
+#include "../include/gpcp_desc64.h"   /* 64B 描述符字段（tools/gen_cgra_desc.py 生成） */
+#include "pdsch_cn_wb_prog.h"   /* CN + 逐边 m' 回写（无 CPU reconstruct） */
+#include "pdsch_bn_rot_prog.h"  /* BN 消息 bank 走每 bank 循环旋转 */
 #ifdef PROTO_CPU_ONLY
 #include "fft_cpu.inc"          /* 对照路径：同一算法的 CVA6 标量实现 */
 #endif
@@ -242,36 +248,40 @@ static void cn_row_out(uint32_t r, uint32_t page)
 }
 
 /* 重构 + gather 合并（与 run-pdsch-iter 相同：符号用 0/-1 掩码，落位到块缓冲） */
-static void reconstruct_gather(void)
+static void reconstruct_gather_row(uint32_t r)
 {
-    for (uint32_t r = 0; r < BG2_ROWS; r++) {
-        uint32_t d = bg2_deg[r];
-        const int32_t *m1p = res_r[r][0];
-        const int32_t *m2p = res_r[r][1];
-        const int32_t *sgp = res_r[r][2];
-        for (uint32_t k = 0; k < d; k++) {
-            uint32_t sh = edge_s[r][k];
-            const int32_t *src = msg[r][k];
-            int32_t *dst = g_all + edge_off[r][k];
-            for (uint32_t j = 0; j < ZC - sh; j++) {
-                int32_t a = src[j];
-                int32_t am = a >> 31;
-                int32_t ab = (a ^ am) - am;
-                int32_t mag = (ab == m1p[j]) ? m2p[j] : m1p[j];
-                int32_t nm = am ^ sgp[j];
-                dst[sh + j] = (mag ^ nm) - nm;
-            }
-            for (uint32_t j = 0; j < sh; j++) {
-                uint32_t i = ZC - sh + j;
-                int32_t a = src[i];
-                int32_t am = a >> 31;
-                int32_t ab = (a ^ am) - am;
-                int32_t mag = (ab == m1p[i]) ? m2p[i] : m1p[i];
-                int32_t nm = am ^ sgp[i];
-                dst[j] = (mag ^ nm) - nm;
-            }
+    uint32_t d = bg2_deg[r];
+    const int32_t *m1p = res_r[r][0];
+    const int32_t *m2p = res_r[r][1];
+    const int32_t *sgp = res_r[r][2];
+    for (uint32_t k = 0; k < d; k++) {
+        uint32_t sh = edge_s[r][k];
+        const int32_t *src = msg[r][k];
+        int32_t *dst = g_all + edge_off[r][k];
+        for (uint32_t j = 0; j < ZC - sh; j++) {
+            int32_t a = src[j];
+            int32_t am = a >> 31;
+            int32_t ab = (a ^ am) - am;
+            int32_t mag = (ab == m1p[j]) ? m2p[j] : m1p[j];
+            int32_t nm = am ^ sgp[j];
+            dst[sh + j] = (mag ^ nm) - nm;
+        }
+        for (uint32_t j = 0; j < sh; j++) {
+            uint32_t i = ZC - sh + j;
+            int32_t a = src[i];
+            int32_t am = a >> 31;
+            int32_t ab = (a ^ am) - am;
+            int32_t mag = (ab == m1p[i]) ? m2p[i] : m1p[i];
+            int32_t nm = am ^ sgp[i];
+            dst[j] = (mag ^ nm) - nm;
         }
     }
+}
+
+static void reconstruct_gather(void)
+{
+    for (uint32_t r = 0; r < BG2_ROWS; r++)
+        reconstruct_gather_row(r);
 }
 
 static void bn_dma_in(uint32_t b)
@@ -819,10 +829,14 @@ static void qdsc_plain(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
     qn_desc++;
 }
 
-static void qdsc_run(void)
+static uint32_t qd_done0, qd_wait;
+
+/* 非阻塞提交：把 qn_desc 条描述符压进环，之后可以逐条 qdsc_wait_one()。
+ * CPU 在等第 r 条完成时，引擎已经在跑第 r+1 条。 */
+static void qdsc_start(void)
 {
-    uint32_t done0 = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
-    uint32_t spins = 0;
+    qd_done0 = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
+    qd_wait = 0;
     /* 描述符是 CPU 经 D-cache 写的，引擎从 RAM 读：必须先写回 */
     rt_dcache_flush();
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DESC_MODE, 1u);         /* 64 字节模式 */
@@ -832,9 +846,26 @@ static void qdsc_run(void)
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, qn_desc);
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
-    while (((mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE) - done0) & 0xFFFFu) < qn_desc) {
-        if (++spins > 8000000u) { errs++; break; }
+}
+
+static void qdsc_wait_one(void)
+{
+    uint32_t spins = 0;
+    qd_wait++;
+    /* 拷贝引擎和 CPU 共用一个 AXI 主口：SoC 只在 CPU 当拍不发请求时才把
+     * 总线让给 DMA（gpcp_soc 的 a_grant）。两查之间让出几拍。
+     * 注：改成「逐描述符中断 + wfi」实测更慢（nr_pdsch decode +67k），
+     * 一次中断进出 ~80 拍，804 次就是把省下的全吃掉；这个 SoC 上 DMA
+     * 并没有被 CPU 抢总线饿到，等待本来就是 CPU 自己在干活。 */
+    while (((mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE) - qd_done0) & 0xFFFFu) < qd_wait) {
+        for (volatile uint32_t z = 0; z < 8u; z++)
+            ;
+        if (++spins > 4000000u) { errs++; break; }
     }
+}
+
+static void qdsc_finish(void)
+{
     gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, 0u);
     runs += qn_arr;
     dmas += qn_desc;
@@ -843,55 +874,362 @@ static void qdsc_run(void)
 #endif
 }
 
-/* LDPC 的 8 次 min-sum 迭代：每轮 = CN(42 行，1 条描述符) + BN(52 列)。 */
-static int qs_decode_ring(void)
+/* LDPC 的 8 次 min-sum 迭代：tile 不再逐个由 CPU 启动，而是一次提交一个环。
+ *
+ *   CN 环：42 × (旋转表 + 复合描述符)。复合描述符自己完成「搬入 → 阵列 → 搬出」，
+ *          CPU 只在环尾等一次完成。
+ *   BN 环：52 × (表 + LLR + n 条边搬入 + 复合 + n-1 条边搬出 + 硬判)。
+ *
+ * 视图转置（CN 索引 ↔ 变量节点索引）由阵列的每 bank 旋转表在地址通路完成：
+ *   - CN 的 m' 直接回写到原 bank（keep=1 的哨兵边不写）；
+ *   - BN 的消息 bank 用 rot=(ZC-sh)%ZC 读写，缺失边 valid=0 读 0。
+ * 因此 CPU 不再有 reconstruct_gather / bn_scatter，也不再逐 tile 轮询。
+ */
+#define CN_TAB_BASE   0x8003E000ul
+#define BN_TAB_BASE   0x80040000ul
+#define HARD_ALL_BASE 0x80059000ul
+#define CN_RING_SIZE  128u             /* 42 × 2 = 84 条，2 的幂 */
+#define BN_RING_BASE  (DESC_BASE + 0x2000ul)
+#define BN_RING_SIZE  1024u
+
+static int32_t *hard_all = (int32_t *)HARD_ALL_BASE;
+static uint32_t qs_ring_n, qs_bn_n;
+static int qs_ring_ready;
+
+/* ------------------------------------------------- 内存区域契约（布局唯一声明）
+ * 谁占哪一段、多大、尾部是否有 canary。描述符提交前用它校验 src/dst 是否落在
+ * 声明区域内；阶段结束时校验 canary。这样"指针算错/长度写错"会在提交时被拦住，
+ * 而不是等下游数据算错（2026-11-15 的 row10 事故就是越界写静默改坏了邻居）。
+ * 只列 LDPC 环路径真正用到的区域；gath/bout 是 CPU 对照路径的旧缓冲，未列入。 */
+typedef struct {
+    const char *name;
+    uint32_t    base;
+    uint32_t    size;
+    uint32_t    row;        /* >0：窗口不得跨该字节边界（msg 的行） */
+    uint8_t     guard;      /* 1 = 尾部有 QS_GUARD_WORDS 个字的 canary */
+} qs_region_t;
+
+#define QS_CANARY       0xA5C3A5C3u
+#define QS_GUARD_WORDS  16u
+#define QS_REGION_N     (sizeof(qs_regions) / sizeof(qs_regions[0]))
+
+static qs_region_t qs_regions[] = {
+    { "msg",     MSG_BASE,      BG2_ROWS * MAXD * ZC * 4u, MAXD * ZC * 4u, 1 },
+    { "res",     RES_BASE,      42u * 3u * ZC * 4u,        0, 0 },
+    { "llr",     LLR_BASE,      BG2_COLS * ZC * 4u,        0, 0 },
+    { "hard",    HARD_ALL_BASE, BG2_COLS * ZC * 4u,        0, 0 },
+    { "cn_tab",  CN_TAB_BASE,   BG2_ROWS * 32u * 4u,       0, 0 },
+    { "bn_tab",  BN_TAB_BASE,   BG2_COLS * 32u * 4u,       0, 0 },
+    { "desc",    DESC_BASE,     0,                         0, 0 },
+    { "bn_desc", BN_RING_BASE,  0,                         0, 0 },
+    { "prog",    0x80000000ul,  0,                         0, 0 },  /* .text+.bss */
+};
+
+static void qs_puts(const char *s)
 {
-    uint32_t i, k, it;
+    while (*s) mmio_w(0x10000000ul, (uint32_t)(uint8_t)*s++);
+}
 
-    for (i = 0; i < ZC; i++) {
-        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
-        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i),
-               (uint32_t)SENTINEL);
+extern char _bss_end[];   /* link.ld 提供：程序镜像（text/rodata/data/bss）末尾 */
+
+static void qs_puts_hex(uint32_t v)
+{
+    static const char hx[] = "0123456789abcdef";
+    int32_t s;
+    qs_puts("0x");
+    for (s = 28; s >= 0; s -= 4) mmio_w(0x10000000ul, (uint32_t)hx[(v >> s) & 15u]);
+}
+
+static const qs_region_t *qs_region_of(uint32_t addr)
+{
+    for (uint32_t i = 0; i < QS_REGION_N; i++) {
+        const qs_region_t *r = &qs_regions[i];
+        if (r->size && addr >= r->base && addr < r->base + r->size) return r;
     }
+    return 0;
+}
 
-    for (it = 0; it < qs_decode_iters; it++) {
-        /* CN 与 BN 两套微码交替驻留，每轮都要重装 CN */
-        if (gpcp_cgra_imem_load(CGRA_BASE, cn_prog, CN_PROG_CYCLES * NPES))
-            errs++;
-        qn_desc = 0;
-        qn_arr = 0;
-        qn_busy = 0;
-        qdsc_tile((uint32_t)(uintptr_t)&msg[0][0][0], 0, MAXD * ZC, 0,
-                  GPCP_LAYOUT_WORDS, ZC, CN_PROG_CYCLES, 0,
-                  3 * ZC, GPCP_LAYOUT_REGION_MIN1 * GPCP_LAYOUT_WORDS,
-                  (uint32_t)(uintptr_t)&res_r[0][0][0],
-                  BG2_ROWS, MAXD * ZC, 3 * ZC);
-        qdsc_run();
-        rt_dcache_flush();
-        reconstruct_gather();
+static int qs_region_contains(uint32_t addr, uint32_t bytes)
+{
+    for (uint32_t i = 0; i < QS_REGION_N; i++) {
+        const qs_region_t *r = &qs_regions[i];
+        if (!r->size || addr < r->base || bytes > r->size - (addr - r->base)) continue;
+        if (r->row && ((addr - r->base) % r->row) + bytes > r->row) continue;  /* 跨行 */
+        return 1;
+    }
+    return 0;
+}
 
-        if (gpcp_cgra_imem_load(CGRA_BASE, bn_prog, BN_PROG_CYCLES * NPES))
-            errs++;
-        {
-            int want_hard = (it + 1u == qs_decode_iters);
-            qn_desc = 0;
-            qn_arr = 0;
-            qn_busy = 0;
-            for (k = 0; k < BG2_COLS; k++) {
-                uint32_t n = blk_n[k];
-                qdsc_tile((uint32_t)(uintptr_t)(g_all + k * GSPAD), 0, 25 * ZC, 0,
-                          GPCP_LAYOUT_WORDS, ZC, BN_PROG_CYCLES, 0,
-                          n * ZC, 0, (uint32_t)(uintptr_t)(b_all + k * GSPAD),
-                          1, 0, 0);
-                if (want_hard)
-                    qdsc_plain((uint32_t)(uintptr_t)(b_all + k * GSPAD + n * ZC),
-                               GPCP_SPAD_IDX(GPCP_LAYOUT_REGION_HARD, 0), ZC, 0, 1, 0, 0);
+/* 区域表自检：互不重叠，且都在 CPU 可访问的 512 KiB 窗口内。 */
+static int qs_layout_check(void)
+{
+    int bad = 0;
+    for (uint32_t i = 0; i < QS_REGION_N; i++) {
+        const qs_region_t *a = &qs_regions[i];
+        if (!a->size) continue;
+        if (a->base < 0x80000000ul || a->base + a->size > 0x80080000ul) {
+            qs_puts("qs_layout: 区域越出 CPU 窗口: "); qs_puts(a->name); qs_puts("\n");
+            bad++;
+        }
+        for (uint32_t j = i + 1; j < QS_REGION_N; j++) {
+            const qs_region_t *b = &qs_regions[j];
+            if (!b->size) continue;
+            if (a->base < b->base + b->size && b->base < a->base + a->size) {
+                qs_puts("qs_layout: 区域重叠: "); qs_puts(a->name);
+                qs_puts(" / "); qs_puts(b->name); qs_puts("\n");
+                bad++;
             }
-            qdsc_run();
-            for (k = 0; k < BG2_COLS; k++)
-                bn_scatter(k, want_hard, qs_hard[k]);
         }
     }
+    return bad;
+}
+
+static void qs_canary_arm(void)
+{
+    for (uint32_t i = 0; i < QS_REGION_N; i++) {
+        if (!qs_regions[i].guard) continue;
+        volatile uint32_t *p = (volatile uint32_t *)(qs_regions[i].base + qs_regions[i].size);
+        for (uint32_t w = 0; w < QS_GUARD_WORDS; w++) p[w] = QS_CANARY;
+    }
+}
+
+static int qs_canary_check(void)
+{
+    int bad = 0;
+    for (uint32_t i = 0; i < QS_REGION_N; i++) {
+        if (!qs_regions[i].guard) continue;
+        volatile const uint32_t *p =
+            (volatile const uint32_t *)(qs_regions[i].base + qs_regions[i].size);
+        for (uint32_t w = 0; w < QS_GUARD_WORDS; w++) {
+            if (p[w] != QS_CANARY) {
+                qs_puts("qs_canary: 区域尾部被写: "); qs_puts(qs_regions[i].name);
+                qs_puts(" +"); qs_puts_hex(w * 4u); qs_puts("\n");
+                bad++;
+                break;
+            }
+        }
+    }
+    return bad;
+}
+
+/* 描述符窗口校验：搬入/搬出窗口都必须完整落在声明区域内，长度 > 0。 */
+static int qs_desc_validate(const uint32_t *d)
+{
+    uint32_t len = gpcp_d64_in_len(d);
+    uint32_t src = gpcp_d64_src(d);
+    int ok = 1;
+    if (!len || !qs_region_contains(src, len * 4u)) {
+        const qs_region_t *rg = qs_region_of(src);
+        qs_puts("qs_desc: 搬入越界 "); qs_puts(rg ? rg->name : "?");
+        qs_puts(" src="); qs_puts_hex(src);
+        qs_puts(" len="); qs_puts_hex(len); qs_puts("\n");
+        ok = 0;
+    }
+    if (gpcp_d64_out_en(d)) {
+        uint32_t olen = gpcp_d64_out_len(d);
+        uint32_t odst = gpcp_d64_out_dst(d);
+        if (!olen || !qs_region_contains(odst, olen * 4u)) {
+            const qs_region_t *rg = qs_region_of(odst);
+            qs_puts("qs_desc: 搬出越界 "); qs_puts(rg ? rg->name : "?");
+            qs_puts(" dst="); qs_puts_hex(odst);
+            qs_puts(" len="); qs_puts_hex(olen); qs_puts("\n");
+            ok = 0;
+        }
+    }
+    return ok;
+}
+
+static uint32_t *qs_desc(void)
+{
+    uint32_t *d = (uint32_t *)DESC_BASE + 16u * qs_ring_n;
+    for (uint32_t i = 0; i < 16u; i++) d[i] = 0u;
+    qs_ring_n++;
+    return d;
+}
+
+static uint32_t *qs_desc_bn(void)
+{
+    uint32_t *d = (uint32_t *)BN_RING_BASE + 16u * qs_ring_n;
+    for (uint32_t i = 0; i < 16u; i++) d[i] = 0u;
+    qs_ring_n++;
+    return d;
+}
+
+/* 每 bank 旋转表：bit[4:0]=rot、bit5=valid、bit6=keep。 */
+static void qs_tables_build(void)
+{
+    uint32_t *ct = (uint32_t *)CN_TAB_BASE;
+    uint32_t *bt = (uint32_t *)BN_TAB_BASE;
+    for (uint32_t r = 0; r < BG2_ROWS; r++) {
+        uint32_t deg = bg2_deg[r];
+        for (uint32_t k = 0; k < 32u; k++)
+            ct[r * 32u + k] = ((k >= deg) && (k < MAXD)) ? 0x40u : 0u;
+    }
+    for (uint32_t b = 0; b < BG2_COLS; b++) {
+        uint32_t n = blk_n[b];
+        for (uint32_t e = 0; e < 32u; e++) {
+            uint32_t v = 0u;
+            if (e < n)          v = (ZC - blk_sh[b][e]) % ZC;
+            else if (e < 24u)   v = 0x20u;      /* invalid=1：缺失边读 0 */
+            bt[b * 32u + e] = v;
+        }
+    }
+}
+
+static uint32_t qs_cn_row_build(uint32_t r)
+{
+    uint32_t n0 = qs_ring_n;
+    uint32_t *d = qs_desc();                 /* 旋转表（只用于 keep 位） */
+    gpcp_d64_set_src(d, CN_TAB_BASE + r * 128u);
+    gpcp_d64_set_tgt_rot(d, 1u);
+    gpcp_d64_set_in_len(d, 32u);
+    d = qs_desc();                           /* 搬入 → CN → 搬回 */
+    gpcp_d64_set_src(d, (uint32_t)(uintptr_t)&msg[r][0][0]);
+    gpcp_d64_set_in_len(d, MAXD * ZC);
+    gpcp_d64_set_stride(d, GPCP_LAYOUT_WORDS);
+    gpcp_d64_set_row(d, ZC);
+    gpcp_d64_set_cycles(d, CN_WB_PROG_CYCLES);
+    gpcp_d64_set_arr_en(d, 1u);
+    gpcp_d64_set_out_len(d, MAXD * ZC);
+    gpcp_d64_set_out_en(d, 1u);
+    gpcp_d64_set_out_dst(d, (uint32_t)(uintptr_t)&msg[r][0][0]);
+    gpcp_d64_set_rep(d, 1u);
+    return qs_ring_n - n0;
+}
+
+static uint32_t qs_bn_block_build(uint32_t b)
+{
+    uint32_t n0 = qs_ring_n;
+    uint32_t n = blk_n[b];
+    uint32_t *d = qs_desc_bn();              /* 旋转表 */
+    gpcp_d64_set_src(d, BN_TAB_BASE + b * 128u);
+    gpcp_d64_set_tgt_rot(d, 1u);
+    gpcp_d64_set_in_len(d, 32u);
+    d = qs_desc_bn();                        /* LLR → bank 24 */
+    gpcp_d64_set_src(d, (uint32_t)(uintptr_t)&llr[b][0]);
+    gpcp_d64_set_spad(d, GPCP_SPAD_IDX(GPCP_LAYOUT_REGION_LLR, 0));
+    gpcp_d64_set_in_len(d, ZC);
+    for (uint32_t e = 0; e + 1u < n; e++) {  /* 前 n-1 条边搬入 */
+        d = qs_desc_bn();
+        gpcp_d64_set_src(d, (uint32_t)(uintptr_t)&msg[blk_r[b][e]][blk_k[b][e]][0]);
+        gpcp_d64_set_spad(d, GPCP_SPAD_IDX(e, 0));
+        gpcp_d64_set_in_len(d, ZC);
+    }
+    d = qs_desc_bn();                        /* 最后一条边 + BN + 第 0 条边搬出 */
+    gpcp_d64_set_src(d, (uint32_t)(uintptr_t)&msg[blk_r[b][n - 1u]][blk_k[b][n - 1u]][0]);
+    gpcp_d64_set_spad(d, GPCP_SPAD_IDX(n - 1u, 0));
+    gpcp_d64_set_in_len(d, ZC);
+    gpcp_d64_set_cycles(d, BN_ROT_PROG_CYCLES);
+    gpcp_d64_set_arr_en(d, 1u);
+    gpcp_d64_set_out_len(d, ZC);
+    gpcp_d64_set_out_en(d, 1u);
+    gpcp_d64_set_out_dst(d, (uint32_t)(uintptr_t)&msg[blk_r[b][0]][blk_k[b][0]][0]);
+    gpcp_d64_set_rep(d, 1u);
+    for (uint32_t e = 1; e < n; e++) {       /* 其余边搬出 */
+        d = qs_desc_bn();
+        gpcp_d64_set_src(d, (uint32_t)(uintptr_t)&msg[blk_r[b][e]][blk_k[b][e]][0]);
+        gpcp_d64_set_spad(d, GPCP_SPAD_IDX(e, 0));
+        gpcp_d64_set_dir(d, 1u);
+        gpcp_d64_set_in_len(d, ZC);
+    }
+    d = qs_desc_bn();                        /* 硬判 bank 25 → hard_all[b] */
+    gpcp_d64_set_src(d, (uint32_t)(uintptr_t)&hard_all[b * ZC]);
+    gpcp_d64_set_spad(d, GPCP_SPAD_IDX(GPCP_LAYOUT_REGION_HARD, 0));
+    gpcp_d64_set_dir(d, 1u);
+    gpcp_d64_set_in_len(d, ZC);
+    return qs_ring_n - n0;
+}
+
+static void qs_ring_submit(uint32_t base, uint32_t n, uint32_t size)
+{
+    uint32_t spins = 0;
+    uint32_t d0 = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
+    /* 描述符由 CPU 刚写入：提交前统一刷 D$，避免 DMA 读到旧 RAM。
+     * 放在 API 内部，调用方不可能漏。 */
+    rt_dcache_flush();
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DESC_MODE, 1u);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, base);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_SIZE, size);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_HEAD, 0u);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, n);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
+    while ((((mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE) - d0)) & 0xFFFFu) < n) {
+        if (++spins > 8000000u) { errs++; break; }
+    }
+    /* 硬件写窗口：任何越窗的写拍都会被丢弃并置 sticky 位。这里并进 errs 并清掉，
+     * 让门禁直接失败，而不是“静默少写”后在下游算错。 */
+    if (mmio_r(CGRA_BASE + GPCP_CGRA_WIN_STATUS) & 1u) {
+        errs++;
+        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_WIN_STATUS, 1u);
+    }
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, 0u);
+}
+
+static void qs_imem_host_load(const uint32_t *prog, uint32_t words)
+{
+    uint32_t i;
+    for (i = 0; i < words; i++)
+        gpcp_cgra_write(CGRA_BASE, 0x2000u + i * 4u, prog[i]);
+}
+
+static int qs_decode_ring(void)
+{
+    uint32_t it, r, b, i;
+
+    if (!qs_ring_ready) {
+        qs_tables_build();
+        /* 两个整环都只建一次：描述符内容不随迭代变化（msg/表地址固定），
+         * 引擎退休时只往 d[4]/d[5] 写状态字，本驱动的描述符没用到这两个字。
+         * 这样每次迭代只剩「重装 IMEM + 使能环」，CPU 不必逐 tile 重建。 */
+        qs_ring_n = 0;
+        for (r = 0; r < BG2_ROWS; r++)
+            (void)qs_cn_row_build(r);
+        uint32_t ncn = qs_ring_n;
+        qs_ring_n = 0;
+        for (b = 0; b < BG2_COLS; b++)
+            qs_bn_n += qs_bn_block_build(b);
+        /* 环的实际长度进区域表，然后做布局自检 + canary + 逐条窗口校验。 */
+        qs_regions[6].size = ncn * 64u;
+        qs_regions[7].size = qs_bn_n * 64u;
+        qs_regions[8].size = (uint32_t)(uintptr_t)_bss_end - 0x80000000ul;
+        errs += (uint32_t)qs_layout_check();
+        qs_canary_arm();
+        for (i = 0; i < ncn; i++)
+            errs += qs_desc_validate((const uint32_t *)DESC_BASE + 16u * i) ? 0u : 1u;
+        for (i = 0; i < qs_bn_n; i++)
+            errs += qs_desc_validate((const uint32_t *)BN_RING_BASE + 16u * i) ? 0u : 1u;
+        qs_ring_ready = 1;
+    }
+    /* CN 微码用 bank 30 的 +32767 初始化 min1/min2；只跑 page 0。 */
+    for (i = 0; i < ZC; i++)
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
+    /* 大块 CPU 写（msg/表/描述符）必须先排空写缓冲，否则 DMA 会读到旧 RAM。 */
+    drain_stores((const int32_t *)CN_TAB_BASE, BG2_ROWS * 32u - 1u);
+    drain_stores((const int32_t *)BN_TAB_BASE, BG2_COLS * 32u - 1u);
+    drain_stores(&msg[0][0][0], BG2_ROWS * MAXD * ZC - 1u);
+    /* 表/描述符是 CPU 经 D-cache 写的，引擎从 RAM 读：先落盘并失效 */
+    rt_dcache_flush();
+    /* 旋转表的模 = ZC；不写这个寄存器时硬件默认 32 */
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_ROT_ZC, ZC);
+
+    for (it = 0; it < qs_decode_iters; it++) {
+        qs_imem_host_load(cn_wb_prog, CN_WB_PROG_CYCLES * NPES);
+        qs_ring_submit(DESC_BASE, 2u * BG2_ROWS, CN_RING_SIZE);
+        qs_imem_host_load(bn_rot_prog, BN_ROT_PROG_CYCLES * NPES);
+        qs_ring_submit(BN_RING_BASE, qs_bn_n, BN_RING_SIZE);
+    }
+
+    rt_dcache_flush();
+    errs += (uint32_t)qs_canary_check();   /* 阶段结束：区域尾部 must 未被写 */
+    for (b = 0; b < BG2_COLS; b++)
+        for (i = 0; i < ZC; i++)
+            qs_hard[b][i] = hard_all[b * ZC + i];
+
+    runs += (BG2_ROWS + BG2_COLS) * qs_decode_iters;
+    dmas += (2u * BG2_ROWS + qs_bn_n) * qs_decode_iters;
+    busy += (BG2_ROWS * CN_WB_PROG_CYCLES +
+             BG2_COLS * BN_ROT_PROG_CYCLES) * qs_decode_iters;
     return 0;
 }
 

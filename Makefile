@@ -66,6 +66,7 @@ new-kernels-check:
 yaml-check:
 	python3 tools/check_yaml_coupling.py
 	python3 tools/check_contract.py
+	python3 tools/gen_cgra_desc.py --check
 
 # 开发工时台账：校验（每个功能/修复提交都要有记录）与汇总
 devcheck:
