@@ -53,7 +53,7 @@ python3 -m cgracc emit     --arch <name> --dfg examples/dot4.json --schedule bui
 python3 -m cgracc conformance --arch <name>
 ```
 
-- 五个正向用例（`vec_add` / `dot4` / `fft8` / `matmul4` / `bank_split`）**全绿**；
+- 六个正向用例（`vec_add` / `dot4` / `fft8` / `matmul4` / `bank_split` / `loop_dot`）**全绿**；
 - 四个负向用例必须被拒绝：
   `neg_bank`（同拍同 bank 两次读 → R6）、`neg_run`（超长 run → R3）、
   `neg_reg`（`r<registers>` 越界 → R5）、`neg_page`（array 与 dma 同页 → R9）；
@@ -67,7 +67,7 @@ python3 -m cgracc conformance --arch <name>
 | 架构特征 | 动作 |
 |---|---|
 | 静态同步拍、mesh、集中存储 | 用现有 `list`，只给 model |
-| 需要求最小 II / 有回边 | 新增 `sched/modulo.py` |
+| 需要求最小 II / 有回边 | 用现有 `modulo`（DFG 里写 `back_edges` + `trip_count`） |
 | 异构单元、绑定有类型约束 | 新增 `sched/list_typed.py` |
 | 需要精确最优（小规模） | 新增 `sched/cpsat.py` |
 

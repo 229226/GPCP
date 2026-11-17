@@ -1,11 +1,12 @@
 """Conformance suite：任何新架构接入后都必须通过的用例集。
 
-五个正向 + 四个负向：
+六个正向 + 四个负向：
   vec_add     纯计算 + 资源规模（run 长度必须等于 2）
   dot4        依赖链（run 至少 3 拍）
   fft8        存储读写 + 每 bank 端口不冲突（load/store 地址按 bank 摊开）
   matmul4     16 乘 + 12 加，验证绑定与组合
   bank_split  addr 0 与 addr W 同拍必须通过（卡住 bank 宽度，正向负例）
+  loop_dot    modulo 调度：自回边 + trip_count，II 必须 ≥ 1 且总周期合规
   neg_bank    同拍同 bank 两次读 —— **必须**报 R6
   neg_run     超长 run —— **必须**报 R3
   neg_reg     目标寄存器越界一位 —— **必须**报 R5
@@ -19,10 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from .ir.dfg import DFG, Node
+from .ir.dfg import DFG, BackEdge, Node
 from .ir.model import MachineModel
 from .ir.schedule import Schedule, Slot
 from .sched.list_sched import ListScheduler
+from .sched.modulo import ModuloScheduler
 from .verify.legality import check
 
 
@@ -148,6 +150,24 @@ def case_neg_run_too_long(model: MachineModel) -> list[str]:
     return []
 
 
+def case_loop_dot(model: MachineModel) -> list[str]:
+    """modulo 调度：mul + 自回边累加（dot product 的一个循环体）。"""
+    trip = 64
+    if trip > model.time.max_run_cycles:
+        trip = max(2, model.time.max_run_cycles // 2)
+    dfg = DFG("conformance_loop_dot", (
+        Node("mul", "mul", ("x", "c"), dst="r0"),
+        Node("acc", "add", ("acc", "mul"), dst="r1"),
+    ), back_edges=(BackEdge("acc", "acc", 1),), trip_count=trip)
+    sched = ModuloScheduler().schedule(dfg, model)
+    fails = _legal(dfg, sched, model, "loop_dot")
+    if not sched.ii or sched.ii < 1:
+        fails.append(f"loop_dot: II={sched.ii}，modulo 调度必须给出 II ≥ 1")
+    if sched.run_cycles > model.time.max_run_cycles:
+        fails.append(f"loop_dot: 总周期 {sched.run_cycles} 超过 {model.time.max_run_cycles}")
+    return fails
+
+
 def case_bank_split(model: MachineModel) -> list[str]:
     """正向负例：addr 0 与 addr words_per_bank 属于不同 bank，同拍必须通过。
 
@@ -213,6 +233,7 @@ CASES: tuple[tuple[str, Callable[[MachineModel], list[str]]], ...] = (
     ("fft8", case_fft8),
     ("matmul4", case_matmul4),
     ("bank_split", case_bank_split),
+    ("loop_dot", case_loop_dot),
     ("neg_bank", case_neg_bank_conflict),
     ("neg_run", case_neg_run_too_long),
     ("neg_reg", case_neg_reg),

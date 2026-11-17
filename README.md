@@ -22,11 +22,16 @@ python3 -m cgracc check --arch gpcp_4x4 --dfg examples/dot4.json --schedule buil
 # 4) 发射（参考发射器，输出人读的 listing，不是真微码）
 python3 -m cgracc emit --arch gpcp_4x4 --dfg examples/dot4.json --schedule build/schedule.json
 
-# 5) 接入验收：5 正向 + 4 负向（新架构必须全绿）
+# 5) 循环 kernel：modulo 调度（求启动间隔 II）
+python3 -m cgracc schedule --arch gpcp_4x4 --scheduler modulo \
+    --dfg examples/loop_dot.json -o build/loop.json
+python3 -m cgracc check --arch gpcp_4x4 --dfg examples/loop_dot.json --schedule build/loop.json
+
+# 6) 接入验收：6 正向 + 4 负向（新架构必须全绿）
 python3 -m cgracc conformance --arch gpcp_4x4
 python3 -m cgracc conformance --arch gpcp_8x8
 
-# 6) 自测
+# 7) 自测
 python3 -m unittest discover -s tests -v
 ```
 
@@ -39,16 +44,18 @@ cgracc/
     ir/dfg.py           # DFG：节点 + 依赖
     ir/schedule.py      # Schedule：每个操作 (unit, cycle, dst, addr)
     sched/base.py       # Scheduler 接口
-    sched/list_sched.py # 参考实现：列表调度（够跑通，不追求 QoR）
+    sched/list_sched.py # 参考实现：列表调度（DAG，不追求 QoR）
+    sched/modulo.py     # modulo 调度（求 II：MII = max(ResMII, RecMII)）
     verify/legality.py  # 合法性检查器（规则全部来自 model）
     emit/base.py        # Emitter 接口（通用 listing 在 emit/listing.py）
-    conformance.py      # 接入验收：5 正向 + 4 负向
+    conformance.py      # 接入验收：6 正向 + 4 负向
     cli.py              # info / conformance / schedule / check / emit
   arch/
     gpcp_4x4/           # 架构 0：GPCP 4x4（model.yaml + emitter.py）
     gpcp_8x8/           # 架构 1：只给 model.yaml（接口验证，无 RTL）
   examples/dot4.json    # 最小 DFG
   examples/wide20.json  # 20 个独立算子：看阵列规模对调度的影响
+  examples/loop_dot.json # 带自回边的循环（modulo 调度）
   docs/porting.md       # 接入新架构的 checklist
   tests/test_smoke.py   # 端到端 + 负例（必须被拒绝）
   tests/test_mutation.py # 检查器失效时，4 个负向用例必须全部失败

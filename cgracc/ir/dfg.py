@@ -1,6 +1,11 @@
 """DFG：架构无关的数据流图。
 
 节点 = 一次算子求值；边 = 值依赖（输入可以是另一个节点的 id，或寄存器名 / 常量）。
+
+循环用 `back_edges` 表达：`BackEdge(src, dst, distance)` 表示"第 i 次迭代的
+dst 读第 i-distance 次迭代的 src"。回边**不**参与前向拓扑排序，因此 DFG 本身
+仍然是 DAG；它只影响 modulo 调度的 RecMII 与合法性检查（R7）。
+
 这一层不允许出现任何物理地址、bank、拍号——那些属于 Schedule。
 """
 from __future__ import annotations
@@ -21,9 +26,18 @@ class Node:
 
 
 @dataclass(frozen=True)
+class BackEdge:
+    src: str                          # 生产者的节点 id
+    dst: str                          # 消费者的节点 id
+    distance: int = 1                 # 迭代距离 d：dst 在第 i 次迭代读 src 的第 i-d 次
+
+
+@dataclass(frozen=True)
 class DFG:
     name: str
     nodes: tuple[Node, ...] = field(default_factory=tuple)
+    back_edges: tuple[BackEdge, ...] = field(default_factory=tuple)
+    trip_count: int = 1               # 循环迭代次数（非循环 kernel = 1）
 
     def node(self, nid: str) -> Node:
         for n in self.nodes:
@@ -31,28 +45,29 @@ class DFG:
                 return n
         raise KeyError(f"DFG 里没有节点 '{nid}'")
 
-    def producers(self) -> dict[str, str]:
-        """node id -> 生产它的节点 id（只统计节点间依赖）。"""
-        ids = {n.id for n in self.nodes}
-        prod: dict[str, str] = {}
-        for n in self.nodes:
-            for src in n.inputs:
-                if src in ids:
-                    prod[src] = n.id
-        return prod
+    def back_edge_pairs(self) -> set[tuple[str, str]]:
+        """(src, dst) 集合：这些输入不是前向边。"""
+        return {(e.src, e.dst) for e in self.back_edges}
 
-    def topo_order(self) -> list[Node]:
+    def forward_edges(self) -> dict[str, list[str]]:
         ids = {n.id for n in self.nodes}
-        indeg: dict[str, int] = {n.id: 0 for n in self.nodes}
+        back = self.back_edge_pairs()
         succ: dict[str, list[str]] = {n.id: [] for n in self.nodes}
         for n in self.nodes:
             for src in n.inputs:
-                if src in ids:
-                    indeg[n.id] += 1
+                if src in ids and (src, n.id) not in back:
                     succ[src].append(n.id)
+        return succ
+
+    def topo_order(self) -> list[Node]:
+        succ = self.forward_edges()
+        indeg = {n.id: 0 for n in self.nodes}
+        for src, outs in succ.items():
+            for s in outs:
+                indeg[s] += 1
         ready = [nid for nid, d in indeg.items() if d == 0]
-        out: list[Node] = []
         by_id = {n.id: n for n in self.nodes}
+        out: list[Node] = []
         while ready:
             nid = ready.pop(0)
             out.append(by_id[nid])
@@ -61,7 +76,7 @@ class DFG:
                 if indeg[s] == 0:
                     ready.append(s)
         if len(out) != len(self.nodes):
-            raise ValueError(f"DFG '{self.name}' 有环，无法调度")
+            raise ValueError(f"DFG '{self.name}' 的前向边有环（循环请用 back_edges）")
         return out
 
 
@@ -81,4 +96,14 @@ def load_dfg(path: str | Path) -> DFG:
     ids = [n.id for n in nodes]
     if len(ids) != len(set(ids)):
         raise ValueError(f"DFG '{raw['name']}' 有重复节点 id")
-    return DFG(name=str(raw["name"]), nodes=nodes)
+    back = tuple(
+        BackEdge(str(e["src"]), str(e["dst"]), int(e.get("distance", 1)))
+        for e in raw.get("back_edges", ())
+    )
+    for e in back:
+        if e.distance < 1:
+            raise ValueError(f"回边 {e.src}->{e.dst} 的 distance 必须 ≥ 1")
+        if e.src not in ids or e.dst not in ids:
+            raise ValueError(f"回边 {e.src}->{e.dst} 引用了不存在的节点")
+    return DFG(name=str(raw["name"]), nodes=nodes, back_edges=back,
+               trip_count=int(raw.get("trip_count", 1)))

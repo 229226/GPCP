@@ -28,6 +28,7 @@ class Schedule:
     name: str
     run_cycles: int = 0
     slots: tuple[Slot, ...] = field(default_factory=tuple)
+    ii: int | None = None             # modulo 调度的启动间隔；None = 非流水调度
 
     def slot(self, nid: str) -> Slot:
         for s in self.slots:
@@ -36,12 +37,14 @@ class Schedule:
         raise KeyError(f"Schedule 里没有节点 '{nid}'")
 
     def cycles(self) -> int:
+        """kernel 跨度（不是循环总周期；总周期看 run_cycles）。"""
         return max((s.cycle for s in self.slots), default=-1) + 1
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
             "run_cycles": self.run_cycles or self.cycles(),
+            "ii": self.ii,
             "slots": [asdict(s) for s in self.slots],
         }
 
@@ -54,5 +57,7 @@ class Schedule:
 def load_schedule(path: str | Path) -> Schedule:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     slots = tuple(Slot(**s) for s in raw.get("slots", []))
+    ii = raw.get("ii")
     return Schedule(name=str(raw.get("name", "schedule")),
-                    run_cycles=int(raw.get("run_cycles", 0)), slots=slots)
+                    run_cycles=int(raw.get("run_cycles", 0)), slots=slots,
+                    ii=None if ii is None else int(ii))

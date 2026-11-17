@@ -17,7 +17,8 @@ class ListingEmitter(Emitter):
         nodes = {n.id: n for n in dfg.nodes}
         lines = [
             f"# {model.name} reference listing (not the real machine encoding)",
-            f"# dfg={dfg.name} run_cycles={schedule.run_cycles} slots={len(schedule.slots)}",
+            f"# dfg={dfg.name} run_cycles={schedule.run_cycles} "
+            f"span={schedule.cycles()} ii={schedule.ii or '-'} slots={len(schedule.slots)}",
             "",
             f"{'cyc':>4}  {'unit':>4}  {'op':<5} {'dst':<4} {'srcs':<18} {'addr':>8}",
         ]
