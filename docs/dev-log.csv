@@ -125,3 +125,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-17,,,120,verif,fix,修复 ITER-5 回归：10*bank 非双射改为 5×5 GF(2) 双射 + 读端口冲突漏检,457540f,estimate,kernels 15/15；10 个 SoC 门 0 冲突；slow 85 passed / 0 failed / 1083 s
 2026-11-17,,,50,synth,feature,ITER-6 双 PDK PPA 复测与面积分布刷新,457540f,measured,"Nangate45 87,306 µm²/1.573 ns/41.0 mW；sky130 499,869 µm²/9.341 ns/95.9 mW；均 7,504 flop"
 2026-11-17,,,90,synth,experiment,IMEM 宏化实验：16 × fakeram45_512x64 lane 拆分 + 宏 liberty 接入（IMEM_MACRO=1，默认关闭）,afdfb8e,estimate,"netlist 16 宏 / 宏面积 276,823 µm²；宏化逻辑 344,477 µm²、STA 4.63 ns (214 MHz) 为空锥体所致；仿真 matmul4x4 通过；sky130 暂停"
+2026-11-17,,,120,synth,fix,ITER-7：宏化网表低频率定位与修复（观测计数器锥体 + 综合后扇出缓冲）,5d1e657,estimate,"344,477→236,845 um^2；4.63→1.965 ns @500 MHz；slack -0.002；1.276 W"
