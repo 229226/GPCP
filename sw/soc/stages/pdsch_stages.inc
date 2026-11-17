@@ -215,24 +215,24 @@ static uint16_t edge_off[BG2_ROWS][MAXD];
 static void build_tables(void)
 {
     /* 表只由协议常量决定：encode 阶段已经建过，decode 不必再建一遍。
-     * 这个循环是 52×42×deg ≈ 11K 次条件判断，实测一次 127K 周期——纯接收
-     * 场景（没有 encode）仍然由第一次调用建好。 */
+     * 直接遍历全部 ~800 条边散射；旧写法是 52×42×deg（≈41K 次条件判断），
+     * 实测一次 127K 周期。纯接收场景（没有 encode）仍由第一次调用建好。 */
     static int built;
     if (built) return;
     built = 1;
-    for (uint32_t b = 0; b < BG2_COLS; b++) {
-        uint8_t n = 0;
-        for (uint32_t r = 0; r < BG2_ROWS; r++)
-            for (uint32_t k = 0; k < bg2_deg[r]; k++)
-                if (bg2_col[r][k] == b) {
-                    blk_r[b][n] = (uint8_t)r;
-                    blk_k[b][n] = (uint8_t)k;
-                    blk_sh[b][n] = (uint8_t)(bg2_sh[r][k] % ZC);
-                    edge_s[r][k] = (uint8_t)(bg2_sh[r][k] % ZC);
-                    edge_off[r][k] = (uint16_t)(b * GSPAD + n * ZC);
-                    n++;
-                }
-        blk_n[b] = n;
+    for (uint32_t b = 0; b < BG2_COLS; b++)
+        blk_n[b] = 0;
+    for (uint32_t r = 0; r < BG2_ROWS; r++) {
+        for (uint32_t k = 0; k < bg2_deg[r]; k++) {
+            uint32_t b = bg2_col[r][k];
+            uint32_t n = blk_n[b]++;
+            uint8_t sh = (uint8_t)(bg2_sh[r][k] % ZC);
+            blk_r[b][n] = (uint8_t)r;
+            blk_k[b][n] = (uint8_t)k;
+            blk_sh[b][n] = sh;
+            edge_s[r][k] = sh;
+            edge_off[r][k] = (uint16_t)(b * GSPAD + n * ZC);
+        }
     }
 }
 
