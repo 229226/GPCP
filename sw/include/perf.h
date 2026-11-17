@@ -26,6 +26,8 @@
 #define PERF_INST_ALU            9
 #define PERF_SPAD_READ           10
 #define PERF_SPAD_WRITE          11
+/* 12：1R1W 端口超预算的周期数（同一物理 bank 两个不同读/写字）；
+ * 13：两个 PE 写同一物理字的周期数（按低 PE 优先合并，不算端口超预算）。 */
 #define PERF_SPAD_BANK_CONFLICT  12
 #define PERF_SPAD_WORD_CONFLICT  13
 #define PERF_DMA_BUSY            14

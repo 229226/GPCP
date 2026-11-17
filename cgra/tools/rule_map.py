@@ -505,6 +505,10 @@ def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK,
     cyc_half = 3 + edges * 8 + 3
     wb_half = edges * 14
     step = cyc_half + (wb_half if writeback else 0)
+    # writeback 版把读旋转也打开：BN 把 v2c 写在未旋转视图，CN 读 row+sh，
+    # m' 回写也落在 row+sh；两边读写都只用单端口。
+    def edge_idx(bank, word):
+        return spad_rot(bank, word) if writeback else spad_idx(bank, word)
     mc = Microcode()
     for half, (npe, word_base) in enumerate(((16, 0), (4, 16))):
         base = half * step
@@ -517,13 +521,13 @@ def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK,
             for p in range(edges // 2):
                 ka, kb = 2 * p, 2 * p + 1
                 # 边 a：r0 = x, r1 = 符号位, r2 = |x|
-                mc.put(cyc, pe, "ld", dst=0, imm=spad_idx(ka, w)); cyc += 1
+                mc.put(cyc, pe, "ld", dst=0, imm=edge_idx(ka, w)); cyc += 1
                 mc.put(cyc, pe, "shr", a=0, dst=1, imm=31); cyc += 1
                 mc.put(cyc, pe, "xor", a=0, b=1, dst=2); cyc += 1
                 mc.put(cyc, pe, "sub", a=2, b=1, dst=2); cyc += 1
                 mc.put(cyc, pe, "xor", a=5, b=1, dst=5); cyc += 1
                 # 边 b：r6 = x, r7 = 符号位, r0 = |x|
-                mc.put(cyc, pe, "ld", dst=6, imm=spad_idx(kb, w)); cyc += 1
+                mc.put(cyc, pe, "ld", dst=6, imm=edge_idx(kb, w)); cyc += 1
                 mc.put(cyc, pe, "shr", a=6, dst=7, imm=31); cyc += 1
                 mc.put(cyc, pe, "xor", a=6, b=7, dst=0); cyc += 1
                 mc.put(cyc, pe, "sub", a=0, b=7, dst=0); cyc += 1
@@ -544,7 +548,7 @@ def schedule_cn(edges=CN_EDGES, sentinel_bank=CN_SENTINEL_BANK,
             # ---- 第二趟：按边回写 m'（min1/min2/sign 已在 r3/r4/r5）----
             cyc = base + cyc_half
             for k in range(edges):
-                mc.put(cyc, pe, "ld", dst=0, imm=spad_idx(k, w)); cyc += 1
+                mc.put(cyc, pe, "ld", dst=0, imm=spad_rot(k, w)); cyc += 1
                 mc.put(cyc, pe, "shr", a=0, dst=1, imm=31); cyc += 1          # sign(x)
                 mc.put(cyc, pe, "xor", a=0, b=1, dst=2); cyc += 1             # x ^ sign
                 mc.put(cyc, pe, "sub", a=2, b=1, dst=2); cyc += 1             # |x|

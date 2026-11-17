@@ -85,7 +85,9 @@
 #define GPCP_CGRA_WIN_STATUS   0x0070u   /* R: [0] 输出写窗口越界（sticky）
                                              W: [0] 写 1 清除                   */
 #define GPCP_CGRA_ROT_ZC       0x006Cu   /* W/R: 循环旋转的模（0 视为 32） */
-#define GPCP_CGRA_ROT_BASE     0x0080u   /* W/R: 0x80 + bank*4，每 bank 7 bit 表项 */
+#define GPCP_CGRA_ROT_BASE     0x0080u   /* W/R: 0x80 + bank*4，每 bank 13 bit：
+                                          * [4:0] 读旋转、[5] invalid、[6] keep、
+                                          * [12:8] 写旋转 */
 #define GPCP_CGRA_DBG_STATE    0x0060u   /* R: engine FSM state (debug)       */
 #define GPCP_CGRA_RING_EN      (1u << 0)
 #define GPCP_CGRA_RING_IDLE    (1u << 1)

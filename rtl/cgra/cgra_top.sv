@@ -185,7 +185,8 @@ module cgra_top #(
   logic        buf_page, dma_page;
 
   // 每 bank 的循环旋转表（由 ring 描述符或主机逐字装载）
-  logic [31:0][6:0] rot_tbl;
+  // {[12:8]=写旋转, [6]=keep, [5]=invalid, [4:0]=读旋转}
+  logic [31:0][12:0] rot_tbl;
   logic [5:0]       rot_zc;
 
   // descriptor ring: descriptors live in SoC RAM (32 bytes each)
@@ -331,12 +332,14 @@ module cgra_top #(
   end
 
   // scratchpad side of the copy engine: a beat carries two words, so one write
-  // port per word (they are different words of the same bank) and two read ports
+  // port per word (the transposed bank map puts them in different banks) and
+  // two read ports
   logic        spad_dma_we0, spad_dma_we1;
   logic [9:0]  spad_dma_addr0, spad_dma_addr1;
   logic [31:0] spad_dma_wdata0, spad_dma_wdata1;
   logic [9:0]  spad_rd_addr0, spad_rd_addr1;
   logic [31:0] spad_rd_data0, spad_rd_data1;
+  logic        spad_dma_re;
 
   // the beat is consumed only on the handshake (valid && ready), never on valid alone
   // dma_tgt = IMEM: the same beat stream feeds the instruction memory instead of
@@ -349,6 +352,7 @@ module cgra_top #(
   assign spad_dma_wdata1 = m_axi_rdata[63:32];
   assign spad_rd_addr0   = dma_cur[9:0];
   assign spad_rd_addr1   = dma_nxt_cur[9:0];
+  assign spad_dma_re     = (dstate == D_SOUT);
 
   // IMEM side of the copy engine: one 8-byte beat carries two instruction words
   logic        dma_imem_we;
@@ -829,7 +833,7 @@ module cgra_top #(
       buf_page   <= 1'b0;   // single driver: the copy engine never touches it
       imem_wbank <= 1'b0;
       imem_run_bank <= 1'b0;
-      for (int i = 0; i < ROT_ENTRIES; i++) rot_tbl[i] <= 7'd0;
+      for (int i = 0; i < ROT_ENTRIES; i++) rot_tbl[i] <= 13'd0;
     end else begin
       if (wr_en) begin
         if (wr_addr == REG_CTRL) begin
@@ -865,7 +869,7 @@ module cgra_top #(
                      (wr_addr < (REG_ROT_BASE + 16'(ROT_ENTRIES * 4)))) begin
           // 每 bank 旋转表：dma_tbl_we 也写这里，必须和它同一个 always_ff
           if (wr_addr[1:0] == 2'b00)
-            rot_tbl[(wr_addr - REG_ROT_BASE) >> 2] <= wr_data[6:0];
+            rot_tbl[(wr_addr - REG_ROT_BASE) >> 2] <= wr_data[12:0];
         end else if ((wr_addr >= REG_IMEM_BASE) &&
                      (wr_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
           // word index w = (wr_addr - base) >> 2 -> row w >> 4, lane w[3:0]
@@ -880,9 +884,9 @@ module cgra_top #(
         if (!dma_last_odd)
           imem[imem_wbank][dma_imem_nidx[12:4]][dma_imem_nidx[3:0]] <= m_axi_rdata[63:32];
       end else if (dma_tbl_we) begin
-        // 一个 8B beat 装两个 7-bit 旋转条目（低字 = 偶数下标）
-        rot_tbl[dma_cur[4:0]]     <= m_axi_rdata[6:0];
-        rot_tbl[dma_nxt_cur[4:0]] <= m_axi_rdata[38:32];
+        // 一个 8B beat 装两个 13-bit 旋转条目（低字 = 偶数下标）
+        rot_tbl[dma_cur[4:0]]     <= m_axi_rdata[12:0];
+        rot_tbl[dma_nxt_cur[4:0]] <= m_axi_rdata[44:32];
       end else if (arr_req && !busy && (arr_cycles_q != 16'd0)) begin
         // 描述符驱动的阵列运行：拍数/page 来自描述符，不走寄存器写入
         num_cycles <= arr_cycles_q;
@@ -930,6 +934,7 @@ module cgra_top #(
       .dma_rd_data0(spad_rd_data0),
       .dma_rd_addr1(spad_rd_addr1),
       .dma_rd_data1(spad_rd_data1),
+      .dma_re    (spad_dma_re),
       .perf_clear(perf_clear),
       .perf_inst_issued(perf_inst_issued),
       .perf_inst_nop(perf_inst_nop),
@@ -1063,7 +1068,7 @@ module cgra_top #(
     rd_data = 32'b0;
     if ((rd_addr >= REG_ROT_BASE) &&
         (rd_addr < (REG_ROT_BASE + 16'(ROT_ENTRIES * 4)))) begin
-      rd_data = {25'b0, rot_tbl[(rd_addr - REG_ROT_BASE) >> 2]};
+      rd_data = {19'b0, rot_tbl[(rd_addr - REG_ROT_BASE) >> 2]};
     end else if (rd_addr == REG_ROT_ZC) begin
       rd_data = {26'b0, rot_zc};
     end else if (rd_addr < 16'h0100) begin

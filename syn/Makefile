@@ -20,6 +20,8 @@
 # timing and power all come from the library alone.
 
 ROOT      := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+# iEDA 的 STA/功耗支持多线程；Yosys/ABC 本身是单线程，JOBS 只影响 iEDA。
+JOBS      ?= $(shell nproc)
 EDA_HOME  ?= $(ROOT)/third_party/eda
 IEDA      ?= $(EDA_HOME)/bin/iEDA
 # Yosys + the slang frontend plugin ship in the project's own oss-cad-suite;
@@ -80,8 +82,8 @@ syn: $(LIB)
 	env -u LD_LIBRARY_PATH $(YOSYS) -m slang -c $(ROOT)/syn/$(DESIGN)_syn.tcl -l $(OUT)/yosys.log
 
 sta: syn
-	env -u LD_LIBRARY_PATH CLK_FREQ_MHZ=$(CLK_FREQ_MHZ) \
-	  $(IEDA) -script $(ROOT)/syn/sta.tcl \
+	env -u LD_LIBRARY_PATH CLK_FREQ_MHZ=$(CLK_FREQ_MHZ) OMP_NUM_THREADS=$(JOBS) \
+	  $(IEDA) -thread_number $(JOBS) -script $(ROOT)/syn/sta.tcl \
 	  $(ROOT)/syn/$(DESIGN).sdc $(NETLIST) $(DESIGN) $(LIB) 2>&1 | tee $(OUT)/sta.log
 
 # fail loudly instead of producing numbers from a different library

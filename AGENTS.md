@@ -29,7 +29,7 @@ LTE/NR 双模，目标是"通用通信处理器"。全部在 Verilator 里仿真
 | P4 下行数据面（MCS 驱动 + 16QAM） | ✅ **`nr_la.py`（38.214 MCS/CQI 表 + CSI 上报 + OLLA 收敛到 10% BLER）**、**`nr_qam.py`（QPSK/16QAM/64QAM Gray 映射 + 整数 max-log LLR，三阶功率归一化）**、**`nr_pdsch_amc.py`（MCS→Qm→PDSCH 全链，5 个 MCS × rv0/2 × 2 SNR 全对，3 类注入门）**、**`run-pdsch-16qam`（`pdsch_full_bm.c -DQAM16`：16QAM max-log 软解调落硬件；4 点 `[OK]`，rv=2 → k0=492，QPSK `run-pdsch-full` 回归不变）** |
 | L1/L2 缺口补齐（本轮，模型级为主） | ✅ **HARQ/RV 软合并已上硬件**（`run-pdsch-harq`，rv=0/2 Chase 合并，4.19 M 周期）；`nr_pdcch.py`（DCI+CRC24C+Polar+RNTI 盲检）、`nr_ldpc.py`（Zc=64 分页 + 分层调度）、`nr_mimo.py`（2×2 层映射/预编码/MMSE）、`nr_mac.py`（MAC PDU + HARQ 实体）均**模型级自检通过，未落 CGRA**；剩余缺口见 §6 ；**DCI 驱动双向闭环 `nr_link.py` 已封口**（DL = PDCCH+PDSCH+PUCCH；UL = DCI reserved 10 bit UL grant 驱动的 PUSCH；−8 dB 双向 HARQ 各自救回）；**上行 PUSCH 硬件整链 `run-pusch` 已打通**（20 dB 0 errors、1040/1040 硬判、TB 80/80、3.07 M 周期） |
 | P1 真实映射（CP + DC 空置/保护带 + 38.212 速率匹配） | ✅ `run-ssb-fid`：32/32 MIB，4.4 M 周期 |
-| PPA 综合（Nangate45 + sky130 HD / Yosys+slang / iEDA-STA） | ✅ 同一 RTL 两套 PDK（`make -C syn sta [PDK_NAME=sky130hd]`）：**HEAD 复测** Nangate45 逻辑 78,499 µm²、关键路径 1.429 ns（≈700 MHz，500 MHz +0.54 ns）、37.5 mW @500 MHz；**sky130 HD 438,119 µm²、10.762 ns（≈87 MHz，50 MHz +8.49 ns）、90.0 mW @50 MHz**；两者都是 7,291 flop、IMEM/spad 阵列剔除后只算逻辑。**面积分布**（`make -C syn area`）：寄存器 49.3%/41.8%（其中 PE 阵列 31.2%/26.3%、**性能计数器 10.6%/8.9% 是最大非 PE 单项**、描述符环+拷贝引擎 5.8%/5.2%），组合逻辑 50.7%/58.2% 因 slang 展平、ABC 改名为 `_NNNN_` 而无法按块归属。**旧记录 54,148 µm² / 1.05 GHz / 23.8 mW 是更早 RTL（描述符契约、性能计数器、IMEM 双 bank 之前）**；IMEM 双 bank 0.276 mm²、spad 约 2.6 mm²（16R/16W，bank 化必须先改 kernel 数据布局）（`docs/performance/README.md` §4、§4.1） |
+| PPA 综合（Nangate45 + sky130 HD / Yosys+slang / iEDA-STA） | ✅ 同一 RTL 两套 PDK（`make -C syn sta [PDK_NAME=sky130hd]`）：**ITER-6 复测** Nangate45 逻辑 87,306 µm²、关键路径 1.573 ns（≈636 MHz，500 MHz +0.386 ns）、41.0 mW @500 MHz；**sky130 HD 499,869 µm²、9.341 ns（≈107 MHz，50 MHz +9.985 ns）、95.9 mW @50 MHz**；两者都是 7,504 flop、IMEM/spad 阵列剔除后只算逻辑。**面积分布**（`make -C syn area`）：寄存器 45.6%/37.7%（其中 PE 阵列 28.1%/23.1%、**性能计数器 9.5%/7.8% 是最大非 PE 单项**、描述符环+拷贝引擎 5.3%/4.7%），组合逻辑 54.4%/62.3% 因 slang 展平、ABC 改名为 `_NNNN_` 而无法按块归属。**旧记录 78,499 µm² / 1.429 ns / 37.5 mW（ITER-4，`10*bank` 散列、7,291 flop）已被本轮取代**；更早的 54,148 µm² / 1.05 GHz / 23.8 mW 是描述符契约、性能计数器、IMEM 双 bank 之前的 RTL。IMEM 双 bank 0.276 mm²、spad 约 0.17 mm²（8 KiB = 64 × 32×32 1R1W 宏 0.051 mm² + 16→32 交叉开关 0.12 mm²；软件可见地址不变），45 nm 合计 ≈0.53 mm²（`docs/performance/README.md` §4、§4.1） |
 | B3 Linux（OpenSBI + 6.6 + BusyBox） | ⚠️ 内核起到 `late_init`，**未到 initramfs/用户态** |
 | M3 规模扩展（8×8）+ 自动映射 + LDPC | ⚠️ 8×8 ADL（`cgra/arch/gpcp-8x8-mesh.xml`，每跳 1 拍）+ CGRA-ME 库驱动/自动切块（`cgra/tools/`）已打通：24 槽 BN 切成 18 片在 3×3 上 **18/18 mapped**（48 s）。**规则映射器**：BN 118 拍（v0）/ **155 拍（4 PE/行 link 版，1.61×）**；**CN 172 拍单程序跑完 20 行 → `run-pdsch-bg2` 631,360 → 19,097 周期（≈33×，M1 双页重叠后）**。微码改由 `gen_bn_prog.py` / `gen_cn_prog.py` 生成，bench 只 include 头文件。CGRA-ME 仍给不出可靠落点，退火不可用。见 `docs/compiler/README.md` §7.3~§13 |
 
@@ -83,6 +83,9 @@ env -u LD_LIBRARY_PATH make -C syn sta PDK_NAME=sky130hd CLK_FREQ_MHZ=50   # sky
 env -u LD_LIBRARY_PATH make -C syn area PDK_NAME=sky130hd CLK_FREQ_MHZ=50  # 面积分布（寄存器按功能块 + 单元类型）
 # 换库只换 liberty；tie cell/单元命名/结果目录由 syn/Makefile 按 PDK_NAME 决定。
 # 只跑 STA（不重综合）：直接调 iEDA，见 docs/performance/README.md §4。
+# 并行：verify.sh 默认 -j$(nproc)；iEDA 的 STA/功耗自动带 -thread_number $(nproc)
+#       （syn/Makefile 的 JOBS）。Yosys/ABC 是单线程；两套 PDK 的综合**不要并发**：
+#       本机 7 GB 内存，两个 yosys 各 ~3.8 GB，同跑会被 OOM kill（已踩过）。
 ```
 
 验收指标（**期望输出里的关键数字**，改动后若变了要同步本文档）：
@@ -149,7 +152,7 @@ env -u LD_LIBRARY_PATH make -C syn area PDK_NAME=sky130hd CLK_FREQ_MHZ=50  # 面
 | `tools/sym_pc.py` | 把 `--trace-pc` 的样本按 `vmlinux`（addr2line）命成函数，并报最长停留段 |
 | `make snr-sweep` / `make snr-sweep-hw` | SNR 瀑布：模型 −8/−9 dB 0 误比特、−10 dB 1.5、−12 dB 5.4、−14 dB 7.3（8 seed）；硬件 −8/−10 dB 0、−12 dB 7.2（6 seed）、−14 dB 10.2（6 seed）、−16 dB 15.7（3 seed），周期 4,378,71x；`--csv` 可分批累计（`docs/software/README.md` §4.16） |
 | `make -C sim/soc linux-status` | 分级评分：stage 0..8（OpenSBI→kernel→initramfs→/init→uname→/proc→CGRA 用户态→干净退出），并要求 16 个累加器值正确 |
-| `make -C syn sta [PDK_NAME=sky130hd]` | **逻辑面积**（IMEM/spad 剔除后）：Nangate45 **78,499 µm²**、关键路径 **1.429 ns**（≈700 MHz，500 MHz +0.54 ns）、**37.5 mW@500 MHz**；sky130 HD **438,119 µm²**、**10.762 ns**（≈87 MHz）、**90.0 mW@50 MHz**；两者 7,291 flop。`make -C syn area` 给分布：寄存器 49.3%/41.8%（PE 阵列 31.2%/26.3%、性能计数器 10.6%/8.9%），组合逻辑 50.7%/58.2% 无法按块归属。**存储另算**：IMEM 0.276 mm²（双 bank 64 KiB，1R1W）、spad ~2.6 mm²（8 KiB，16R/16W 交叉开关）⇒ 45 nm 合计 **≈2.95 mm²，存储占 97%**（`docs/performance/README.md` §4/§4.1） |
+| `make -C syn sta [PDK_NAME=sky130hd]` | **逻辑面积**（IMEM/spad 剔除后）：Nangate45 **87,306 µm²**、关键路径 **1.573 ns**（≈636 MHz，500 MHz +0.386 ns）、**41.0 mW@500 MHz**；sky130 HD **499,869 µm²**、**9.341 ns**（≈107 MHz）、**95.9 mW@50 MHz**；两者 7,504 flop。`make -C syn area` 给分布：寄存器 45.6%/37.7%（PE 阵列 28.1%/23.1%、性能计数器 9.5%/7.8%），组合逻辑 54.4%/62.3% 无法按块归属。**存储另算**：IMEM 0.276 mm²（双 bank 64 KiB，1R1W）、spad ~0.17 mm²（8 KiB，1R1W 宏 + 16→32 交叉开关）⇒ 45 nm 合计 **≈0.53 mm²，存储占 84%**（`docs/performance/README.md` §4/§4.1） |
 | `bash cgra/tools/map.sh cgra/arch/gpcp-8x8-mesh.xml cgra/dfg/fir4.dot 1 ilp 60` | `[map] mapped=yes II=1`（约 3.4 s，cost 279，7 个算子落在 5 个 PE）；`fir8` 会超时，见 `docs/compiler/README.md` §7.4 |
 | `python3 cgra/tools/bn_chunks.py --arch cgra/arch/gpcp-3x3-mesh.xml --out build/bn_chunks3` | 24 槽 BN 切成 **18 片全部 mapped**（3×3、II=1，合计 48 s），见 `docs/compiler/README.md` §10 |
 | `python3 cgra/tools/rule_map.py --bn` + `python3 cgra/tools/check_rule_bn.py` | 规则映射器自动生成 BN 微码 **118 拍 × 16 PE**，Verilator 台架 **384 个值 0 差异**（手写是 125 拍）；18 个切块也全部模型自检通过，见 `docs/compiler/README.md` §11 |
@@ -340,7 +343,7 @@ env -u LD_LIBRARY_PATH make -C syn area PDK_NAME=sky130hd CLK_FREQ_MHZ=50  # 面
 
 **P2（M3 主体）**
 6. 8×8 阵列（bank 32→64/页、spad 8→32 KiB）+ 各 kernel 映射重排；给 4×4 vs 8×8 周期对比。
-   **前置**：spad 实测每 bank 需 16R/16W（~2.6 mm²），必须先重排 kernel 数据布局（`docs/performance/README.md` §3.2）。
+   **前置**：spad 已改 1R1W + 16→32 交叉开关（~0.17 mm²），8×8 可沿用同一映射结构（`docs/performance/README.md` §3.2）。
 7. ✅ IMEM 批量装载 + 运行时重叠已落地：`gpcp_cgra_imem_load` 走拷贝引擎（DMA_CTRL[3]），
    `run-pdsch-bn1` 25,558 → 11,916 周期、`run-pdsch-bg2` 180,191 → 165,088 周期；
    `sw/include/gpcp_cgra_rt.h` 的 M1 双页 ping-pong 再把 bg2 loop 22,562 → 19,097 周期。

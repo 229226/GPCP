@@ -75,8 +75,11 @@ def build_inputs():
         pre.append((spad_addr(3, p), 0x300 + p))
         pre.append((spad_addr(4, p), 0xFFFFFFFF))
     # 表：bank0=0，bank1=7，bank2=5，bank3=invalid|keep，bank4=0
-    pre += [(0x0080 + 0 * 4, 0x00), (0x0080 + 1 * 4, ROT_ROT),
-            (0x0080 + 2 * 4, ROT_ROT2), (0x0080 + 3 * 4, ROT_INVALID | ROT_KEEP),
+    # 13-bit 表项：读旋转在 [4:0]，写旋转在 [12:8]
+    pre += [(0x0080 + 0 * 4, 0x00),
+            (0x0080 + 1 * 4, ROT_ROT | (ROT_ROT << 8)),
+            (0x0080 + 2 * 4, ROT_ROT2 | (ROT_ROT2 << 8)),
+            (0x0080 + 3 * 4, ROT_INVALID | ROT_KEEP),
             (0x0080 + 4 * 4, 0x00), (0x006C, ZC)]
     pre_path = os.path.join(OUT, "rot_preload.txt")
     with open(pre_path, "w") as f:
@@ -206,8 +209,9 @@ def check_cn(spad, vals):
 def build_bn_inputs():
     """一个变量块：20 条真实边（bank 0..19）+ 4 个无效槽（bank 20..23）+ LLR(24)+硬判(25)。
 
-    每条边的旋转量 sh[e] 故意取非零，用来验证 BN 的负向旋转：
-    变量索引 i 读的是 CN 索引 (i - sh) mod ZC。
+    BN 用 rot=0：1R1W spad 要求每拍每 bank 只碰一个字，任意 per-bank
+    移位都会破坏这个约束（负向旋转在 PDSCH 里已移到 CN 的 m' 回写侧）。
+    读/写旋转字段本身由上面的 build_inputs() 单独验证。
     """
     import rule_map as rm
     mc = rm.schedule_bn_split(rows=20, rot=True)
@@ -217,7 +221,7 @@ def build_bn_inputs():
             f.write("0x%08x\n" % w)
 
     n = 20
-    sh = [(e * 3 + 1) % ZC for e in range(n)]
+    sh = [0] * n
     rnd = random.Random(11)
     val = [[0] * ZC for _ in range(24)]
     llr = [rnd.randint(-3000, 3000) for _ in range(ZC)]
@@ -231,7 +235,8 @@ def build_bn_inputs():
         pre.append((spad_addr(24, w), llr[w] & 0xFFFFFFFF))
         pre.append((spad_addr(25, w), 0xDEADBEEF))
     for e in range(n):
-        pre.append((0x0080 + e * 4, (ZC - sh[e]) % ZC))
+        r = (ZC - sh[e]) % ZC
+        pre.append((0x0080 + e * 4, r | (r << 8)))   # 读、写旋转都设
     for e in range(n, 24):
         pre.append((0x0080 + e * 4, ROT_INVALID))
     pre.append((0x0080 + 24 * 4, 0))
@@ -263,13 +268,13 @@ def check_bn(spad, case):
         reads = []
         for e in range(24):
             if e < n:
-                reads.append(val[e][(r - sh[e]) % ZC])
+                reads.append(val[e][r])
             else:
                 reads.append(0)          # invalid 槽读 0
         v = llr[r] + sum(reads)
         for e in range(n):
-            word = (r - sh[e]) % ZC
-            want(spad_addr(e, word), (v - reads[e]) & 0xFFFFFFFF, "BN 旋转回写")
+            word = r
+            want(spad_addr(e, word), (v - reads[e]) & 0xFFFFFFFF, "BN 回写")
         for e in range(n, 24):
             want(spad_addr(e, r), v & 0xFFFFFFFF, "BN 无效槽写 v")
         want(spad_addr(25, r), (-1 if v < 0 else 0) & 0xFFFFFFFF, "BN 硬判")
@@ -393,7 +398,7 @@ def build_desc_bn():
             f.write("0x%08x\n" % w)
 
     n = 6
-    sh = [(e * 3 + 1) % ZC for e in range(n)]
+    sh = [0] * n
     rnd = random.Random(17)
     edges = [[rnd.randint(-3000, 3000) for _ in range(ZC)] for _ in range(n)]
     llr = [rnd.randint(-3000, 3000) for _ in range(ZC)]
@@ -401,7 +406,8 @@ def build_desc_bn():
     table_addr, edge_addr, llr_addr, hard_addr = 0x000, 0x600, 0x800, 0x880
     tab = [0] * 32
     for e in range(n):
-        tab[e] = (ZC - sh[e]) % ZC
+        r = (ZC - sh[e]) % ZC
+        tab[e] = r | (r << 8)          # 读、写旋转都设，复现旧语义
     for e in range(n, 24):
         tab[e] = ROT_INVALID
     for i in range(32):
@@ -476,12 +482,12 @@ def check_desc_bn(dma, case):
     for w in range(ZC):
         want(llr_addr + w * 4, llr[w] & 0xFFFFFFFF, "BN desc LLR 不变")
     for r in range(ZC):
-        reads = [edges[e][(r - sh[e]) % ZC] for e in range(n)]
+        reads = [edges[e][r] for e in range(n)]
         v = llr[r] + sum(reads)
         for e in range(n):
-            word = (r - sh[e]) % ZC
+            word = r
             want(edge_addr + e * 80 + word * 4,
-                 (v - reads[e]) & 0xFFFFFFFF, "BN desc 旋转回写")
+                 (v - reads[e]) & 0xFFFFFFFF, "BN desc 回写")
         want(hard_addr + r * 4, (-1 if v < 0 else 0) & 0xFFFFFFFF, "BN desc 硬判")
     return bad
 
@@ -834,13 +840,14 @@ def build_desc_bn_ring():
         for w in mc.build():
             f.write("0x%08x\n" % w)
     n = 4
-    sh = [(e * 3 + 1) % ZC for e in range(n)]
+    sh = [0] * n
     rnd = random.Random(19)
     edge_addr, llr_addr, hard_addr, table_addr = 0xE000, 0xE400, 0xE500, 0x000
     mem = [0] * (0xE600 // 4)
     tab = [0] * 32
     for e in range(n):
-        tab[e] = (ZC - sh[e]) % ZC
+        r = (ZC - sh[e]) % ZC
+        tab[e] = r | (r << 8)          # 读、写旋转都设，复现旧语义
     for e in range(n, 24):
         tab[e] = ROT_INVALID
     for i in range(32):

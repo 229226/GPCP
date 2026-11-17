@@ -1066,17 +1066,32 @@ static void qs_tables_build(void)
 {
     uint32_t *ct = (uint32_t *)CN_TAB_BASE;
     uint32_t *bt = (uint32_t *)BN_TAB_BASE;
+    /* 旋转拆成读/写两个 5-bit 字段（bit[4:0]=读、bit[12:8]=写）：
+     *   CN writeback 微码的边 LD 和 m' ST 都带 rot 标志，两者都用 sh：
+     *      读 msg[row+sh]=v2c(row+sh)（BN 未旋转写），写 m' 到 row+sh。
+     *   BN 微码只做未旋转读写：读 msg[row]=m'(row-sh)，写 v2c 到 row。
+     * 两个核每拍每 bank 都只碰到一个字，1R1W 足够（已按全部 52 个块的
+     * 移位组合核对）。 */
     for (uint32_t r = 0; r < BG2_ROWS; r++) {
         uint32_t deg = bg2_deg[r];
-        for (uint32_t k = 0; k < 32u; k++)
-            ct[r * 32u + k] = ((k >= deg) && (k < MAXD)) ? 0x40u : 0u;
+        for (uint32_t k = 0; k < 32u; k++) {
+            uint32_t v = 0u;
+            if (k < deg) {
+                uint32_t s = (uint32_t)(bg2_sh[r][k] % ZC) & 0x1Fu;
+                v = s | (s << 8);               /* 读、写旋转都 = sh */
+            } else if (k < MAXD) {
+                v = 0x40u;                      /* keep：哨兵边不回写 */
+            }
+            ct[r * 32u + k] = v;
+        }
     }
     for (uint32_t b = 0; b < BG2_COLS; b++) {
         uint32_t n = blk_n[b];
         for (uint32_t e = 0; e < 32u; e++) {
             uint32_t v = 0u;
-            if (e < n)          v = (ZC - blk_sh[b][e]) % ZC;
-            else if (e < 24u)   v = 0x20u;      /* invalid=1：缺失边读 0 */
+            /* 缺失边 invalid=1：BN 微码的 LD 仍带 rot 标志，读回 0；
+             * 真实边读写旋转都是 0。 */
+            if (e >= n && e < 24u) v = 0x20u;
             bt[b * 32u + e] = v;
         }
     }

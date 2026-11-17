@@ -10,19 +10,36 @@
 | link | 最近邻四方向，1 周期 | `rtl/cgra/cgra_array.sv` |
 | IMEM | 2 bank × 8192 字（每 bank 512 拍 × 16 PE） | `GPCP_CGRA_IMEM_WORDS`、`REG_IMEM_BANK` |
 | 单次运行上限 | 512 拍 | `GPCP_CGRA_MAX_CYCLES` |
-| spad | 32 bank × 32 word × 2 页 | `target.yaml` |
+| spad | 32 逻辑 bank × 32 word × 2 页（物理 64 × 32×32，1R1W） | `target.yaml` |
 | 时钟 | 100 MHz（SoC 目标） | `target.yaml: clock_hz` |
 
 ## 2. spad
 
-- 平坦索引 `flat = bank*32 + word`，10 位（`imm[9:0]`，最大 1023）。
-- 主机窗口 `0xA000 + bank*128 + word*4`，CPU 可直接读写任意字。
-- 两页由 `page` 位选择：阵列用一页时，拷贝引擎操作另一页。
-- 每 bank 有一张 7-bit 循环旋转表（`rot` 5 bit + `invalid` + `keep`），
-  由 `ROT_BASE + bank*4` 写入，`ROT_ZC` 设置循环模；`LD/ST` 的 `imm[15]`
-  决定该次访问是否参与旋转。默认全 0，行为与无旋转表时一致。
-- 综合口径：当前 spad 需要每 bank 16R/16W，约 2.6 mm²；要降到 0.3 mm² 量级
-  必须先改 kernel 数据布局（见 `../performance/README.md`）。
+- 8 KiB = 64 个物理 bank（2 页 × 32）× 32 word × 32 bit；每个物理 bank 是
+  一条 1R1W SRAM（一拍一读一写）。
+- 逻辑索引 `flat = bank*32 + word`（10 位，`imm[9:0]`）不变；物理映射为
+  `phys_bank = {page, word ^ M(bank)}`、`phys_word = bank`（转置 +
+  GF(2) 散列）。`M` 是 5×5 可逆线性映射（5 个异或项），把逻辑 bank 的 5 个位
+  混合后异或到物理 bank：转置把“同一逻辑 bank 的 32 个字”摊到 32 个物理
+  bank，`M` 再把跨 bank 的固定步长访问打散。`M` 是按 FFT / PDSCH-full /
+  `pss_corr` / `sss_corr` 的真实访问序列求解的，四类微码在该映射下每拍
+  每物理 bank 的读/写都 ≤1 个不同字。
+- 16 个 PE 通过 16→32 地址/数据交叉开关访问当前页的 32 个 bank；每个 PE
+  只有一个 64:1 读数据 mux（两页各 32:1 + 页选择）。同字读共享读口（广播）。
+- 静态调度必须保证每拍每物理 bank ≤1 个不同读字、≤1 个写；仿真断言
+  （`$error`）检查，硬件不暂停。
+- 每 bank 一张 13-bit 循环旋转表：`[4:0]` 读旋转、`[5]` invalid（读回 0）、
+  `[6]` keep（抑制写）、`[12:8]` 写旋转。由 `ROT_BASE + bank*4` 写入，
+  `ROT_ZC` 设置循环模；`LD/ST` 的 `imm[15]` 决定该次访问是否参与旋转。
+  读写可不同：PDSCH 的 CN 用 `sh` 做 m' 预移位（LD/ST 都带 rot），BN 读写
+  都用 0；这样两个核都不需要同拍多端口。默认全 0，行为与无旋转表时一致。
+- 主机窗口 `0xA000 + bank*128 + word*4` 不变；CPU 读写走同一映射。
+- 两页由 `page` 位选择：阵列用一页时，拷贝引擎操作另一页。DMA 的 64-bit
+  beat 两个连续字经转置落到不同物理 bank，所以 2 字/拍不变。
+- 综合口径：8 KiB 用 64 个 `fakeram45_32x32`（1R1W，19.57×40.60 µm²）
+  ≈ **0.051 mm²**；16→32 交叉开关（16 个 64:1 读 mux + 每 bank 16:1
+  写地址/数据 mux）≈ **0.12 mm²**；合计 ≈ **0.17 mm²**（原 16R/16W 估算
+  2.6 mm²）。见 `../performance/README.md` §4。
 
 ## 3. ISA
 
