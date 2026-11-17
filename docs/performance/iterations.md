@@ -120,6 +120,14 @@ IMEM 与 spad 阵列在综合前剔除，所以面积**只含逻辑**（存储�
 | ITER-4 | sky130 HD / 50 MHz | `0d49d0f` | 438,119 µm² | 7,291 | 40,621 | 10.762 ns | +8.49 ns | ≈87 MHz | 90.0 mW |
 | ITER-6 | Nangate45 / 500 MHz | `HEAD` | 87,306 µm² | 7,504 | 43,753 | 1.573 ns | +0.386 ns | ≈636 MHz | 41.0 mW |
 | ITER-6 | sky130 HD / 50 MHz | `HEAD` | 499,869 µm² | 7,504 | 47,862 | 9.341 ns | +9.985 ns | ≈107 MHz | 95.9 mW |
+| ITER-7 | Nangate45 / 500 MHz | `HEAD` | 236,845 µm² | 8,190 | 165,901（含 16 宏） | 1.965 ns | −0.002 ns | ≈500 MHz | 1.276 W（含宏） |
+
+**ITER-7 口径**：`IMEM_MACRO=1`（IMEM 换成 16 个 `fakeram45_512x64`）+
+`FANOUT_FIX=1`（默认）。上表逻辑面积/单元数**不含宏**，宏面积单列 276,823 µm²；
+功耗 1.276 W **包含 16 个宏的动态功耗**（宏 liberty 带 `internal_power` 表，
+占 90%），不能与 ITER-6 的纯标准单元功耗直接比较。
+ITER-6 两行是 `IMEM_MACRO=0` + 未做扇出修复的旧口径，可用
+`make -C syn sta IMEM_MACRO=0 FANOUT_FIX=0` 复现。
 
 （ITER-6 复测的是 ITER-5 + 散列修复后的 RTL；面积比 ITER-4 增加约 11%，
 来自 1R1W spad 的交叉开关/仲裁逻辑与 5 项 GF(2) 散列，功能周期不变。）
@@ -135,9 +143,11 @@ spad 2.29），不能与 45 nm 宏口径直接比较。
 - ITER-0…3 没有 PPA：综合入口（yosys-slang）在 ITER-4 之前直接拒绝多驱动 RTL
   （见下节），无法 elaborate；历史文档里的 54,148 µm² / Fmax 1.05 GHz /
   23.8 mW 来自更早、触发器只有 5,072 的 RTL，不能和这张表混用。
-- 口径：pre-layout（无 LEF/SPEF、无时钟树、未做扇出缓冲）；功耗用
+- 口径：pre-layout（无 LEF/SPEF、无时钟树）；**扇出已修复**——综合后用
+  `syn/insert_buffers.py` 给扇出 >24 的网插显式 BUF 树（abc 的 `buffer` 只管
+  组合网络内部节点，FF 输出与模块输入不会被缓冲）。功耗用
   `report_power -toggle 0.1`，无 VCD；两套 PDK 用同一个 ABC 目标
-  （`ABC_D = 1000/f`，即最大努力映射）。
+  （`ABC_D = 1000/f`，即最大努力映射）。`FANOUT_FIX=0` 可复现未修复的数字。
 - 复现：`make -C syn sta CLK_FREQ_MHZ=500` /
   `make -C syn sta PDK_NAME=sky130hd CLK_FREQ_MHZ=50`。
 
@@ -268,22 +278,41 @@ ITER-4 的**面积分布**（`make -C syn area`，明细与口径见 `README.md`
   面积较 ITER-4 +11%，来自 1R1W 交叉开关/仲裁与 5 项异或散列。
   **含存储合计**：Nangate45 ≈0.533 mm²（存储占 84%）；sky130 标准单元上限 ≈15.8 mm²。
 
-## ITER-7（实验，未纳入默认 PPA）：IMEM 宏化
+## ITER-7：IMEM 宏化 + 观测锥清理 + 扇出修复
 
 - **链路**：`cgra_top.sv` 新增 `IMEM_MACRO` 分支——IMEM 换成 16 个
   `fakeram45_512x64`（2 bank × 8 条 64-bit lane，半字写用 `w_mask_in`）；
   `syn/cgra_top_syn.tcl` 读宏 liberty 并保留宏实例；`syn/Makefile` 用
   `IMEM_MACRO=1` 显式开启（默认关闭）。仿真仍走行为数组，`matmul4x4`
-  自测通过。
-- **结果**：netlist 中 16 个宏实例；宏面积 17,301.438 × 16 =
+  自测通过。netlist 中 16 个宏实例，宏面积 17,301.438 × 16 =
   **276,823 µm²（0.277 mm²）**。
-- **异常**：宏化后 Yosys `stat` 的逻辑面积 344,477 µm²（253,263 cell、
-  8,255 flop），STA 关键路径 **4.63 ns**，终点是
-  `perf_spad_bank_conflict`，@500 MHz slack −2.665 ns（≈214 MHz）。
-  判断是 spad 删除后遗留的空组合锥被 ABC 放大，不是 IMEM 宏本身；
-  清理该锥体（或把 spad 也做成黑盒）之前，这组数字只作流程验证，
-  不作为最终 PPA。
-- **结论**：IMEM lane 拆分与宏接入已跑通；sky130 暂停，不再推进。
+- **真实设计问题 1：观测计数器锥体**。宏化后 `stat` 给 344,477 µm² /
+  253,263 cell、STA 4.63 ns（≈214 MHz），关键路径终点是
+  `perf_spad_bank_conflict`。根因不是 IMEM 宏，而是 spad 阵列被
+  `delete {t:$mem_v2}` 删掉后，64 bank × 16 PE 的“同拍冲突计数”组合锥
+  悬空存在、被 ABC 放大。这些计数器**只用于观测**，硬件里没有语义：
+  `cgra_array.sv` 在 `ifdef SYNTHESIS` 下把 `bank_conflict` / `word_conflict`
+  置 0（仿真仍完整统计）。**344,477 → 236,845 µm²、253,263 → 165,901 cell、
+  4.63 → 3.038 ns**。
+- **真实设计问题 2：高扇出 enable 没有缓冲**。剩余关键路径从 `busy` 的
+  触发器 Q 出发，**单网扇出 663、clk-to-Q 2.567 ns**（占 3.038 ns 的 84%）。
+  根因在流程而不是 RTL：abc 的 `buffer,-p,-N,16` 只缓冲组合网络内部节点，
+  触发器输出/模块输入直接挂几百个负载时不会被缓冲，而真 P&R 由 CTS 与
+  布线阶段的 buffer 树做同一件事。新增 `syn/insert_buffers.py` 作为
+  综合后处理（`syn/Makefile` 的 `FANOUT_FIX=1`，默认开启）：对扇出 >24 的
+  网插 BUF_X2/X4/X16 树，125 条网 / **587 个缓冲器**。
+  **3.038 → 1.965 ns（325 → ≈500 MHz）**。
+- **结果**（Nangate45 / 500 MHz / `IMEM_MACRO=1` / `FANOUT_FIX=1`）：
+  逻辑 **236,845 µm²**、**165,901 cell**、**8,190 flop**、关键路径
+  **1.965 ns**（slack −0.002 ns）、**≈500 MHz**、功耗 **1.276 W**
+  （含 16 个 IMEM 宏的动态功耗）。逻辑面积仍是 ITER-6 的 2.7 倍，因为
+  宏化路径把 16 个宏的输入/输出寄存器与 lane 控制逻辑留在了标准单元域；
+  存储从“被删掉的阵列”变成了真实宏。
+- **口径**：pre-layout（无 LEF/SPEF、无时钟树、无布线）；扇出已按上文修复。
+  `FANOUT_FIX=0` 可复现未修复的 3.038 ns。功耗 `report_power -toggle 0.1`。
+- **复现**：`make -C syn sta CLK_FREQ_MHZ=500 IMEM_MACRO=1`。
+- **结论**：IMEM lane 拆分与宏接入跑通；宏 + 扇出修复后 500 MHz 收敛
+  （slack −0.002 ns 属于 last-mile，可视为临界）。sky130 暂停，不再推进。
 
 ## 复现
 

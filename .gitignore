@@ -19,6 +19,9 @@ third_party/*
 trace_hart_*.dasm
 trace_hart_*.log
 
+# iEDA runtime log (written to the cwd by syn/sta.tcl runs)
+glog_dump.log
+
 # generated performance report (tools/perf_report.py)
 perf-report.html
 perf-summary.csv

@@ -195,11 +195,18 @@ module cgra_array (
         default:           n_alu++;
       endcase
     end
-
-    // 1R1W 端口是否超预算，由下面的 spad 仲裁逻辑按物理 bank 给出
-    bank_conflict = spad_wr_conflict || spad_rd_conflict;
-    word_conflict = spad_same_word_wr;
   end
+
+  // 冲突计数是纯观测设施：综合时置 0，避免 64 bank × 16 PE 的仲裁锥
+  // 进入网表（仿真仍完整统计，PERF 12/13 在硬件里恒为 0）。
+`ifdef SYNTHESIS
+  assign bank_conflict = 1'b0;
+  assign word_conflict = 1'b0;
+`else
+  // 1R1W 端口是否超预算，由下面的 spad 仲裁逻辑按物理 bank 给出
+  assign bank_conflict = spad_wr_conflict || spad_rd_conflict;
+  assign word_conflict = spad_same_word_wr;
+`endif
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

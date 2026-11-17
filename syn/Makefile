@@ -41,6 +41,9 @@ HI_PIN       ?= HI
 LO_PIN       ?= LO
 CLK_FREQ_MHZ ?= 50
 OUT          := $(ROOT)/build/syn/$(DESIGN)-sky130-$(CLK_FREQ_MHZ)MHz
+BUF_LEAF     ?= sky130_fd_sc_hd__buf_16
+BUF_MID      ?= sky130_fd_sc_hd__buf_4
+BUF_TOP      ?= sky130_fd_sc_hd__buf_2
 else ifeq ($(PDK_NAME),nangate45)
 PDK          ?= $(ROOT)/third_party/pdk/nangate45
 LIB          ?= $(PDK)/lib/NangateOpenCellLibrary_typical.lib
@@ -52,10 +55,20 @@ HI_PIN       ?= Z
 LO_PIN       ?= Z
 CLK_FREQ_MHZ ?= 500
 OUT          := $(ROOT)/build/syn/$(DESIGN)-$(CLK_FREQ_MHZ)MHz
+BUF_LEAF     ?= BUF_X16
+BUF_MID      ?= BUF_X4
+BUF_TOP      ?= BUF_X2
 else
 $(error PDK_NAME must be nangate45 or sky130hd, got '$(PDK_NAME)')
 endif
 NETLIST   := $(OUT)/$(DESIGN).netlist.syn.v
+# 扇出修复（pre-layout）：abc 的 buffer 只处理组合网络内部节点，FF 输出/模块输入
+# 直接挂 600+ 负载时不会被缓冲，STA 的 clk-to-Q 会被这些网支配（3 ns 里 2.6 ns）。
+# 综合后用 syn/insert_buffers.py 给超扇出网插显式 BUF 树；STA/面积默认读修复后的网表。
+NETLIST_BUF := $(OUT)/$(DESIGN).netlist.buf.v
+FANOUT_FIX  ?= 1
+PPA_NETLIST := $(if $(filter 1,$(FANOUT_FIX)),$(NETLIST_BUF),$(NETLIST))
+PPA_DEP     := $(if $(filter 1,$(FANOUT_FIX)),$(NETLIST_BUF),)
 # IMEM 宏化是 opt-in：默认仍按“逻辑-only”跑（存储单列），
 # `make -C syn syn IMEM_MACRO=1` 才把 IMEM 换成 fakeram45_512x64 宏。
 IMEM_MACRO ?= 0
@@ -63,10 +76,11 @@ MACRO_SEL  := $(if $(filter 1,$(IMEM_MACRO)),$(if $(wildcard $(MACRO_LIB)),$(MAC
 MACRO_ARG  := $(MACRO_SEL)
 ABC_D     := $(shell echo $$((1000 / $(CLK_FREQ_MHZ))))
 export LIB OUT CLK_FREQ_MHZ ABC_D HI_CELL LO_CELL HI_PIN LO_PIN PDK_NAME
+export BUF_LEAF BUF_MID BUF_TOP
 # 脚本只看 MACRO_LIB；未开启宏化时为空 -> 走原行为路径。
 export MACRO_LIB := $(MACRO_SEL)
 
-.PHONY: all tools tools-sky130 syn sta area clean show cpu
+.PHONY: all tools tools-sky130 syn sta area clean show cpu buf
 all: sta
 
 # CPU (CVA6/ariane) PPA: synthesize the core logic fabric.  OUT, NETLIST, the
@@ -88,10 +102,17 @@ syn: $(LIB) $(MACRO_ARG)
 	mkdir -p $(OUT)
 	env -u LD_LIBRARY_PATH $(YOSYS) -m slang -c $(ROOT)/syn/$(DESIGN)_syn.tcl -l $(OUT)/yosys.log
 
-sta: syn
+sta: syn $(PPA_DEP)
 	env -u LD_LIBRARY_PATH CLK_FREQ_MHZ=$(CLK_FREQ_MHZ) OMP_NUM_THREADS=$(JOBS) \
 	  $(IEDA) -thread_number $(JOBS) -script $(ROOT)/syn/sta.tcl \
-	  $(ROOT)/syn/$(DESIGN).sdc $(NETLIST) $(DESIGN) $(LIB) $(MACRO_ARG) 2>&1 | tee $(OUT)/sta.log
+	  $(ROOT)/syn/$(DESIGN).sdc $(PPA_NETLIST) $(DESIGN) $(LIB) $(MACRO_ARG) 2>&1 | tee $(OUT)/sta.log
+
+# 超扇出网插 BUF 树：不改逻辑功能，只让 pre-layout STA 不再被“一个 FF 驱动 600 个
+# 负载”的假延迟支配（真 P&R 由 CTS/布线阶段的 buffer 树做同一件事）。
+buf: $(NETLIST_BUF)
+$(NETLIST_BUF): $(NETLIST)
+	python3 $(ROOT)/syn/insert_buffers.py $(NETLIST) $(NETLIST_BUF) 24 \
+	  $(BUF_TOP) $(BUF_MID) $(BUF_LEAF)
 
 # fail loudly instead of producing numbers from a different library
 $(LIB):
@@ -102,8 +123,8 @@ $(LIB):
 # Area distribution of the PPA netlist: registers keep their RTL names, so they
 # can be attributed to a functional block; ABC-named combinational cells cannot
 # (the slang frontend flattens at read time, see syn/area_report.py).
-area: $(NETLIST) $(LIB)
-	python3 $(ROOT)/syn/area_report.py $(NETLIST) $(LIB) | tee $(OUT)/area_groups.txt
+area: $(PPA_NETLIST) $(LIB)
+	python3 $(ROOT)/syn/area_report.py $(PPA_NETLIST) $(LIB) | tee $(OUT)/area_groups.txt
 
 $(NETLIST):
 	$(MAKE) syn DESIGN=$(DESIGN) PDK_NAME=$(PDK_NAME) CLK_FREQ_MHZ=$(CLK_FREQ_MHZ)
