@@ -13,6 +13,7 @@
   R7 依赖顺序（生产者延迟未满足）
   R8 DFG 节点覆盖（遗漏 / 重复 / 算子不匹配）
   R9 页分离（双缓冲：同拍两个 agent 访问同一空间时必须异页；page 越界）
+  R10 私有寄存器堆：有寄存器依赖的节点必须在同一个 unit
 """
 from __future__ import annotations
 
@@ -198,5 +199,25 @@ def check(schedule: Schedule, dfg: DFG, model: MachineModel) -> list[Violation]:
                 "R7",
                 f"回边 {be.src}->{be.dst}（距离 {be.distance}）不满足："
                 f"{prod.cycle}+{lat} > {cons.cycle}+{be.distance}×{ii}", be.dst))
+
+    # R10: 私有寄存器堆 —— 有依赖的节点必须在同一个 unit
+    if model.compute.private_registers:
+        for n in dfg.nodes:
+            try:
+                cons = schedule.slot(n.id)
+            except KeyError:
+                continue
+            for src in n.inputs:
+                if src not in ids:
+                    continue
+                try:
+                    prod = schedule.slot(src)
+                except KeyError:
+                    continue
+                if prod.unit != cons.unit:
+                    out.append(Violation(
+                        "R10",
+                        f"节点 '{n.id}' 在 unit {cons.unit} 读 '{src}'（unit {prod.unit}），"
+                        f"私有寄存器堆不允许跨 unit 直连", n.id))
 
     return out

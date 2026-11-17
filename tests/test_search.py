@@ -25,26 +25,28 @@ class TestCostAndSearch(unittest.TestCase):
     def test_cost_includes_run_overhead(self):
         sched = ModuloScheduler().schedule(self.loop, self.model)
         c = estimate(sched, self.loop, self.model)
-        self.assertEqual(c.compute_cycles, 65)      # (64-1)*1 + 2
+        # PE 私有寄存器堆 -> mul/add 同 PE -> II=2，64 次迭代：(64-1)*2 + 2
+        self.assertEqual(sched.ii, 2)
+        self.assertEqual(c.compute_cycles, 128)
         self.assertEqual(c.overhead, 32)            # 模型里的 T0 实测开销
-        self.assertEqual(c.cycles, 97)
-        self.assertEqual(c.ii, 1)
-        self.assertAlmostEqual(c.efficiency, 2 / 16)  # 2 个算子 / (16 units × II=1)
+        self.assertEqual(c.cycles, 160)
+        self.assertAlmostEqual(c.efficiency, 2 / (16 * 2))
 
     def test_search_prefers_pipelined_loop(self):
         res = search(self.loop, self.model)
         self.assertIsNotNone(res.best)
-        # list 非流水要 64×2 = 128 周期；modulo II=1 只要 65
-        self.assertEqual(res.best.cost.compute_cycles, 65)
-        self.assertEqual(res.best.schedule.ii, 1)
+        # 非流水的 list 会被 R7 拒（回边没有 II），只能选 modulo
+        self.assertEqual(res.best.cost.compute_cycles, 128)
+        self.assertEqual(res.best.schedule.ii, 2)
         self.assertTrue(res.best.label.startswith("modulo/"))
 
     def test_search_on_dag(self):
         res = search(self.dag, self.model)
         self.assertIsNotNone(res.best)
         self.assertTrue(res.best.ok)
-        self.assertEqual(res.best.cost.compute_cycles, 3)   # mul -> add -> mul
-        self.assertEqual(res.best.cost.cycles, 35)
+        # 一条依赖链在一颗 PE 上串行：mul -> mul -> add -> mul = 4 拍
+        self.assertEqual(res.best.cost.compute_cycles, 4)
+        self.assertEqual(res.best.cost.cycles, 36)
 
     def test_every_candidate_reports_status(self):
         res = search(self.dag, self.model)

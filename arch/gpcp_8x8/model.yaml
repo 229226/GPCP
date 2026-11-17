@@ -18,6 +18,7 @@ compute:
   registers: 8
   acc: true
   link: true
+  private_registers: true
   ops:
     nop:   {inputs: 0, latency: 1, writes: []}
     mov:   {inputs: 1, latency: 1, writes: [dst]}

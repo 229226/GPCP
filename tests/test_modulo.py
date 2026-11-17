@@ -26,9 +26,11 @@ class TestModulo(unittest.TestCase):
         self.assertEqual(s._res_mii(self.loop, self.model), 1)   # 2 个算子 / 16 单元
         self.assertEqual(s._rec_mii(self.loop, self.model), 1)   # add 延迟 1 / 距离 1
         sched = s.schedule(self.loop, self.model)
-        self.assertEqual(sched.ii, 1)
+        # MII 下界是 1，但 GPCP 的寄存器堆是 PE 私有的：mul 与 add 必须在同一 PE，
+        # 一个 PE 每拍只能发一条，所以每个迭代至少 2 拍 -> 实际 II=2。
+        self.assertEqual(sched.ii, 2)
         self.assertEqual(check(sched, self.loop, self.model), [])
-        self.assertEqual(sched.run_cycles, 63 + sched.cycles())  # (trip-1)*II + span
+        self.assertEqual(sched.run_cycles, 63 * 2 + sched.cycles())
 
     def test_two_node_cycle_sets_rec_mii(self):
         dfg = DFG("iir", (

@@ -28,6 +28,10 @@ class ListScheduler(Scheduler):
         by_id = {n.id: n for n in dfg.nodes}
         when: dict[str, int] = {}
 
+        # 私有寄存器堆：同一依赖分量的节点必须落在同一个 unit
+        comp = dfg.components() if model.compute.private_registers else {}
+        unit_of_comp: dict[str, int] = {}
+
         issue: dict[tuple[int, int], int] = defaultdict(int)
         rd: dict[tuple[str, int, int], int] = defaultdict(int)
         wr: dict[tuple[str, int, int], int] = defaultdict(int)
@@ -50,10 +54,11 @@ class ListScheduler(Scheduler):
             bank = model.store[space].bank_of(addr) if (space in model.store and addr is not None) else None
 
             cycle = earliest
+            required = unit_of_comp.get(comp.get(node.id, "")) if comp else None
             while True:
                 if cycle >= model.time.max_run_cycles:
                     raise RuntimeError(f"节点 '{node.id}' 在 {model.time.max_run_cycles} 拍内放不下")
-                unit = self._pick_unit(i, cycle, model, issue)
+                unit = self._pick_unit(i, cycle, model, issue, required)
                 if unit is None:
                     cycle += 1
                     continue
@@ -70,6 +75,8 @@ class ListScheduler(Scheduler):
                 break
 
             issue[(unit, cycle)] += 1
+            if comp:
+                unit_of_comp.setdefault(comp[node.id], unit)
             if bank is not None:
                 key = (space, cycle, bank)
                 (wr if "mem" in op.writes else rd)[key] += 1
@@ -84,7 +91,10 @@ class ListScheduler(Scheduler):
 
     @staticmethod
     def _pick_unit(i: int, cycle: int, model: MachineModel,
-                   issue: dict[tuple[int, int], int]) -> int | None:
+                   issue: dict[tuple[int, int], int],
+                   required: int | None = None) -> int | None:
+        if required is not None:
+            return required if issue[(required, cycle)] < model.compute.issue_per_unit_per_cycle else None
         n = model.compute.units
         for k in range(n):
             unit = (i + k) % n

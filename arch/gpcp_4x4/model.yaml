@@ -14,6 +14,7 @@ compute:
   registers: 8                   # r0..r7
   acc: true                      # 隐式累加器（MAC/LACC 写，不能做 dst）
   link: true                     # 跨 PE 1 拍管道寄存器
+  private_registers: true        # 每个 PE 有私有 rf/acc/link：寄存器依赖必须同 PE
   ops:
     nop:   {inputs: 0, latency: 1, writes: []}
     mov:   {inputs: 1, latency: 1, writes: [dst]}

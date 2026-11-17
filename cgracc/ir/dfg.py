@@ -59,6 +59,26 @@ class DFG:
                     succ[src].append(n.id)
         return succ
 
+    def components(self) -> dict[str, str]:
+        """按节点间依赖（含回边）做连通分量：私有寄存器堆的机器上，
+        同一分量的节点必须落在同一个执行单元。"""
+        ids = {n.id for n in self.nodes}
+        parent = {n: n for n in ids}
+
+        def find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for n in self.nodes:
+            for src in n.inputs:
+                if src in ids:
+                    ra, rb = find(src), find(n.id)
+                    if ra != rb:
+                        parent[rb] = ra
+        return {n: find(n) for n in ids}
+
     def topo_order(self) -> list[Node]:
         succ = self.forward_edges()
         indeg = {n.id: 0 for n in self.nodes}

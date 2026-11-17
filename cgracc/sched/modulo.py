@@ -116,6 +116,9 @@ class ModuloScheduler(Scheduler):
 
         t: dict[str, int] = {}
         placed_at: dict[str, tuple[int, str | None, int | None]] = {}
+        # 私有寄存器堆：同一依赖分量（含回边）必须落在同一个 unit
+        comp = dfg.components() if model.compute.private_registers else {}
+        unit_of_comp: dict[str, int] = {}
         issue: dict[tuple[int, int], int] = defaultdict(int)
         rd: dict[tuple[int, str, int], int] = defaultdict(int)
         wr: dict[tuple[int, str, int], int] = defaultdict(int)
@@ -153,12 +156,13 @@ class ModuloScheduler(Scheduler):
             is_write = "mem" in model.compute.op(n.op).writes
 
             placed: tuple[int, int] | None = None
+            required = unit_of_comp.get(comp.get(n.id, "")) if comp else None
             horizon = 4 * ii + model.compute.units + 4
             for cand in range(earliest, earliest + horizon):
                 if latest is not None and cand > latest:
                     break
                 slot = cand % ii
-                unit = self._free_unit(slot, model, issue)
+                unit = self._free_unit(slot, model, issue, required)
                 if unit is None:
                     continue
                 if bank is not None:
@@ -176,6 +180,8 @@ class ModuloScheduler(Scheduler):
             cyc, unit = placed
             t[n.id] = cyc
             placed_at[n.id] = (unit, space, addr)
+            if comp:
+                unit_of_comp.setdefault(comp[n.id], unit)
             issue[(unit, cyc % ii)] += 1
             if bank is not None:
                 (wr if is_write else rd)[(cyc % ii, space, bank)] += 1
@@ -194,7 +200,10 @@ class ModuloScheduler(Scheduler):
 
     @staticmethod
     def _free_unit(slot: int, model: MachineModel,
-                   issue: dict[tuple[int, int], int]) -> int | None:
+                   issue: dict[tuple[int, int], int],
+                   required: int | None = None) -> int | None:
+        if required is not None:
+            return required if issue[(required, slot)] < model.compute.issue_per_unit_per_cycle else None
         for unit in range(model.compute.units):
             if issue[(unit, slot)] < model.compute.issue_per_unit_per_cycle:
                 return unit

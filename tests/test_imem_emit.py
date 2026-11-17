@@ -60,25 +60,27 @@ class TestImemEmitter(unittest.TestCase):
     def test_loop_is_unrolled(self):
         dfg = load_dfg(ROOT / "examples" / "imem_loop.json")
         sched = ModuloScheduler().schedule(dfg, self.model)
-        self.assertEqual(sched.ii, 1)
+        # mul->mac 有寄存器依赖，PE 私有寄存器堆 -> 同 PE -> 每迭代 2 拍
+        self.assertEqual(sched.ii, 2)
         header = self.emitter.emit(sched, dfg, self.model)
         words = parse_words(header)
         total = sched.total_cycles(dfg.trip_count)
-        self.assertEqual(total, 5)                 # (4-1)*1 + span 2
+        self.assertEqual(total, 3 * 2 + 2)         # (4-1)*2 + span 2
         self.assertEqual(len(words), total * 16)
 
-        # 第 k 次迭代：mul 在 k 拍 unit0，mac 在 k+1 拍 unit1
+        # 第 k 次迭代：mul 在 2k 拍，mac 在 2k+1 拍，同一 PE
         mul = sched.slot("mul")
         mac = sched.slot("mac")
+        self.assertEqual(mul.unit, mac.unit)
         for it in range(4):
-            inst = unpack_inst(words[(it + mul.cycle) * 16 + mul.unit])
+            inst = unpack_inst(words[(it * 2 + mul.cycle) * 16 + mul.unit])
             self.assertEqual(inst["op"], 4)
-            inst = unpack_inst(words[(it + mac.cycle) * 16 + mac.unit])
+            inst = unpack_inst(words[(it * 2 + mac.cycle) * 16 + mac.unit])
             self.assertEqual(inst["op"], 5)        # mac，dst 字段为 0
             self.assertEqual(inst["dst"], 0)
-        # 最后一拍只有第 4 次迭代的 mac，另一个 PE 是 NOP
+        # 最后一拍只有第 4 次迭代的 mac（同一颗 PE），没有残留的 mul
         last = total - 1
-        self.assertEqual(words[last * 16 + mul.unit], 0)
+        self.assertEqual(unpack_inst(words[last * 16 + mul.unit])["op"], 5)
 
     def test_illegal_operand_rejected(self):
         dfg = load_dfg(ROOT / "examples" / "loop_dot.json")   # 输入是 x / c，无法编码

@@ -40,6 +40,7 @@ class Compute:
     acc: bool
     link: bool
     ops: dict[str, Op]
+    private_registers: bool = False   # 每个 unit 有私有寄存器堆：寄存器依赖必须同 unit
 
     def op(self, name: str) -> Op:
         if name not in self.ops:
@@ -160,6 +161,7 @@ def load_model(path: str | Path) -> MachineModel:
         acc=bool(c.get("acc", False)),
         link=bool(c.get("link", False)),
         ops=ops,
+        private_registers=bool(c.get("private_registers", False)),
     )
     if compute.units <= 0 or compute.registers <= 0:
         raise ModelError("compute.units / registers 必须 > 0")
