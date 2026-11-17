@@ -18,6 +18,11 @@ set_design_workspace $RESULT_DIR
 
 read_netlist $NETLIST_V
 read_liberty $LIB_FILE
+# optional SRAM macro liberty (fakeRAM45 / sky130 OpenRAM), passed as argv 5
+if {[llength $argv] >= 5} {
+  set MACRO_FILE [lindex $argv 4]
+  if {$MACRO_FILE ne ""} { read_liberty $MACRO_FILE }
+}
 link_design $DESIGN
 read_sdc  $SDC_FILE
 

@@ -268,6 +268,23 @@ ITER-4 的**面积分布**（`make -C syn area`，明细与口径见 `README.md`
   面积较 ITER-4 +11%，来自 1R1W 交叉开关/仲裁与 5 项异或散列。
   **含存储合计**：Nangate45 ≈0.533 mm²（存储占 84%）；sky130 标准单元上限 ≈15.8 mm²。
 
+## ITER-7（实验，未纳入默认 PPA）：IMEM 宏化
+
+- **链路**：`cgra_top.sv` 新增 `IMEM_MACRO` 分支——IMEM 换成 16 个
+  `fakeram45_512x64`（2 bank × 8 条 64-bit lane，半字写用 `w_mask_in`）；
+  `syn/cgra_top_syn.tcl` 读宏 liberty 并保留宏实例；`syn/Makefile` 用
+  `IMEM_MACRO=1` 显式开启（默认关闭）。仿真仍走行为数组，`matmul4x4`
+  自测通过。
+- **结果**：netlist 中 16 个宏实例；宏面积 17,301.438 × 16 =
+  **276,823 µm²（0.277 mm²）**。
+- **异常**：宏化后 Yosys `stat` 的逻辑面积 344,477 µm²（253,263 cell、
+  8,255 flop），STA 关键路径 **4.63 ns**，终点是
+  `perf_spad_bank_conflict`，@500 MHz slack −2.665 ns（≈214 MHz）。
+  判断是 spad 删除后遗留的空组合锥被 ABC 放大，不是 IMEM 宏本身；
+  清理该锥体（或把 spad 也做成黑盒）之前，这组数字只作流程验证，
+  不作为最终 PPA。
+- **结论**：IMEM lane 拆分与宏接入已跑通；sky130 暂停，不再推进。
+
 ## 复现
 
 ```bash

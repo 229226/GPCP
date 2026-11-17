@@ -34,6 +34,7 @@ PDK_NAME  ?= nangate45
 ifeq ($(PDK_NAME),sky130hd)
 PDK          ?= $(ROOT)/third_party/pdk/sky130hd
 LIB          ?= $(PDK)/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+MACRO_LIB    ?=
 HI_CELL      ?= sky130_fd_sc_hd__conb_1
 LO_CELL      ?= sky130_fd_sc_hd__conb_1
 HI_PIN       ?= HI
@@ -43,6 +44,8 @@ OUT          := $(ROOT)/build/syn/$(DESIGN)-sky130-$(CLK_FREQ_MHZ)MHz
 else ifeq ($(PDK_NAME),nangate45)
 PDK          ?= $(ROOT)/third_party/pdk/nangate45
 LIB          ?= $(PDK)/lib/NangateOpenCellLibrary_typical.lib
+# 512x64 fakeRAM45: 8 lanes/bank x 2 banks = 16 macros for the 64 KiB IMEM.
+MACRO_LIB    ?= $(PDK)/lib/fakeram45_512x64.lib
 HI_CELL      ?= LOGIC1_X1
 LO_CELL      ?= LOGIC0_X1
 HI_PIN       ?= Z
@@ -53,11 +56,15 @@ else
 $(error PDK_NAME must be nangate45 or sky130hd, got '$(PDK_NAME)')
 endif
 NETLIST   := $(OUT)/$(DESIGN).netlist.syn.v
-# ABC's delay target, in the units its `-D` expects.  The historical value is
-# 1000/frequency (i.e. "max effort"); keep it for both PDKs so the two area
-# numbers are produced with the same intent.
+# IMEM 宏化是 opt-in：默认仍按“逻辑-only”跑（存储单列），
+# `make -C syn syn IMEM_MACRO=1` 才把 IMEM 换成 fakeram45_512x64 宏。
+IMEM_MACRO ?= 0
+MACRO_SEL  := $(if $(filter 1,$(IMEM_MACRO)),$(if $(wildcard $(MACRO_LIB)),$(MACRO_LIB),),)
+MACRO_ARG  := $(MACRO_SEL)
 ABC_D     := $(shell echo $$((1000 / $(CLK_FREQ_MHZ))))
 export LIB OUT CLK_FREQ_MHZ ABC_D HI_CELL LO_CELL HI_PIN LO_PIN PDK_NAME
+# 脚本只看 MACRO_LIB；未开启宏化时为空 -> 走原行为路径。
+export MACRO_LIB := $(MACRO_SEL)
 
 .PHONY: all tools tools-sky130 syn sta area clean show cpu
 all: sta
@@ -77,14 +84,14 @@ tools:
 tools-sky130:
 	PDK_NAME=sky130hd bash $(ROOT)/tools/fetch_eda.sh
 
-syn: $(LIB)
+syn: $(LIB) $(MACRO_ARG)
 	mkdir -p $(OUT)
 	env -u LD_LIBRARY_PATH $(YOSYS) -m slang -c $(ROOT)/syn/$(DESIGN)_syn.tcl -l $(OUT)/yosys.log
 
 sta: syn
 	env -u LD_LIBRARY_PATH CLK_FREQ_MHZ=$(CLK_FREQ_MHZ) OMP_NUM_THREADS=$(JOBS) \
 	  $(IEDA) -thread_number $(JOBS) -script $(ROOT)/syn/sta.tcl \
-	  $(ROOT)/syn/$(DESIGN).sdc $(NETLIST) $(DESIGN) $(LIB) 2>&1 | tee $(OUT)/sta.log
+	  $(ROOT)/syn/$(DESIGN).sdc $(NETLIST) $(DESIGN) $(LIB) $(MACRO_ARG) 2>&1 | tee $(OUT)/sta.log
 
 # fail loudly instead of producing numbers from a different library
 $(LIB):

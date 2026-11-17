@@ -24,13 +24,27 @@ set LIB    $::env(LIB)
 set OUT    $::env(OUT)
 set ABC_D  $::env(ABC_D)
 set RTL    [file join [file dirname [info script]] .. rtl cgra]
+set MACRO_LIB [expr {[info exists ::env(MACRO_LIB)] ? $::env(MACRO_LIB) : ""}]
 
 yosys -import
-# -DSYNTHESIS drops the simulation-only blocks (`ifndef SYNTHESIS`): the
-# transaction assertions use $error, which the slang frontend does not lower.
-read_slang --top $DESIGN -DSYNTHESIS $RTL/cgra_pkg.sv $RTL/cgra_desc_pkg.sv \
-           $RTL/cgra_pe.sv $RTL/cgra_array.sv $RTL/cgra_axi_lite.sv \
-           $RTL/cgra_top.sv
+# SRAM macro liberty (fakeRAM45 / sky130 OpenRAM) is read as a blackbox library
+# so the explicit IMEM macro instances survive synthesis and show up in the
+# netlist.  Kept optional: without it the flow falls back to the behavioural
+# IMEM and deletes all inferred memories as before.
+if {$MACRO_LIB ne ""} {
+  read_liberty -lib $MACRO_LIB
+}
+if {$MACRO_LIB ne ""} {
+  # -DIMEM_MACRO selects the explicit fakeRAM45 512x64 lane instances in
+  # cgra_top.sv (8 x 64-bit lanes per bank = 16 macros for the 64 KiB IMEM).
+  read_slang --top $DESIGN -DSYNTHESIS -DIMEM_MACRO \
+             $RTL/cgra_pkg.sv $RTL/cgra_desc_pkg.sv $RTL/cgra_pe.sv \
+             $RTL/cgra_array.sv $RTL/cgra_axi_lite.sv $RTL/cgra_top.sv
+} else {
+  read_slang --top $DESIGN -DSYNTHESIS $RTL/cgra_pkg.sv $RTL/cgra_desc_pkg.sv \
+             $RTL/cgra_pe.sv $RTL/cgra_array.sv $RTL/cgra_axi_lite.sv \
+             $RTL/cgra_top.sv
+}
 
 yosys proc
 opt

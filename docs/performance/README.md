@@ -122,6 +122,12 @@ sky130 的 96 mW 看着高，但换算成每周期能量是 1.92 µJ/cycle，对
 liberty，只能用标准单元硬综合给上限（13 + 2.29 ≈ 15.3 mm² 存储），
 不能与 45 nm 的宏口径直接比较；接入 OpenRAM 类宏后应回到 1~2 mm² 量级。
 
+**IMEM 宏化（实验，默认关闭）**：`make -C syn syn IMEM_MACRO=1` 会把 IMEM
+换成 16 个 `fakeram45_512x64`（2 bank × 8 条 64-bit lane，宏面积
+17,301.438 µm²/个，合计 276,823 µm²）。netlist 已能正确例化宏，但宏化后
+Yosys 逻辑面积/STA 被 spad 删除遗留的空组合锥污染（详见
+`iterations.md` ITER-7），在清理前不作为最终 PPA。sky130 暂停。
+
 **sky130 上要把存储做进去，分别是什么情况**（现状：两个阵列在综合前都被删掉）：
 
 | | IMEM（64 KiB） | spad（8 KiB） |

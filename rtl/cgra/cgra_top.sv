@@ -119,7 +119,18 @@ module cgra_top #(
   // 0.138 -> 0.276 mm^2, docs/performance/README.md §4).
   localparam int IMEM_ROWS = CGRA_IMEM_WORDS / CGRA_NPES;   // 512 rows
   localparam int IMEM_AW   = $clog2(IMEM_ROWS);             // 9
+`ifdef IMEM_MACRO
+  // 综合路径：IMEM 用 16 个 fakeram45_512x64 宏（2 bank × 8 条 64-bit lane，
+  // 一条 lane 覆盖两个 PE 的 32-bit 指令字）。仿真路径仍是下面的行为数组，
+  // 两边端口/时序一致：宏的 rd_out 已寄存，地址在时钟沿采样。
+  logic [1:0][7:0][63:0] imem_mrdata;
+  logic [1:0][7:0]       imem_mwe;
+  logic [1:0][7:0][8:0]  imem_maddr;
+  logic [1:0][7:0][63:0] imem_mwdata;
+  logic [1:0][7:0][63:0] imem_mwmask;
+`else
   logic [CGRA_NPES-1:0][31:0] imem [0:1][0:IMEM_ROWS-1];
+`endif
   logic                       imem_wbank, imem_run_bank;
   logic [CGRA_NPES-1:0][31:0] inst_flat;
 
@@ -221,7 +232,12 @@ module cgra_top #(
         imem_sel_bank = arr_imem_q;
     end
   end
+`ifdef IMEM_MACRO
+  // 宏输出已经寄存（地址在上一时钟沿采样），直接组合选择 bank。
+  assign inst_flat = imem_sel_bank ? imem_mrdata[1] : imem_mrdata[0];
+`else
   always_ff @(posedge clk) inst_flat <= imem[imem_sel_bank][imem_raddr];
+`endif
 
   // descriptor buffer: 4 beats = 32 bytes (the only buffering in the engine -
   // data beats are streamed straight into / out of the scratchpad)
@@ -873,16 +889,20 @@ module cgra_top #(
         end else if ((wr_addr >= REG_IMEM_BASE) &&
                      (wr_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
           // word index w = (wr_addr - base) >> 2 -> row w >> 4, lane w[3:0]
+`ifndef IMEM_MACRO
           imem[imem_wbank][((wr_addr - REG_IMEM_BASE) >> 6)]
                            [((wr_addr - REG_IMEM_BASE) >> 2) & 16'hF] <= wr_data;
+`endif
         end
       end else if (dma_imem_we) begin
         // 拷贝引擎直接写 IMEM：一个 8B beat 装两条指令（cur 与 cur+1）
         if (DBG) $display("[cgra-imem] dma idx=%0d lo=%h hi=%h", dma_imem_idx,
                           m_axi_rdata[31:0], m_axi_rdata[63:32]);
+`ifndef IMEM_MACRO
         imem[imem_wbank][dma_imem_idx[12:4]][dma_imem_idx[3:0]] <= m_axi_rdata[31:0];
         if (!dma_last_odd)
           imem[imem_wbank][dma_imem_nidx[12:4]][dma_imem_nidx[3:0]] <= m_axi_rdata[63:32];
+`endif
       end else if (dma_tbl_we) begin
         // 一个 8B beat 装两个 13-bit 旋转条目（低字 = 偶数下标）
         rot_tbl[dma_cur[4:0]]     <= m_axi_rdata[12:0];
@@ -905,6 +925,76 @@ module cgra_top #(
       end
     end
   end
+
+  // ---------------- IMEM macro lanes (synthesis only) ----------------
+`ifdef IMEM_MACRO
+  // 一条 64-bit lane = 两个 PE 的指令字；半字写入靠 w_mask_in。
+  always_comb begin
+    for (int b = 0; b < 2; b++)
+      for (int m = 0; m < 8; m++) begin
+        imem_mwe[b][m]    = 1'b0;
+        imem_maddr[b][m]  = 9'd0;
+        imem_mwdata[b][m] = 64'd0;
+        imem_mwmask[b][m] = 64'd0;
+      end
+
+    if (wr_en && (wr_addr >= REG_IMEM_BASE) &&
+        (wr_addr < (REG_IMEM_BASE + CGRA_IMEM_WORDS * 4))) begin
+      automatic logic [12:0] w = (wr_addr - REG_IMEM_BASE) >> 2;
+      automatic int m = w[3:1];
+      imem_mwe[imem_wbank][m]    = 1'b1;
+      imem_maddr[imem_wbank][m]  = w[12:4];
+      imem_mwdata[imem_wbank][m] = w[0] ? {wr_data, 32'd0} : {32'd0, wr_data};
+      imem_mwmask[imem_wbank][m] = w[0] ? 64'hFFFF_FFFF_0000_0000
+                                        : 64'h0000_0000_FFFF_FFFF;
+    end else if (dma_imem_we) begin
+      automatic logic [12:0] wa = dma_imem_idx[12:0];
+      automatic int ma = wa[3:1];
+      automatic logic [12:0] wb = dma_imem_nidx[12:0];
+      automatic int mb = wb[3:1];
+      imem_mwe[imem_wbank][ma]    = 1'b1;
+      imem_maddr[imem_wbank][ma]  = wa[12:4];
+      imem_mwdata[imem_wbank][ma] = wa[0] ? {m_axi_rdata[31:0], 32'd0}
+                                          : {32'd0, m_axi_rdata[31:0]};
+      imem_mwmask[imem_wbank][ma] = wa[0] ? 64'hFFFF_FFFF_0000_0000
+                                          : 64'h0000_0000_FFFF_FFFF;
+      if (!dma_last_odd) begin
+        if ((mb == ma) && (wb[12:4] == wa[12:4])) begin
+          // 相邻两个字落在同一条 64-bit lane：合并成一次全字写
+          imem_mwdata[imem_wbank][ma] = {m_axi_rdata[63:32], m_axi_rdata[31:0]};
+          imem_mwmask[imem_wbank][ma] = 64'hFFFF_FFFF_FFFF_FFFF;
+        end else begin
+          imem_mwe[imem_wbank][mb]    = 1'b1;
+          imem_maddr[imem_wbank][mb]  = wb[12:4];
+          imem_mwdata[imem_wbank][mb] = wb[0] ? {m_axi_rdata[63:32], 32'd0}
+                                              : {32'd0, m_axi_rdata[63:32]};
+          imem_mwmask[imem_wbank][mb] = wb[0] ? 64'hFFFF_FFFF_0000_0000
+                                              : 64'h0000_0000_FFFF_FFFF;
+        end
+      end
+    end
+  end
+
+  genvar gb, gm;
+  generate
+    for (gb = 0; gb < 2; gb++) begin : g_imem_bank
+      for (gm = 0; gm < 8; gm++) begin : g_imem_lane
+        logic lane_we, lane_ce;
+        assign lane_we = imem_mwe[gb][gm];
+        assign lane_ce = lane_we || ((gb == 0) ? ~imem_sel_bank : imem_sel_bank);
+        fakeram45_512x64 u_imem (
+            .clk       (clk),
+            .ce_in     (lane_ce),
+            .we_in     (lane_we),
+            .addr_in   (lane_we ? imem_maddr[gb][gm] : imem_raddr),
+            .wd_in     (imem_mwdata[gb][gm]),
+            .w_mask_in (imem_mwmask[gb][gm]),
+            .rd_out    (imem_mrdata[gb][gm])
+        );
+      end
+    end
+  endgenerate
+`endif
 
   // ---------------- PE array ----------------
   logic [31:0] pe_rd;
