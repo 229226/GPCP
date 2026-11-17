@@ -13,8 +13,8 @@ _ROOT = _os.path.dirname(_TOOLS)
 
 The bench brackets the unmodified rt_array_run() with mtime() over five cycle
 counts and 64 repetitions each.  `a` is the fixed start/poll cost, `b` the
-per-cycle cost.  run-ifft measures 1938 cycles/run including the DMA descriptor
-ring, so the residual is the DMA/orchestration share.
+per-cycle cost.  run-ifft measures 990 cycles/run (ITER-8 tile pipeline; it was
+1938 before the DMA/array overlap), so the residual is the DMA/orchestration share.
 """
 import os
 import sys
@@ -26,7 +26,7 @@ NPTS = 5
 REPS = 64
 META = 24
 MARKER = 0x0FF1C1A1
-IFIT_CYCLES_PER_RUN = 1938       # run-ifft: 217098 cycles / 112 runs
+IFIT_CYCLES_PER_RUN = 990        # run-ifft: 110861 cycles / 112 runs (ITER-8)
 IFIT_IMEM_CYCLES = 448           # stage image (block image is 336)
 
 

@@ -29,9 +29,10 @@
  * FFT 的 tile 数组和结果区互相踩（run-ssbfft / run-ssb-slot 会挂）。 */
 #define FFT_MAX_TILES    80
 
-static uint32_t f_dstart[FFT_MAX_TILES], f_in_end[FFT_MAX_TILES];
-static uint32_t f_out_end[FFT_MAX_TILES], f_page[FFT_MAX_TILES];
-static uint32_t f_cyc[FFT_MAX_TILES], f_in[FFT_MAX_TILES], f_out[FFT_MAX_TILES];
+static uint32_t f_page[FFT_MAX_TILES], f_cyc[FFT_MAX_TILES];
+static uint32_t f_in[FFT_MAX_TILES], f_out[FFT_MAX_TILES];
+static uint32_t f_in_end[FFT_MAX_TILES], f_out_end[FFT_MAX_TILES];
+static uint32_t f_group[FFT_MAX_TILES];   /* 同组 = 同一 FFT stage（tail 全一组） */
 static uint32_t f_ntiles, f_ndesc, f_done;
 
 /* 两张镜像由 cgra/kernels/fft_stage.yaml / fft_block.yaml 编译，
@@ -69,19 +70,51 @@ static void fe_dsc(uint32_t ram, uint32_t spad, uint32_t len, uint32_t page,
     f_ndesc++;
 }
 
-static void fe_tile_begin(uint32_t page, uint32_t cyc)
+/* 一个 stage tile 的输入组：4 个蝶形块 + twiddle。
+ * 描述符按「in(i+1) 紧跟 in(i)、out(i) 在 in(i+1) 之后」交错发射，
+ * 执行时 in(i+1) 的 DMA 就能与 array(i) 在另一页并行。 */
+static void fe_in_stage(uint32_t n, int32_t *data, uint32_t lut_ofs,
+                        uint32_t st, uint32_t q, uint32_t tiles, uint32_t t)
 {
-    f_dstart[f_ntiles] = f_ndesc;
-    f_page[f_ntiles] = page;
-    f_cyc[f_ntiles] = cyc;
+    uint32_t L = n >> (2 * st), M = L / 4;
+    uint32_t base = q * FFT_TILE_BFLIES;
+    uint32_t blk = base / M, t0 = base % M;
+
+    for (uint32_t j = 0; j < 4; j++) {
+        uint32_t g0 = blk * L + j * M + t0;
+        fe_dsc((uint32_t)(uintptr_t)&data[2 * g0], j * 128, 128, f_page[t], 0, 0, 0);
+    }
+    fe_dsc(FFT_LUT_RAM + 4u * (lut_ofs + (st * tiles + q) * FFT_TW_WORDS),
+           FFT_TW_BASE, FFT_TW_WORDS, f_page[t], 0, 0, 0);
+    f_in[t] = 5;
 }
 
-static void fe_tile_end(uint32_t in, uint32_t out)
+static void fe_out_stage(uint32_t n, int32_t *data, uint32_t st, uint32_t q, uint32_t t)
 {
-    f_in[f_ntiles] = in;
-    f_out[f_ntiles] = out;
-    f_out_end[f_ntiles] = f_ndesc;
-    f_ntiles++;
+    uint32_t L = n >> (2 * st), M = L / 4;
+    uint32_t base = q * FFT_TILE_BFLIES;
+    uint32_t blk = base / M, t0 = base % M;
+
+    for (uint32_t j = 0; j < 4; j++) {
+        uint32_t g0 = blk * L + j * M + t0;
+        fe_dsc((uint32_t)(uintptr_t)&data[2 * g0], j * 128, 128, f_page[t], 1, 0, 0);
+    }
+    f_out[t] = 4;
+}
+
+static void fe_in_tail(int32_t *data, uint32_t b, uint32_t t)
+{
+    fe_dsc((uint32_t)(uintptr_t)&data[b * FFT_TAIL_BLOCK * 2], 0,
+           FFT_TAIL_WORDS, f_page[t], 0, 0, 0);
+    fe_dsc(FFT_LUT_RAM + 4u * FFT_LUT_TAIL, FFT_TW_BASE, 120, f_page[t], 0, 0, 0);
+    f_in[t] = 2;
+}
+
+static void fe_out_tail(int32_t *data, uint32_t b, uint32_t t)
+{
+    fe_dsc((uint32_t)(uintptr_t)&data[b * FFT_TAIL_BLOCK * 2], 0,
+           FFT_TAIL_WORDS, f_page[t], 1, 0, 0);
+    f_out[t] = 1;
 }
 
 static void fe_desc_stages(uint32_t n, int32_t *data, uint32_t lut_ofs, uint32_t *pg)
@@ -90,70 +123,110 @@ static void fe_desc_stages(uint32_t n, int32_t *data, uint32_t lut_ofs, uint32_t
     while ((n >> (2 * stages)) >= 256u)
         stages++;
     for (uint32_t st = 0; st < stages; st++) {
-        uint32_t L = n >> (2 * st), M = L / 4;
+        uint32_t t0 = f_ntiles;
         for (uint32_t q = 0; q < tiles; q++) {
-            uint32_t page = (*pg)++;
-            uint32_t base = q * FFT_TILE_BFLIES;
-            uint32_t blk = base / M, t0 = base % M;
-            fe_tile_begin(page & 1u, FFT_STAGE_PROG_CYCLES);
-            for (uint32_t j = 0; j < 4; j++) {
-                uint32_t g0 = blk * L + j * M + t0;
-                fe_dsc((uint32_t)(uintptr_t)&data[2 * g0], j * 128, 128, page & 1u, 0, 0, 0);
+            f_page[t0 + q] = (*pg)++ & 1u;   /* 相邻 tile 必在不同页 */
+            f_cyc[t0 + q] = FFT_STAGE_PROG_CYCLES;
+            f_group[t0 + q] = st;
+        }
+        /* 布局：in(0), in(1), out(0), in(2), out(1), ... */
+        fe_in_stage(n, data, lut_ofs, st, 0, tiles, t0);
+        f_in_end[t0] = f_ndesc;
+        for (uint32_t q = 0; q < tiles; q++) {
+            if (q + 1 < tiles) {
+                fe_in_stage(n, data, lut_ofs, st, q + 1, tiles, t0 + q + 1);
+                f_in_end[t0 + q + 1] = f_ndesc;
             }
-            fe_dsc(FFT_LUT_RAM + 4u * (lut_ofs + (st * tiles + q) * FFT_TW_WORDS),
-                   FFT_TW_BASE, FFT_TW_WORDS, page & 1u, 0, 0, 0);
-            f_in_end[f_ntiles] = f_ndesc;          /* in group ends here */
-            for (uint32_t j = 0; j < 4; j++) {
-                uint32_t g0 = blk * L + j * M + t0;
-                fe_dsc((uint32_t)(uintptr_t)&data[2 * g0], j * 128, 128, page & 1u, 1, 0, 0);
-            }
-            fe_tile_end(5, 4);
+            fe_out_stage(n, data, st, q, t0 + q);
+            f_out_end[t0 + q] = f_ndesc;
+            f_ntiles++;
         }
     }
 }
 
 static void fe_desc_tail(uint32_t n, int32_t *data, uint32_t *pg)
 {
-    for (uint32_t b = 0; b < n / FFT_TAIL_BLOCK; b++) {
-        uint32_t page = (*pg)++;
-        fe_tile_begin(page & 1u, FFT_BLOCK_PROG_CYCLES);
-        fe_dsc((uint32_t)(uintptr_t)&data[b * FFT_TAIL_BLOCK * 2], 0,
-               FFT_TAIL_WORDS, page & 1u, 0, 0, 0);
-        fe_dsc(FFT_LUT_RAM + 4u * FFT_LUT_TAIL, FFT_TW_BASE, 120, page & 1u, 0, 0, 0);
-        f_in_end[f_ntiles] = f_ndesc;              /* in group ends here */
-        fe_dsc((uint32_t)(uintptr_t)&data[b * FFT_TAIL_BLOCK * 2], 0,
-               FFT_TAIL_WORDS, page & 1u, 1, 0, 0);
-        fe_tile_end(2, 1);
+    uint32_t tiles = n / FFT_TAIL_BLOCK, t0 = f_ntiles;
+    for (uint32_t b = 0; b < tiles; b++) {
+        f_page[t0 + b] = (*pg)++ & 1u;
+        f_cyc[t0 + b] = FFT_BLOCK_PROG_CYCLES;
+        f_group[t0 + b] = 0;                 /* tail 各块互相独立，可整段流水 */
+    }
+    fe_in_tail(data, 0, t0);
+    f_in_end[t0] = f_ndesc;
+    for (uint32_t b = 0; b < tiles; b++) {
+        if (b + 1 < tiles) {
+            fe_in_tail(data, b + 1, t0 + b + 1);
+            f_in_end[t0 + b + 1] = f_ndesc;
+        }
+        fe_out_tail(data, b, t0 + b);
+        f_out_end[t0 + b] = f_ndesc;
+        f_ntiles++;
     }
 }
 
-static void fe_exec(uint32_t first, uint32_t last)
+/* 一组 tile 的流水执行：
+ *   in(g0) → array(g0) ─┬─→ in(g0+1) 与 array(g0) 并行
+ *                        └→ out(g0) 与 array(g0+1) 并行
+ * 同组 tile 的输入/输出区域互不相交，且页交替；跨组（换 stage）时数据有依赖，
+ * 组尾等 out 完再进下一组。 */
+static void fe_run_group(uint32_t g0, uint32_t g1)
 {
-    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DESC_MODE, 0u);   /* 本路径用 32 字节描述符 */
-    for (uint32_t i = first; i < last; i++) {
-        f_done = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, DESC_BASE);
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_SIZE, RING_DEPTH);
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_HEAD, f_dstart[i]);
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, f_in_end[i]);
-        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-        gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
-        f_done += f_in[i];
-        wait_desc(f_done);
-        /* each tile runs on its own page: never start the array on page 0 */
-        gpcp_cgra_array_start(CGRA_BASE, f_page[i], f_cyc[i]);
-        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    uint32_t start = f_in_end[g0] - f_in[g0];
+    uint32_t d0 = mmio_r(CGRA_BASE + GPCP_CGRA_RING_DONE);
+
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_BASE, DESC_BASE);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_SIZE, RING_DEPTH);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_HEAD, start);
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_TAIL, f_in_end[g0]);
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_RING_CTRL, GPCP_CGRA_RING_EN);
+    f_done = d0 + (f_in_end[g0] - start);
+    wait_desc(f_done);
+
+    for (uint32_t i = g0; i <= g1; i++) {
+        /* 阵列必须已空闲：run 寄存器在 busy=1 时会静默丢弃启动写。 */
         {
             uint32_t spins = 0;
             while (mmio_r(CGRA_BASE + GPCP_CGRA_STATUS) & GPCP_CGRA_STATUS_BUSY) {
                 if (++spins > 4000000u) { errs++; break; }
             }
         }
+        gpcp_cgra_array_start(CGRA_BASE, f_page[i], f_cyc[i]);
+        __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+        if (i + 1 <= g1)
+            gpcp_cgra_ring_push(CGRA_BASE, f_in_end[i + 1]);  /* 预取下一页 */
+        {
+            /* 启动是 posted write：先等它真的生效（BUSY 置位），再等完成。 */
+            uint32_t spins = 0;
+            uint32_t s = mmio_r(CGRA_BASE + GPCP_CGRA_STATUS);
+            while (!(s & GPCP_CGRA_STATUS_BUSY)) {
+                if (++spins > 4000000u) { errs++; break; }
+                s = mmio_r(CGRA_BASE + GPCP_CGRA_STATUS);
+            }
+            while (s & GPCP_CGRA_STATUS_BUSY) {
+                if (++spins > 4000000u) { errs++; break; }
+                s = mmio_r(CGRA_BASE + GPCP_CGRA_STATUS);
+            }
+        }
         runs++;
-        gpcp_cgra_ring_push(CGRA_BASE, f_out_end[i]);
-        f_done += f_out[i];
+        gpcp_cgra_ring_push(CGRA_BASE, f_out_end[i]);          /* 下一轮阵列时搬出 */
+        f_done = d0 + (((i + 1 <= g1) ? f_in_end[i + 1] : f_out_end[i]) - start);
         wait_desc(f_done);
-        mmio_w(CGRA_BASE + GPCP_CGRA_RING_CTRL, 0);
+    }
+    mmio_w(CGRA_BASE + GPCP_CGRA_RING_CTRL, 0);
+}
+
+static void fe_exec(uint32_t first, uint32_t last)
+{
+    gpcp_cgra_write(CGRA_BASE, GPCP_CGRA_DESC_MODE, 0u);   /* 本路径用 32 字节描述符 */
+    uint32_t i = first;
+    while (i < last) {
+        uint32_t j = i;
+        while (j + 1 < last && f_group[j + 1] == f_group[i])
+            j++;
+        fe_run_group(i, j);
+        i = j + 1;
     }
 }
 

@@ -97,10 +97,10 @@ env -u LD_LIBRARY_PATH make -C syn area PDK_NAME=sky130hd CLK_FREQ_MHZ=50  # 面
 | `run-dma` / `run-irq` | 3 / 2 个 slot 的 H 值一致；中断数 4 |
 | `run-ring` | 4 个描述符消费、head=4、**0.70 周期/字** |
 | `run-rxchain` | 4 slot = **2057 周期**（阵列 1220 + ring 546） |
-| `run-fft` | 256/1024/4096 = **4399 / 22956 / 116761** 周期，逐位一致 |
+| `run-fft` | 256/1024/4096 = **4468 / 23357 / 118427** 周期，逐位一致（独立台架 `fft_bm.c` 仍用旧编排；共享引擎的时序见 `run-ifft` / `run-ssbfft`） |
 | `run-sync` / `run-sss` / `run-polar` | N_ID2 / N_ID1=200 / 32 bit 全对，partial 逐位。`run-polar` 的 `--nwords` 原是 14（程序写到下标 134，检查器要 135 字）→ 一直报 `dump too short`，已改成 135 |
 | `run-ssb` | 1459 runs，2,411,649 周期，H=(32,15)，MIB 逐位（导频 28 个、真实 DMRS `c_init`） |
-| `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32，H=(16,0) 四个符号**，1907 runs，4,378,711 周期（SSB 占 bin 480..719，避开 DC） |
+| `run-ssbfft` | **N_ID2=1、N_ID1=200、MIB 32/32，H=(16,0) 四个符号**，1907 runs，**3,132,438 周期**（ITER-8 tile 流水后，原 4,378,711；SSB 占 bin 480..719，避开 DC） |
 | `run-ssb-fid` | **N_ID2=1、N_ID1=200、i_SSB=3、n_hf=0、DMRS `c_init`=0x12e101、MIB 32/32**，1907 runs，4,411,511 周期（真 38.211 布局：PSS 符号 0 / SSS 符号 2、CP=288、DC 空在 RE 24、72 个导频、38.212 速率匹配 720→512） |
 | `run-ssb-slot` | N_ID2=1、N_ID1=200、MIB 32/32；SSS 按 tick 分摊（14 tick）、无 overrun、计时对照 20 ms 预算 |
 | `run-fftprobe` | 4096 个 bin 与定点参考**逐位一致** |
@@ -112,10 +112,10 @@ env -u LD_LIBRARY_PATH make -C syn area PDK_NAME=sky130hd CLK_FREQ_MHZ=50  # 面
 | `run-pdsch-iter` | **P1 整链**：BG2(Zc=20) 一个码块 **8 次迭代全在硬件上**（42 CN + 52 BN/迭代），`check_pdsch_iter.py` **1040/1040 硬判决**与纯 min-sum 一致；**752 次阵列运行 / 1556 次 DMA / 内核 1,525,033 周期**（≈191k/迭代），仿真总周期 1,981,113（约 3 分钟，只在 `verify.sh full` 里）。三步优化 2.04×（`docs/protocols/README.md` §5.3），含 CPU 成本模型（写 4 拍/字、20 字 DMA 74 拍/次、IMEM 装载 1,825 拍）；旋转为什么挪不进硬件、以及 RTL 方案估算 2.6× 见 §5.4/§5.5 |
 | `run-pdsch-full` | **PDSCH 整链（样本进 → TB 出）**：`tools/pdsch_full_plan.py` 生成 2 符号 CP+4096 IFFT 的时域样本（平坦增益 + AWGN），SoC 自己做 FFT → RE 提取 → **38.211 7.4.1.1 Gold DMRS 逐符号 LS 估计**（`c_init`=0x120002/0x180002）→ 均衡 → 720 个 QPSK 软 LLR → **38.212 5.4.2.2 反交织** → 38.211 Gold 解扰（`c_init` = n_RNTI<<15）→ 解速率匹配（720→1040，跳过 16 filler + 40 打孔）→ `>>8` 定标 → 复用 `run-pdsch-iter` 的 8 次纯 min-sum 迭代 → CRC24A → 80 bit TB。`check_pdsch_full.py` 硬门 = **DMRS `c_init` + LLR 符号逐位 + 高 SNR 幅值容差 + 1040/1040 硬判决 + CRC + 80/80 TB**；20 dB/seed 1 与 0 dB/seed 3 均通过，0 errors、**3,064,784 / 3,067,508 周期（20 / 0 dB）、976 次阵列运行、1556 次 DMA**。20 dB 下 `chan est` 硬件 `[32,16,31,15]` 与模型逐值相同、bin0 `yw=(2304,6320)` vs 模型 `(2305,6325)`。`make -C sim/soc run-pdsch-full SNR=<db> SEED=<n>` 可换 SNR 与种子；只在 `verify.sh full` 里 |
 | `run-pdcch` | **PDCCH/DCI 盲检（硬件）**：1 符号 TD → 4096 FFT → 216 RE / 432 LLR → 38.211 Gold 解扰（`c_init`=N_ID=200）→ **E=432 逆速率匹配 LUT**（`pdcch_luts.h`）→ **CGRA Polar SC（K=56，复用 22 拍 f/g 节点微码）** → 5 个 RNTI 候选 CRC24C 去掩码盲检 → 32 bit DCI（MCS/RV/NDI/HARQ PID/RB/TPC）。12 dB 与 8 dB 两点均 `[OK]`，0 errors、**1,327,171 周期 / 1232 次阵列运行**，LLR 与浮点模型误差 <1%、56/56 信息位、32/32 DCI。`SNR=`/`SEED=` 可换点；只在 `verify.sh full` 里 |
-| `run-pdcch-loop` | **G2/B4 PDCCH 自环（单程序，无宿主中转）**：B3 发射链（polar 9 级阵列）→ 216 QPSK 频域格点 → **CGRA IFFT（共轭技巧）+ CP** → TD 落 RAM → **A4 接收链**（FFT → 432 LLR → 逆 REG/CCE → 解扰 → 逆速率匹配 → polar SC 阵列 → RNTI 盲检）。判据：e_sc 432/432 与 `nr_pdcch_tx` 逐位、**DCI 32/32**、RNTI 0x1234 从 5 候选盲检出、CRC24C 通过、**432/432 LLR 符号正确（\|abs\| 1904~2064）**；**1353 次阵列运行 / 1,905,137 周期**（2026-11-09 把阶段实现抽到 `pdcch_stages.inc` 与协议运行器共用，+0.4%）。踩坑记录：`dma_tgt` 曾跨传输粘滞（RTL 已修）、WR 写缓冲排空、收发两侧 REG 交织配对 |
-| `run-proto-nr_pdcch` | **协议基准阶段 0（docs/protocols/README.md）**：`make proto PROTO=nr_pdcch` 一键 —— 场景 → IR/落点 → `plan.h` + `stimulus.bin` + `golden.json` → **通用运行器按阶段表跑**（与 `run-pdcch-loop` **共用同一份** `pdcch_stages.inc`）→ 判据/按时率/阶段占比/差距表。**1,905,916 周期 / 1353 阵列 / 5600 DMA**，与手写基准差 **0.04%**（±1% 门），e_sc 432/432、DCI 32/32、RNTI+CRC 全对；报告 `build/proto/nr_pdcch/report.md`。差距表暴露 3 处落点估算偏差（FFT 4→112、SC 128→1120、`estimate` 里 112 次阵列），留给阶段 4 自动搜索；单次到达的预算只报不判（1.9 M 周期 = 1 ms 预算的 19×） |
-| `run-pdsch-loop` | **G2/B5 PDSCH 自环（单程序，G2 验收的后半）**：TB → CRC24A → **LDPC BG2/Zc20 编码**（CVA6）→ 速率匹配 → 加扰 → 交织 → QPSK → **38.211 Gold DMRS + 240 RE/符号** → **CGRA IFFT + CP** → 2 符号 TD → 接收链（FFT → 逐符号 LS → 均衡 → 720 LLR → 解交织 → 解扰 → 解速率匹配 → **8 次 min-sum LDPC 阵列迭代**）→ CRC24A → TB。判据：**1040/1040 硬判决 == 发射码字**、**TB 80/80 + CRC ok**、**720/720 LLR 符号（\|LLR\| 31232~33024 ≈ 16×2000）**、LS 估计 `(16,0)/(15,0)` = H_SCALE、DMRS `c_init` 0x120002/0x180002；**1200 次阵列运行 / 2,633,117 周期 / 4656 DMA**（阶段实现抽到 `pdsch_stages.inc` 后与协议运行器共用，当时差 −0.6%；ITER-2/3 后协议路径已快 10.7%，见下行）。判据坑：LLR 符号 anchor 必须放在**解扰之前**（解扰后对应的是 `e_bits`，拿它比 `e_sc` 会假报 ~50%） |
-| `run-proto-nr_pdsch` | **协议基准阶段 1（docs/protocols/README.md）**：`make proto PROTO=nr_pdsch` —— 场景 → `pdsch_stages.inc`（与手写基准共用）→ 阶段表运行器 → 判据 + **40 格负载时间轴**。**2,351,954 周期 / 1200 阵列 / 4656 DMA**，与 `run-pdsch-loop` 差 **10.7%**（后者仍是旧的逐块提交路径）；TB 80/80、码字 1040/1040、720/720 LLR、LS `[16,0,15,0]`、DMRS `c_init` 全对。负载（每格 1 TB、1 ms 预算）：**按时率 0%、单格超 23.5×、40 格积压 901 格**（`build/proto/nr_pdsch/timeline.csv`），阶段 2 按这张差距表优化 |
+| `run-pdcch-loop` | **G2/B4 PDCCH 自环（单程序，无宿主中转）**：B3 发射链（polar 9 级阵列）→ 216 QPSK 频域格点 → **CGRA IFFT（共轭技巧）+ CP** → TD 落 RAM → **A4 接收链**（FFT → 432 LLR → 逆 REG/CCE → 解扰 → 逆速率匹配 → polar SC 阵列 → RNTI 盲检）。判据：e_sc 432/432 与 `nr_pdcch_tx` 逐位、**DCI 32/32**、RNTI 0x1234 从 5 候选盲检出、CRC24C 通过、**432/432 LLR 符号正确（\|abs\| 1904~2064）**；**1353 次阵列运行 / 1,638,091 周期**（ITER-8 FFT tile 流水后，原 1,905,137）。踩坑记录：`dma_tgt` 曾跨传输粘滞（RTL 已修）、WR 写缓冲排空、收发两侧 REG 交织配对 |
+| `run-proto-nr_pdcch` | **协议基准阶段 0（docs/protocols/README.md）**：`make proto PROTO=nr_pdcch` 一键 —— 场景 → IR/落点 → `plan.h` + `stimulus.bin` + `golden.json` → **通用运行器按阶段表跑**（与 `run-pdcch-loop` **共用同一份** `pdcch_stages.inc`）→ 判据/按时率/阶段占比/差距表。**1,651,066 周期 / 1353 阵列 / 5600 DMA**，与手写基准差 **0.8%**（ITER-8 后；原 1,905,916 / 0.04%），e_sc 432/432、DCI 32/32、RNTI+CRC 全对；报告 `build/proto/nr_pdcch/report.md`。差距表暴露 3 处落点估算偏差（FFT 4→112、SC 128→1120、`estimate` 里 112 次阵列），留给阶段 4 自动搜索；单次到达的预算只报不判（1.65 M 周期 = 1 ms 预算的 16.5×） |
+| `run-pdsch-loop` | **G2/B5 PDSCH 自环（单程序，G2 验收的后半）**：TB → CRC24A → **LDPC BG2/Zc20 编码**（CVA6）→ 速率匹配 → 加扰 → 交织 → QPSK → **38.211 Gold DMRS + 240 RE/符号** → **CGRA IFFT + CP** → 2 符号 TD → 接收链（FFT → 逐符号 LS → 均衡 → 720 LLR → 解交织 → 解扰 → 解速率匹配 → **8 次 min-sum LDPC 阵列迭代**）→ CRC24A → TB。判据：**1040/1040 硬判决 == 发射码字**、**TB 80/80 + CRC ok**、**720/720 LLR 符号（\|LLR\| 31232~33024 ≈ 16×2000）**、LS 估计 `(16,0)/(15,0)` = H_SCALE、DMRS `c_init` 0x120002/0x180002；**1200 次阵列运行 / 2,168,355 周期 / 4656 DMA**（阶段实现抽到 `pdsch_stages.inc` 后与协议运行器共用；ITER-8 FFT tile 流水后由 2,633,117 降到这里）。判据坑：LLR 符号 anchor 必须放在**解扰之前**（解扰后对应的是 `e_bits`，拿它比 `e_sc` 会假报 ~50%） |
+| `run-proto-nr_pdsch` | **协议基准阶段 1（docs/protocols/README.md）**：`make proto PROTO=nr_pdsch` —— 场景 → `pdsch_stages.inc`（与手写基准共用）→ 阶段表运行器 → 判据 + **40 格负载时间轴**。**2,187,889 周期 / 1200 阵列 / 4656 DMA**，与 `run-pdsch-loop` 差 **+0.9%**（ITER-8 FFT tile 流水后，原 2,351,954 / 10.7%）；TB 80/80、码字 1040/1040、720/720 LLR、LS `[16,0,15,0]`、DMRS `c_init` 全对。负载（每格 1 TB、1 ms 预算）：**按时率 0%、单格超 21.9×、40 格积压 897 格**（`build/proto/nr_pdsch/timeline.csv`），阶段 2 按这张差距表优化 |
 | `run-proto-cpu-<scenario>` | **协议级落点对比（docs/performance/README.md）**：同一 `plan.h`/激励/判据加 `-DPROTO_CPU_ONLY` 编出"全 CPU"对照路径（FFT/DFT/LDPC 换成 CVA6 标量实现，Polar/MMSE/相关暂未覆盖），`tools/proto_compare.py` 逐阶段输出 `build/proto/compare_<scenario>.csv`。17 个场景全部双跑，CPU 实现已补到 Polar/MMSE/PRACH/PUCCH/PSS/SSS/小区搜索；阵列实现已补 DFT256 与小区搜索。实测：FFT **10–31×**、DFT200 **4.5×**、DFT256 **1.65×**、LDPC **2.4–2.6×**、PRACH/PUCCH 相关 **10–11×**、SSS 相关 **1.5×**；Polar SC **0.55×**、MMSE **0.35×**、小区搜索 **0.24×**（CPU 更快，落点回 CPU）。整链 CPU/CGRA：CSI 22.0×、MIMO 18.3×、NR PRACH 10.9×、SSB 6.5×、NR PDSCH 6.0×、LTE PDSCH 4.8×、WiFi 1.16×。Turbo/WiFi LDPC/QAM/LDPC 编码的阵列版仍缺。结论：FFT/DFT 放 CGRA，LDPC 留 CGRA 但先修编排，Turbo/QAM 留 CPU，Polar/MMSE/相关补 CPU 版后再判 |
 | `run-proto-lte_pdsch` | **协议基准阶段 3（docs/protocols/README.md，跨制式）**：`lte_pdsch` 只为 HLL 场景，实现库新增 `sw/soc/stages/lte_stages.inc`（36.212 Turbo 1/3 + QPP K=104 + 速率匹配、36.211 CRS），**未改 RTL/编译器/微码**。**4,761,605 周期 / 448 次阵列**（2 模 + 2 解调 FFT），e_sc 800/800、信息位 104/104、CRC24A；Turbo 译码 **2.79 M 周期（58.6%）** 是最大头。简化：尾比特零终止、单码块、2 符号/240 RE/CRS density 6 |
 | `run-proto-nr_pdsch_16qam` / `-64qam` | **多制式批次（Rel-19）**：Qm=4/6 纯接收 TD（与 `run-pdsch-16qam/64qam` 同口径，尾部 7 字带 qm/rv/RNTI），硬件 FFT → Gold DMRS LS → **QAM max-log**（`ref=(|h|²/16)·894/436`，`LLR=(d1-d0)/(2·ref)`，与 `nr_qam.py` 逐位）→ LDPC。16QAM **1,647,380 周期 / 976 阵列 / 4656 DMA**，64QAM **1,732,317 / 976 / 4656**；TB 80/80、CRC24A、已传 984 码字位逐位。踩坑：64QAM 的 `out[n*b+k]` 写成 `2*b+k` 会让 I 支路第 3 位被 Q 支路覆盖（16QAM 因 n=2 恰好无症状） |
@@ -450,18 +450,20 @@ env -u LD_LIBRARY_PATH make -C syn area PDK_NAME=sky130hd CLK_FREQ_MHZ=50  # 面
       → rev4 / ×`TD_SCALE` / CP；`selftest-ifft` 把 TX 样本送回接收 FFT 并 `<<4`，
       239 个有效 RE 的 QPSK 符号 **0 错**（幅度 rms 误差 32.9 / 2000）。
     * `sw/soc/bench/ifft_bm.c` 复用 `ssb_fft.inc` 的 `fft4096()`；`check_ifft.py` 对
-      **8192 raw 频谱字 + 8768 TX 样本字逐值 0 差**，217098 周期 / 112 次阵列运行。
+      **8192 raw 频谱字 + 8768 TX 样本字逐值 0 差**，**110861 周期 / 112 次阵列运行**
+      （ITER-8 tile 流水后；原 217098 / 1938 周期每 run）。
     * 电平口径：`TD_SCALE=256`，接收侧 `<<4`；定点 IFFT 相对浮点参考 SNR 20.9 dB。
-      1938 周期/run 里约 **1456 周期**是 DMA 描述符环 / 页编排；
-      T0 台架实测（§6.22）纯阵列 run 固定开销只有 **32 周期**，修正了这里的口径。
+      ITER-8 前 1938 周期/run 里约 **1456 周期**是 DMA 描述符环 / 页编排，
+      流水后降到 **989 周期/run**；T0 台架实测（§6.22）纯阵列 run 固定开销只有 32 周期。
     * **后续均已交付**：A4 四符号自环与 T0 台架见 §6.22。
 
 22. **T0 开销台架 + G1/A4 自环（2026-11-09，G1 收口）**：
     * **T0**：`run-overhead` 不改 `rt_array_run`，用 `mtime` 包住它，对
       c={1,8,32,128,448} 各 64 次，拟合 **`T(c)=32.0+1.0045c`（R²=0.99966）**。
       **纯阵列 run 的固定开销只有 32 周期**；之前估的「1.5k 固定开销」几乎全是
-      DMA 描述符环 / 页编排（`run-ifft` 1938 周期/run 里约 1456 属此类）。
-      优化方向因此从「融合 kernel 减 run 数」修正为**批量化 DMA 描述符**。
+      DMA 描述符环 / 页编排（`run-ifft` 1938 周期/run 里约 1456 属此类；
+      ITER-8 流水后 989 周期/run）。优化方向因此从「融合 kernel 减 run 数」
+      修正为**批量化 DMA 描述符**。
     * **A4**：`nr_ofdm_tx.py` 扩到 4 符号；`ssb_tx_bm.c` 复用 `fft4096` 生成
       4×(CP288+4096) 复样本（**35072 字逐值 0 差**，2267434 周期 / 448 runs）；
       `check_ssb_tx.py` 把硬件结果原样导出成 P1 TD，同一门禁接着跑
