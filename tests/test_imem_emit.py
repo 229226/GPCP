@@ -94,6 +94,9 @@ class TestImemEmitter(unittest.TestCase):
         header = self.emitter.emit(sched, dfg, self.model)
         self.assertIn("#define IMEM_DOT_PROG_CYCLES", header)
         self.assertIn("static const unsigned int imem_dot_prog[", header)
+        # 存储访问点由编译器导出，C 侧不再写死 bank/word
+        self.assertIn("#define IMEM_DOT_ST0_BANK 0", header)
+        self.assertIn("#define IMEM_DOT_ST0_WORD 1", header)
 
 
 if __name__ == "__main__":

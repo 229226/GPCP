@@ -67,6 +67,12 @@ class Gpcp4x4Emitter(Emitter):
         by_id = {n.id: n for n in dfg.nodes}
         grid = [[NOP_WORD] * units for _ in range(total)]
 
+        # 存储访问点：把编译器选定的坐标作为宏导出，C 侧不再写死数字
+        mem_pts: list[tuple[str, str, int]] = []
+        for n in dfg.nodes:
+            if n.space is not None and n.imm is not None:
+                mem_pts.append((n.id, n.space, n.imm))
+
         for it in range(trip):
             for slot in schedule.slots:
                 t = it * step + slot.cycle
@@ -77,7 +83,7 @@ class Gpcp4x4Emitter(Emitter):
                         f"(cycle {t}, unit {slot.unit}) 被两条指令占用（展开后冲突）")
                 grid[t][slot.unit] = self._encode(by_id[slot.node], by_id)
 
-        return self._header(dfg, schedule, total, units, grid)
+        return self._header(dfg, schedule, total, units, grid, model, mem_pts)
 
     # ---------------- 单条指令 ----------------
     def _encode(self, node: Node, by_id: dict[str, Node]) -> int:
@@ -123,7 +129,8 @@ class Gpcp4x4Emitter(Emitter):
     # ---------------- 输出 ----------------
     @staticmethod
     def _header(dfg: DFG, schedule: Schedule, total: int, units: int,
-                grid: list[list[int]]) -> str:
+                grid: list[list[int]], model: MachineModel,
+                mem_pts: list[tuple[str, str, int]]) -> str:
         sym = "".join(c if c.isalnum() else "_" for c in dfg.name).lower()
         macro = sym.upper()
         lines = [
@@ -137,6 +144,18 @@ class Gpcp4x4Emitter(Emitter):
             "",
             f"#define {macro}_PROG_CYCLES {total}",
             f"#define {macro}_PROG_PES {units}",
+        ]
+        for nid, space, addr in mem_pts:
+            sp = model.store.get(space)
+            if sp is None:
+                continue
+            tag = "".join(c if c.isalnum() else "_" for c in nid).upper()
+            lines += [
+                f"#define {macro}_{tag}_SPACE \"{space}\"",
+                f"#define {macro}_{tag}_BANK {sp.bank_of(addr)}",
+                f"#define {macro}_{tag}_WORD {addr % sp.words_per_bank}",
+            ]
+        lines += [
             "",
             f"static const unsigned int {sym}_prog[{total * units}]",
             "    __attribute__((aligned(8))) = {",
