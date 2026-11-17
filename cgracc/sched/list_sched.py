@@ -18,10 +18,13 @@ from .base import Scheduler
 class ListScheduler(Scheduler):
     name = "list"
 
-    def __init__(self, order: str = "topo"):
+    def __init__(self, order: str = "topo", bind: str = "rotate"):
         if order not in ("topo", "height"):
             raise ValueError(f"未知排序 '{order}'（topo / height）")
+        if bind not in ("rotate", "decl"):
+            raise ValueError(f"未知绑定 '{bind}'（rotate / decl）")
         self.order = order
+        self.bind = bind            # decl = 按分量出现顺序依次占 unit 0,1,2…
 
     def schedule(self, dfg: DFG, model: MachineModel) -> Schedule:
         order = self._ordered(dfg, model)
@@ -33,8 +36,8 @@ class ListScheduler(Scheduler):
         unit_of_comp: dict[str, int] = {}
 
         issue: dict[tuple[int, int], int] = defaultdict(int)
-        rd: dict[tuple[str, int, int], int] = defaultdict(int)
-        wr: dict[tuple[str, int, int], int] = defaultdict(int)
+        rd: dict[tuple[str, int, int], set[int]] = defaultdict(set)
+        wr: dict[tuple[str, int, int], set[int]] = defaultdict(set)
         slots: list[Slot] = []
 
         for i, node in enumerate(order):
@@ -51,35 +54,38 @@ class ListScheduler(Scheduler):
             if space is None and "mem" in op.writes:
                 space = next(iter(model.store), None)
             addr = node.imm if space is not None else None
-            bank = model.store[space].bank_of(addr) if (space in model.store and addr is not None) else None
+            bank = pword = None
+            if space in model.store and addr is not None:
+                bank = model.store[space].phys_bank(addr)
+                pword = model.store[space].phys_word(addr)
+            is_write = "mem" in op.writes
 
             cycle = earliest
             required = unit_of_comp.get(comp.get(node.id, "")) if comp else None
             while True:
                 if cycle >= model.time.max_run_cycles:
                     raise RuntimeError(f"节点 '{node.id}' 在 {model.time.max_run_cycles} 拍内放不下")
-                unit = self._pick_unit(i, cycle, model, issue, required)
+                unit = self._pick_unit(0 if self.bind == "decl" else i,
+                                       cycle, model, issue, required)
                 if unit is None:
                     cycle += 1
                     continue
                 if bank is not None:
                     key = (space, cycle, bank)
-                    if "mem" in op.writes:
-                        if wr[key] >= model.store[space].write_ports_per_bank:
-                            cycle += 1
-                            continue
-                    else:
-                        if rd[key] >= model.store[space].read_ports_per_bank:
-                            cycle += 1
-                            continue
+                    table = wr if is_write else rd
+                    cap = (model.store[space].write_ports_per_bank if is_write
+                           else model.store[space].read_ports_per_bank)
+                    # 同字多读/多写走广播，不占第二个端口
+                    if pword not in table[key] and len(table[key]) >= cap:
+                        cycle += 1
+                        continue
                 break
 
             issue[(unit, cycle)] += 1
             if comp:
                 unit_of_comp.setdefault(comp[node.id], unit)
             if bank is not None:
-                key = (space, cycle, bank)
-                (wr if "mem" in op.writes else rd)[key] += 1
+                (wr if is_write else rd)[(space, cycle, bank)].add(pword)
             when[node.id] = cycle
             slots.append(Slot(
                 node=node.id, op=node.op, unit=unit, cycle=cycle,

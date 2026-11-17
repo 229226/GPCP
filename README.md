@@ -4,7 +4,8 @@
 
 当前状态是**骨架 + 一条可跑的端到端路径**（列表/模调度 + 合法性检查器 + 真实 IMEM 编码），
 并且已经在 GPCP 4x4 的真实 RTL 上闭环：`make -C sim/soc run-cgracc-dot` 把编译器产物
-逐字写进 IMEM，3 拍后 spad[0,1] = 75。
+逐字写进 IMEM，3 拍后 spad[0,1] = 75。**add2 与规则映射器的产物 64/64 字逐字一致**
+（`python3 tools/compare_add2.py`）。
 
 ## 快速开始
 

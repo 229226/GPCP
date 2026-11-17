@@ -59,9 +59,31 @@ class Space:
     read_timing: str
     write_timing: str
     broadcast: str
+    layout: str = "linear"            # linear | transposed_hash
+    hash: tuple[int, ...] = ()        # transposed_hash 的 GF(2) 行（5 项）
 
+    def _logical(self, addr: int) -> tuple[int, int]:
+        return addr // self.words_per_bank, addr % self.words_per_bank
+
+    def phys_bank(self, addr: int) -> int:
+        """物理 bank 号（端口按它计）。linear = 逻辑 bank；transposed_hash
+        = 字 ^ M(逻辑 bank)，与 rtl/cgra/cgra_array.sv 的 spad_swz 一致。"""
+        lb, lw = self._logical(addr)
+        if self.layout == "linear":
+            return lb
+        m = 0
+        for i, row in enumerate(self.hash or (0, 0, 0, 0, 0)):
+            if (lb >> i) & 1:
+                m ^= row
+        return lw ^ m
+
+    def phys_word(self, addr: int) -> int:
+        lb, lw = self._logical(addr)
+        return lb if self.layout == "transposed_hash" else lw
+
+    # 兼容旧调用：原先 bank_of 就是物理 bank
     def bank_of(self, addr: int) -> int:
-        return addr // self.words_per_bank
+        return self.phys_bank(addr)
 
 
 @dataclass(frozen=True)
@@ -178,6 +200,8 @@ def load_model(path: str | Path) -> MachineModel:
             read_timing=str(s.get("read_timing", "combinational")),
             write_timing=str(s.get("write_timing", "next_cycle")),
             broadcast=str(s.get("broadcast", "none")),
+            layout=str(s.get("layout", "linear")),
+            hash=tuple(int(x) for x in s.get("hash", ())),
         )
         if store[name].banks <= 0 or store[name].words_per_bank <= 0:
             raise ModelError(f"store.{name} 的 banks / words_per_bank 必须 > 0")

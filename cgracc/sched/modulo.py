@@ -120,8 +120,8 @@ class ModuloScheduler(Scheduler):
         comp = dfg.components() if model.compute.private_registers else {}
         unit_of_comp: dict[str, int] = {}
         issue: dict[tuple[int, int], int] = defaultdict(int)
-        rd: dict[tuple[int, str, int], int] = defaultdict(int)
-        wr: dict[tuple[int, str, int], int] = defaultdict(int)
+        rd: dict[tuple[int, str, int], set[int]] = defaultdict(set)
+        wr: dict[tuple[int, str, int], set[int]] = defaultdict(set)
 
         in_back: dict[str, list[tuple[str, int]]] = defaultdict(list)
         out_back: dict[str, list[tuple[str, int]]] = defaultdict(list)
@@ -151,8 +151,10 @@ class ModuloScheduler(Scheduler):
             if space is None and "mem" in model.compute.op(n.op).writes:
                 space = next(iter(model.store), None)
             addr = n.imm if space is not None else None
-            bank = (model.store[space].bank_of(addr)
-                    if space in model.store and addr is not None else None)
+            bank = pword = None
+            if space in model.store and addr is not None:
+                bank = model.store[space].phys_bank(addr)
+                pword = model.store[space].phys_word(addr)
             is_write = "mem" in model.compute.op(n.op).writes
 
             placed: tuple[int, int] | None = None
@@ -170,7 +172,7 @@ class ModuloScheduler(Scheduler):
                     table = wr if is_write else rd
                     cap = (model.store[space].write_ports_per_bank if is_write
                            else model.store[space].read_ports_per_bank)
-                    if table[key] >= cap:
+                    if pword not in table[key] and len(table[key]) >= cap:
                         continue
                 placed = (cand, unit)
                 break
@@ -184,7 +186,7 @@ class ModuloScheduler(Scheduler):
                 unit_of_comp.setdefault(comp[n.id], unit)
             issue[(unit, cyc % ii)] += 1
             if bank is not None:
-                (wr if is_write else rd)[(cyc % ii, space, bank)] += 1
+                (wr if is_write else rd)[(cyc % ii, space, bank)].add(pword)
 
         span = max(t.values(), default=-1) + 1
         total = (max(dfg.trip_count, 1) - 1) * ii + span

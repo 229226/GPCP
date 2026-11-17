@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from cgracc.archreg import load_arch                      # noqa: E402
-from cgracc.conformance import run_all                    # noqa: E402
+from cgracc.conformance import conflicting_pair, run_all     # noqa: E402
 from cgracc.emit.listing import ListingEmitter            # noqa: E402
 from cgracc.ir.dfg import DFG, Node, load_dfg             # noqa: E402
 from cgracc.ir.schedule import Schedule, Slot             # noqa: E402
@@ -46,14 +46,15 @@ class TestSmoke(unittest.TestCase):
         self.assertIn("_PROG_H", text)
 
     def test_bank_conflict_is_rejected(self):
+        sp = self.model.store["spad"]
+        a0, a1 = conflicting_pair(sp)       # 同一物理 bank、不同物理字
         dfg = DFG("two_loads", (
-            Node("a", "ld", imm=0, dst="r0", space="spad"),
-            Node("b", "ld", imm=1, dst="r1", space="spad"),
+            Node("a", "ld", imm=a0, dst="r0", space="spad"),
+            Node("b", "ld", imm=a1, dst="r1", space="spad"),
         ))
-        # 地址 0 和 1 都落在 bank 0（32 字一 bank），同拍两次读 = 端口超限
         sched = Schedule("two_loads", run_cycles=1, slots=(
-            Slot("a", "ld", unit=0, cycle=0, dst="r0", addr=0, space="spad"),
-            Slot("b", "ld", unit=1, cycle=0, dst="r1", addr=1, space="spad"),
+            Slot("a", "ld", unit=0, cycle=0, dst="r0", addr=a0, space="spad"),
+            Slot("b", "ld", unit=1, cycle=0, dst="r1", addr=a1, space="spad"),
         ))
         rules = {v.rule for v in check(sched, dfg, self.model)}
         self.assertIn("R6", rules)

@@ -71,8 +71,8 @@ def check(schedule: Schedule, dfg: DFG, model: MachineModel) -> list[Violation]:
 
     # R1/R2/R3/R5/R6
     issue: dict[tuple[int, int], int] = defaultdict(int)
-    rd: dict[tuple[int, str, int], int] = defaultdict(int)
-    wr: dict[tuple[int, str, int], int] = defaultdict(int)
+    rd: dict[tuple[int, str, int], set[int]] = defaultdict(set)
+    wr: dict[tuple[int, str, int], set[int]] = defaultdict(set)
 
     for s in schedule.slots:
         # R1
@@ -101,17 +101,19 @@ def check(schedule: Schedule, dfg: DFG, model: MachineModel) -> list[Violation]:
                 out.append(Violation(
                     "R5", f"目标寄存器 {s.dst} 越界（只有 r0..r{model.compute.registers - 1}）", s.node))
 
-        # R6
+        # R6：按物理 bank 计端口；同字多读走广播，不占第二个端口
         if "mem" in op.writes:
             if s.space is None or s.addr is None:
                 out.append(Violation("R6", "写存储的算子缺少 space/addr", s.node))
             elif s.space in model.store:
-                wr[(slot_of(s.cycle), s.space, model.store[s.space].bank_of(s.addr))] += 1
+                sp = model.store[s.space]
+                wr[(slot_of(s.cycle), s.space, sp.phys_bank(s.addr))].add(sp.phys_word(s.addr))
         elif s.space is not None:
             if s.addr is None:
                 out.append(Violation("R6", "读存储的算子缺少 addr", s.node))
             elif s.space in model.store:
-                rd[(slot_of(s.cycle), s.space, model.store[s.space].bank_of(s.addr))] += 1
+                sp = model.store[s.space]
+                rd[(slot_of(s.cycle), s.space, sp.phys_bank(s.addr))].add(sp.phys_word(s.addr))
 
     for (unit, cyc), n in issue.items():
         if n > model.compute.issue_per_unit_per_cycle:
@@ -119,16 +121,16 @@ def check(schedule: Schedule, dfg: DFG, model: MachineModel) -> list[Violation]:
                 "R4", f"unit {unit} 在槽位 {cyc} 发射了 {n} 条"
                       f"（上限 {model.compute.issue_per_unit_per_cycle}）"))
 
-    for (cyc, space, bank), n in rd.items():
+    for (cyc, space, bank), words in rd.items():
         cap = model.store[space].read_ports_per_bank
-        if n > cap:
+        if len(words) > cap:
             out.append(Violation(
-                "R6", f"{space} 槽位 {cyc} bank {bank} 读了 {n} 次（上限 {cap}）"))
-    for (cyc, space, bank), n in wr.items():
+                "R6", f"{space} 槽位 {cyc} 物理 bank {bank} 读了 {len(words)} 个不同字（上限 {cap}）"))
+    for (cyc, space, bank), words in wr.items():
         cap = model.store[space].write_ports_per_bank
-        if n > cap:
+        if len(words) > cap:
             out.append(Violation(
-                "R6", f"{space} 槽位 {cyc} bank {bank} 写了 {n} 次（上限 {cap}）"))
+                "R6", f"{space} 槽位 {cyc} 物理 bank {bank} 写了 {len(words)} 个不同字（上限 {cap}）"))
 
     # R3: 总周期 = (迭代数-1)*II + kernel 跨度（非流水时 = 跨度*迭代数）
     span = schedule.cycles()

@@ -44,6 +44,10 @@ store:
       read_timing: combinational
       write_timing: next_cycle
       broadcast: same_word       # 同一 bank 同一字的多读免费
+      # 物理映射与 rtl/cgra/cgra_array.sv 的 spad_swz 一致：
+      #   物理 bank = 字 ^ M(逻辑 bank)，物理字 = 逻辑 bank
+      layout: transposed_hash
+      hash: [14, 25, 1, 20, 11]
     imem:
       banks: 2                   # 双 bank 微码
       words_per_bank: 512        # 512 行 x 16 PE x 32 bit

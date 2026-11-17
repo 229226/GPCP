@@ -120,21 +120,34 @@ def case_matmul4(model: MachineModel) -> list[str]:
     return fails
 
 
+def conflicting_pair(space):
+    """找一对地址：落在同一物理 bank、但是不同的物理字（真冲突）。"""
+    b0, w0 = space.phys_bank(0), space.phys_word(0)
+    for a in range(1, space.banks * space.words_per_bank):
+        if space.phys_bank(a) == b0 and space.phys_word(a) != w0:
+            return 0, a
+    return None
+
+
 def case_neg_bank_conflict(model: MachineModel) -> list[str]:
-    if _need_spad(model) is None:
+    spad_name = _need_spad(model)
+    if spad_name is None:
         return ["neg_bank: 模型没有 spad 空间"]
+    pair = conflicting_pair(model.store[spad_name])
+    if pair is None:
+        return ["neg_bank: 模型里找不到同物理 bank 的两个不同字"]
+    a0, a1 = pair
     dfg = DFG("conformance_neg_bank", (
-        Node("a", "ld", imm=0, dst="r0", space="spad"),
-        Node("b", "ld", imm=1, dst="r1", space="spad"),
+        Node("a", "ld", imm=a0, dst="r0", space=spad_name),
+        Node("b", "ld", imm=a1, dst="r1", space=spad_name),
     ))
-    # 地址 0 / 1 同属 bank 0，同拍两次读 -> 必须被拒绝
     sched = Schedule("conformance_neg_bank", run_cycles=1, slots=(
-        Slot("a", "ld", unit=0, cycle=0, dst="r0", addr=0, space="spad"),
-        Slot("b", "ld", unit=1, cycle=0, dst="r1", addr=1, space="spad"),
+        Slot("a", "ld", unit=0, cycle=0, dst="r0", addr=a0, space=spad_name),
+        Slot("b", "ld", unit=1, cycle=0, dst="r1", addr=a1, space=spad_name),
     ))
     rules = {v.rule for v in check(sched, dfg, model)}
     if "R6" not in rules:
-        return [f"neg_bank: 期望 R6，实际报告 {sorted(rules) or '无违规'}"]
+        return [f"neg_bank: addr {a0}/{a1} 同物理 bank，期望 R6，实际 {sorted(rules) or '无违规'}"]
     return []
 
 

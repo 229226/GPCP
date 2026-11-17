@@ -150,9 +150,11 @@ class Gpcp4x4Emitter(Emitter):
             if sp is None:
                 continue
             tag = "".join(c if c.isalnum() else "_" for c in nid).upper()
+            # 导出的是**逻辑** bank/word（主机窗口/软件 ABI 的坐标）；
+            # 物理映射由 RTL 的 spad_swz 在访问时完成。
             lines += [
                 f"#define {macro}_{tag}_SPACE \"{space}\"",
-                f"#define {macro}_{tag}_BANK {sp.bank_of(addr)}",
+                f"#define {macro}_{tag}_BANK {addr // sp.words_per_bank}",
                 f"#define {macro}_{tag}_WORD {addr % sp.words_per_bank}",
             ]
         lines += [

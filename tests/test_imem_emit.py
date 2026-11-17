@@ -99,5 +99,17 @@ class TestImemEmitter(unittest.TestCase):
         self.assertIn("#define IMEM_DOT_ST0_WORD 1", header)
 
 
+    def test_add2_parity_with_rule_mapper(self):
+        """与 GPCP 规则映射器的 add2 微码逐字对账（参考文件存在时才跑）。"""
+        import subprocess
+        ref = ROOT.parent / "GPCP" / "sw" / "soc" / "gen" / "add2_prog.h"
+        if not ref.exists():
+            self.skipTest(f"参考文件不存在：{ref}")
+        r = subprocess.run([sys.executable, str(ROOT / "tools" / "compare_add2.py")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("0 差异", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
