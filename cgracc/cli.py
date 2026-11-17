@@ -10,6 +10,7 @@ from .ir.dfg import load_dfg
 from .ir.schedule import load_schedule
 from .sched.list_sched import ListScheduler
 from .sched.modulo import ModuloScheduler
+from .search import search
 from .verify.legality import check
 
 SCHEDULERS = {"list": ListScheduler, "modulo": ModuloScheduler}
@@ -61,6 +62,26 @@ def cmd_check(args) -> int:
     return 1 if vs else 0
 
 
+def cmd_search(args) -> int:
+    model, _, dfg = _load(args)
+    res = search(dfg, model, args.ii_window)
+    print(f"{'candidate':<16} {'status':<10} cost")
+    for c in res.candidates:
+        if c.error:
+            status, detail = "ERROR", c.error
+        elif c.violations:
+            status, detail = f"{len(c.violations)} viol", str(c.violations[0])
+        else:
+            status, detail = "ok", c.cost.line() if c.cost else ""
+        print(f"{c.label:<16} {status:<10} {detail}")
+    if res.best is None:
+        print("search: 没有合法候选")
+        return 1
+    res.best.schedule.save(args.out)
+    print(f"best: {res.best.label} -> {args.out}")
+    return 0
+
+
 def cmd_emit(args) -> int:
     model, emitter, dfg = _load(args)
     sched = load_schedule(args.schedule)
@@ -93,6 +114,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--scheduler", default="list", choices=sorted(SCHEDULERS))
     s.add_argument("-o", "--out", default="build/schedule.json")
     s.set_defaults(func=cmd_schedule)
+
+    s = sub.add_parser("search", help="候选搜索：list/modulo × II，按代价选最优")
+    s.add_argument("--arch", required=True)
+    s.add_argument("--dfg", required=True)
+    s.add_argument("--ii-window", type=int, default=4, help="modulo 候选枚举的 II 个数")
+    s.add_argument("-o", "--out", default="build/best.json")
+    s.set_defaults(func=cmd_search)
 
     s = sub.add_parser("check", help="合法性检查")
     s.add_argument("--arch", required=True)

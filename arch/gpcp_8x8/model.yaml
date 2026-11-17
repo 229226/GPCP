@@ -10,6 +10,7 @@ name: gpcp-8x8
 time_model:
   kind: synchronous_static
   max_run_cycles: 128            # 8192 词 / 64 PE
+  run_overhead_cycles: 32        # 接口验证模型：沿用 4x4 的实测开销量级
 
 compute:
   units: 64

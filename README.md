@@ -27,11 +27,14 @@ python3 -m cgracc schedule --arch gpcp_4x4 --scheduler modulo \
     --dfg examples/loop_dot.json -o build/loop.json
 python3 -m cgracc check --arch gpcp_4x4 --dfg examples/loop_dot.json --schedule build/loop.json
 
-# 6) 接入验收：6 正向 + 4 负向（新架构必须全绿）
+# 6) 落点搜索：list/modulo × II -> 合法性检查 -> 代价 -> 选最优
+python3 -m cgracc search --arch gpcp_4x4 --dfg examples/loop_dot.json -o build/best.json
+
+# 7) 接入验收：6 正向 + 4 负向（新架构必须全绿）
 python3 -m cgracc conformance --arch gpcp_4x4
 python3 -m cgracc conformance --arch gpcp_8x8
 
-# 7) 自测
+# 8) 自测
 python3 -m unittest discover -s tests -v
 ```
 
@@ -46,10 +49,12 @@ cgracc/
     sched/base.py       # Scheduler 接口
     sched/list_sched.py # 参考实现：列表调度（DAG，不追求 QoR）
     sched/modulo.py     # modulo 调度（求 II：MII = max(ResMII, RecMII)）
+    cost.py             # 代价模型：总周期 = 计算周期 + run 启动开销
+    search.py           # 落点搜索：候选 -> 检查 -> 代价 -> 最优
     verify/legality.py  # 合法性检查器（规则全部来自 model）
     emit/base.py        # Emitter 接口（通用 listing 在 emit/listing.py）
     conformance.py      # 接入验收：6 正向 + 4 负向
-    cli.py              # info / conformance / schedule / check / emit
+    cli.py              # info / conformance / schedule / search / check / emit
   arch/
     gpcp_4x4/           # 架构 0：GPCP 4x4（model.yaml + emitter.py）
     gpcp_8x8/           # 架构 1：只给 model.yaml（接口验证，无 RTL）
@@ -69,8 +74,9 @@ cgracc/
 
 ## 尚未实现（刻意留白）
 
-- 模调度（II）/ CP-SAT / 代价模型与搜索；
+- 代价模型只算周期（计算 + `run_overhead_cycles`），不含面积/能耗；
+- 搜索维度只有 list/modulo × 排序 × II，还没有 tile 划分与银行落点；
 - 真实 IMEM 编码（`emitter.py` 只是 listing）；
-- DMA / 描述符环的调度（model 里有字段，检查器暂未用）；
-- 多页分离检查、旋转表约束；
+- DMA / 描述符环参与调度（model 里有字段，检查器暂未用）；
+- 多页分离检查、旋转表约束（R9 已覆盖页冲突）；
 - conformance 目前是**结构级**（合法性 + 长度），数值级对拍要等 DFG 带算子语义并接黄金模型。

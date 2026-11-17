@@ -30,19 +30,25 @@ class _Fail(Exception):
 class ModuloScheduler(Scheduler):
     name = "modulo"
 
-    def __init__(self, ii_cap: int | None = None):
+    def __init__(self, ii_cap: int | None = None, ii_min: int | None = None):
         self.ii_cap = ii_cap            # 手动限制最大 II（None = 8*MII）
+        self.ii_min = ii_min            # 强制从某个 II 起试（搜索器用来枚举候选）
+
+    def mii(self, dfg: DFG, model: MachineModel) -> int:
+        return max(1, self._res_mii(dfg, model), self._rec_mii(dfg, model))
 
     def schedule(self, dfg: DFG, model: MachineModel) -> Schedule:
-        mii = max(1, self._res_mii(dfg, model), self._rec_mii(dfg, model))
+        mii = self.mii(dfg, model)
+        start = max(mii, self.ii_min or 0)
         cap = self.ii_cap or 8 * mii
+        cap = max(cap, start)
         cap = min(cap, model.time.max_run_cycles)
-        for ii in range(mii, cap + 1):
+        for ii in range(start, cap + 1):
             try:
                 return self._try_ii(dfg, model, ii)
             except _Fail:
                 continue
-        raise RuntimeError(f"{dfg.name}: II 从 {mii} 试到 {cap} 仍排不出合法调度")
+        raise RuntimeError(f"{dfg.name}: II 从 {start} 试到 {cap} 仍排不出合法调度")
 
     # ---------------- MII ----------------
     @staticmethod

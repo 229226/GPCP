@@ -77,6 +77,7 @@ class Engine:
 class TimeModel:
     kind: str
     max_run_cycles: int
+    run_overhead_cycles: int = 0      # 一次 run 的固定启动开销（软/硬启动 + DMA 编排）
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,7 @@ def load_model(path: str | Path) -> MachineModel:
     time = TimeModel(
         kind=str(_need(tm, "kind", "time_model")),
         max_run_cycles=int(_need(tm, "max_run_cycles", "time_model")),
+        run_overhead_cycles=int(tm.get("run_overhead_cycles", 0)),
     )
     if time.max_run_cycles <= 0:
         raise ModelError("time_model.max_run_cycles 必须 > 0")

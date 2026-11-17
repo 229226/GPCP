@@ -131,14 +131,10 @@ def check(schedule: Schedule, dfg: DFG, model: MachineModel) -> list[Violation]:
 
     # R3: 总周期 = (迭代数-1)*II + kernel 跨度（非流水时 = 跨度*迭代数）
     span = schedule.cycles()
-    if ii:
-        total = (max(dfg.trip_count, 1) - 1) * ii + span
-    else:
-        total = span * max(dfg.trip_count, 1)
-    run = max(schedule.run_cycles, total)
-    if run > model.time.max_run_cycles:
+    total = schedule.total_cycles(dfg.trip_count)
+    if total > model.time.max_run_cycles:
         out.append(Violation(
-            "R3", f"run 长度 {run} 超过上限 {model.time.max_run_cycles}"
+            "R3", f"run 长度 {total} 超过上限 {model.time.max_run_cycles}"
                   f"（{dfg.trip_count} 次迭代，II={ii or '无'}，跨度 {span}）"))
 
     # R9: 页分离（双缓冲）。同拍、同一空间、两个 agent -> 必须异页。

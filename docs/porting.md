@@ -18,7 +18,7 @@ arch/<name>/
 
 | 段 | 字段 | 用途 | 缺了会怎样 |
 |---|---|---|---|
-| `time_model` | `kind`, `max_run_cycles` | 编译器决定一次运行的长度上限 | 生成超长调度，硬件装不下 |
+| `time_model` | `kind`, `max_run_cycles`, `run_overhead_cycles` | 编译器决定一次运行的长度上限与启动开销 | 生成超长调度；代价模型少算固定开销 |
 | `compute` | `units`, `issue_per_unit_per_cycle`, `registers`, `acc`, `link`, `ops{inputs,latency,writes}` | 绑定与资源约束 | 生成不存在的算子 / 资源冲突 |
 | `store` | `banks`, `words_per_bank`, `pages`, `read_ports_per_bank`, `write_ports_per_bank`, `read_timing`, `write_timing`, `broadcast` | 检查 bank 冲突与端口数 | 生成"同拍两写同一 bank"的调度 |
 | `move` | `beat_bits`, `max_burst_beats`, `overlap_compute`, `targets`, `sync` | 搬运调度的边界（当前只建模，未参与求解） | 无法判断 run 间能否重叠 |

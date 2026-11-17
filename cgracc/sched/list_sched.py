@@ -18,8 +18,13 @@ from .base import Scheduler
 class ListScheduler(Scheduler):
     name = "list"
 
+    def __init__(self, order: str = "topo"):
+        if order not in ("topo", "height"):
+            raise ValueError(f"未知排序 '{order}'（topo / height）")
+        self.order = order
+
     def schedule(self, dfg: DFG, model: MachineModel) -> Schedule:
-        order = dfg.topo_order()
+        order = self._ordered(dfg, model)
         by_id = {n.id: n for n in dfg.nodes}
         when: dict[str, int] = {}
 
@@ -86,3 +91,24 @@ class ListScheduler(Scheduler):
             if issue[(unit, cycle)] < model.compute.issue_per_unit_per_cycle:
                 return unit
         return None
+
+    def _ordered(self, dfg: DFG, model: MachineModel) -> list:
+        """拓扑序 / 关键路径高度序（后者通常把长依赖链排得更紧）。"""
+        if self.order == "topo":
+            return dfg.topo_order()
+        succ = dfg.forward_edges()
+        lat = {n.id: model.compute.op(n.op).latency for n in dfg.nodes}
+        memo: dict[str, int] = {}
+
+        def height(u: str) -> int:
+            if u in memo:
+                return memo[u]
+            best = 0
+            for s in succ.get(u, ()):
+                best = max(best, height(s))
+            memo[u] = lat[u] + best
+            return memo[u]
+
+        # 在拓扑序上做稳定排序：latency=0 的依赖仍保持"生产者在前"。
+        topo = dfg.topo_order()
+        return sorted(topo, key=lambda n: -height(n.id))

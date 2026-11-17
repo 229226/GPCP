@@ -6,6 +6,7 @@ name: gpcp-4x4
 time_model:
   kind: synchronous_static       # 全局同步拍；一次 run 是一条静态微码，无分支
   max_run_cycles: 512            # IMEM 8192 词 / 16 PE
+  run_overhead_cycles: 32        # GPCP T0 台架实测：纯阵列 run 的固定开销（32 + 1.0045c）
 
 compute:
   units: 16                      # 4x4 阵列

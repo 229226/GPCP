@@ -37,8 +37,17 @@ class Schedule:
         raise KeyError(f"Schedule 里没有节点 '{nid}'")
 
     def cycles(self) -> int:
-        """kernel 跨度（不是循环总周期；总周期看 run_cycles）。"""
+        """kernel 跨度（不是循环总周期；总周期看 total_cycles）。"""
         return max((s.cycle for s in self.slots), default=-1) + 1
+
+    def total_cycles(self, trip_count: int = 1) -> int:
+        """循环总周期：流水 = (trip-1)*II + 跨度；非流水 = 跨度 * trip。"""
+        span = self.cycles()
+        if self.ii:
+            total = (max(trip_count, 1) - 1) * self.ii + span
+        else:
+            total = span * max(trip_count, 1)
+        return max(self.run_cycles, total)
 
     def to_dict(self) -> dict:
         return {
