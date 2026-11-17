@@ -102,4 +102,44 @@ package cgra_desc_pkg;
     return b[47:32];
   endfunction
 
+  // pf_src: word 14 [31:0]（beat7 [31:0]）
+  function automatic logic [31:0] d64_pf_src(input logic [63:0] b);
+    return b[31:0];
+  endfunction
+
+  // pf_len: word 15 [15:0]（beat7 [47:32]）
+  function automatic logic [15:0] d64_pf_len(input logic [63:0] b);
+    return b[47:32];
+  endfunction
+
+  // pf_spad: word 15 [31:16]（beat7 [63:48]）
+  function automatic logic [15:0] d64_pf_spad(input logic [63:0] b);
+    return b[63:48];
+  endfunction
+
+  // pf_page: word 7 [0:0]（beat3 [32:32]）
+  function automatic logic [0:0] d64_pf_page(input logic [63:0] b);
+    return b[32:32];
+  endfunction
+
+  // pf_stride: word 7 [31:16]（beat3 [63:48]）
+  function automatic logic [15:0] d64_pf_stride(input logic [63:0] b);
+    return b[63:48];
+  endfunction
+
+  // pf_row: word 11 [15:0]（beat5 [47:32]）
+  function automatic logic [15:0] d64_pf_row(input logic [63:0] b);
+    return b[47:32];
+  endfunction
+
+  // pf_in: word 11 [30:30]（beat5 [62:62]）
+  function automatic logic [0:0] d64_pf_in(input logic [63:0] b);
+    return b[62:62];
+  endfunction
+
+  // pf_en: word 11 [31:31]（beat5 [63:63]）
+  function automatic logic [0:0] d64_pf_en(input logic [63:0] b);
+    return b[63:63];
+  endfunction
+
 endpackage

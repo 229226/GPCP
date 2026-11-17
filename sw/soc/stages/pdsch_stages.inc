@@ -1042,6 +1042,22 @@ static int qs_desc_validate(const uint32_t *d)
             ok = 0;
         }
     }
+    if (gpcp_d64_pf_en(d)) {
+        uint32_t plen = gpcp_d64_pf_len(d);
+        uint32_t psrc = gpcp_d64_pf_src(d);
+        if (!plen || !qs_region_contains(psrc, plen * 4u)) {
+            const qs_region_t *rg = qs_region_of(psrc);
+            qs_puts("qs_desc: 预取越界 "); qs_puts(rg ? rg->name : "?");
+            qs_puts(" src="); qs_puts_hex(psrc);
+            qs_puts(" len="); qs_puts_hex(plen); qs_puts("\n");
+            ok = 0;
+        }
+        /* 预取必须写另一个 page：写自己的 page 会覆盖正在跑的阵列输入 */
+        if (gpcp_d64_pf_page(d) == gpcp_d64_page(d)) {
+            qs_puts("qs_desc: 预取与阵列同 page\n");
+            ok = 0;
+        }
+    }
     return ok;
 }
 
@@ -1100,6 +1116,7 @@ static void qs_tables_build(void)
 static uint32_t qs_cn_row_build(uint32_t r)
 {
     uint32_t n0 = qs_ring_n;
+    uint32_t pg = r & 1u;
     uint32_t *d = qs_desc();                 /* 旋转表（只用于 keep 位） */
     gpcp_d64_set_src(d, CN_TAB_BASE + r * 128u);
     gpcp_d64_set_tgt_rot(d, 1u);
@@ -1109,12 +1126,27 @@ static uint32_t qs_cn_row_build(uint32_t r)
     gpcp_d64_set_in_len(d, MAXD * ZC);
     gpcp_d64_set_stride(d, GPCP_LAYOUT_WORDS);
     gpcp_d64_set_row(d, ZC);
+    gpcp_d64_set_page(d, pg);
+    gpcp_d64_set_arr_page(d, pg);
     gpcp_d64_set_cycles(d, CN_WB_PROG_CYCLES);
     gpcp_d64_set_arr_en(d, 1u);
     gpcp_d64_set_out_len(d, MAXD * ZC);
     gpcp_d64_set_out_en(d, 1u);
     gpcp_d64_set_out_dst(d, (uint32_t)(uintptr_t)&msg[r][0][0]);
     gpcp_d64_set_rep(d, 1u);
+    /* 两级流水：上一行跑阵列时已经把本行搬进来，本条描述符跳过搬入；
+     * 同一时间把下一行搬到另一个 page。 */
+    if (r > 0)
+        gpcp_d64_set_pf_in(d, 1u);
+    if (r + 1u < BG2_ROWS) {
+        gpcp_d64_set_pf_en(d, 1u);
+        gpcp_d64_set_pf_src(d, (uint32_t)(uintptr_t)&msg[r + 1u][0][0]);
+        gpcp_d64_set_pf_len(d, MAXD * ZC);
+        gpcp_d64_set_pf_spad(d, 0u);
+        gpcp_d64_set_pf_page(d, (r + 1u) & 1u);
+        gpcp_d64_set_pf_stride(d, GPCP_LAYOUT_WORDS);
+        gpcp_d64_set_pf_row(d, ZC);
+    }
     return qs_ring_n - n0;
 }
 
@@ -1216,9 +1248,13 @@ static int qs_decode_ring(void)
             errs += qs_desc_validate((const uint32_t *)BN_RING_BASE + 16u * i) ? 0u : 1u;
         qs_ring_ready = 1;
     }
-    /* CN 微码用 bank 30 的 +32767 初始化 min1/min2；只跑 page 0。 */
-    for (i = 0; i < ZC; i++)
+    /* CN 微码用 bank 30 的 +32767 初始化 min1/min2；两个 page 都可能被用到
+     * （行号奇偶选 page），所以两页都要初始化，否则另一页读到的是 0。 */
+    for (i = 0; i < ZC; i++) {
         mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK, i), (uint32_t)SENTINEL);
+        mmio_w(CGRA_BASE + GPCP_SPAD_ADDR(SENTINEL_BANK + GPCP_LAYOUT_PAGE_BANKS, i),
+               (uint32_t)SENTINEL);
+    }
     /* 大块 CPU 写（msg/表/描述符）必须先排空写缓冲，否则 DMA 会读到旧 RAM。 */
     drain_stores((const int32_t *)CN_TAB_BASE, BG2_ROWS * 32u - 1u);
     drain_stores((const int32_t *)BN_TAB_BASE, BG2_COLS * 32u - 1u);

@@ -292,6 +292,51 @@ module cgra_top #(
   logic        dma_odd, dma_last_odd;
   // 突发规划的单一出口
   dma_burst_t  dma_bp;
+
+  // ---------------- prefetch engine（阵列运行时预取下一块） ----------------
+  // 一条描述符可以声明「跑阵列的同时，把下一个块的搬入流到另一个 spad page」。
+  // 下一条复合描述符把 pf_in 置 1，跳过自己的搬入直接跑阵列。两级流水因此
+  // 只多占一个 page，不需要双缓冲的整块 RAM 拷贝。
+  //
+  // 描述符里的 pf_* 只是「下一条要预取什么」的锁存值；引擎真正用的是一组
+  // 工作寄存器（PF_IDLE 时整组拷贝）。这样下一条描述符的 D_DESC_SET 即使
+  // 在预取还在飞的时候到达，也不会改到在飞的源地址 / page / 走位。
+  typedef enum logic [1:0] {
+    PF_IDLE = 2'd0,
+    PF_AR   = 2'd1,   // 发预取突发的 AR
+    PF_R    = 2'd2    // 收 R 拍，直接写 spad 的目标 page
+  } pf_state_e;
+  pf_state_e   pf_state;
+  logic        pf_en_q, pf_busy, pf_req;
+  logic [31:0] pf_src_q;
+  logic [15:0] pf_len_q, pf_spad_q, pf_stride_q, pf_row_q;
+  logic        pf_page_q;
+  // 工作寄存器（在飞期间的唯一事实来源）
+  logic [31:0] pf_wsrc;
+  logic [15:0] pf_wleft, pf_baddr_lo, pf_idx;
+  logic [15:0] pf_wstride, pf_wrow;
+  logic        pf_wpage;
+  logic [15:0] pf_cur, pf_row_cnt;
+  logic [7:0]  pf_bcnt;
+  dma_burst_t  pf_bp;
+  logic [7:0]  pf_nb;
+  logic [15:0] pf_bw;
+  logic        pf_odd, pf_last_odd;
+  logic [31:0] pf_baddr;
+  logic [15:0] pf_nxt_cur, pf_nxt_cnt, pf_nxt2_cur, pf_nxt2_cnt;
+  // 预取拍的 spad 写（读通道握手的那一拍写两个 32-bit 字）
+  logic        pf_we;
+  assign pf_bp       = dma_plan_burst(pf_wleft, pf_baddr_lo, DMA_BEATS);
+  assign pf_nb       = pf_bp.nb;
+  assign pf_bw       = pf_bp.bw;
+  assign pf_odd      = pf_bp.odd;
+  assign pf_last_odd = pf_odd && (pf_bcnt == pf_nb - 8'd1);
+  assign pf_baddr    = pf_wsrc + ({16'b0, pf_idx} << 2);
+  assign pf_we       = (pf_state == PF_R) && m_axi_rvalid && m_axi_rready;
+  always_comb begin
+    {pf_nxt_cur,  pf_nxt_cnt}  = dma_next(pf_cur, pf_row_cnt, pf_wrow, pf_wstride);
+    {pf_nxt2_cur, pf_nxt2_cnt} = dma_next(pf_nxt_cur, pf_nxt_cnt, pf_wrow, pf_wstride);
+  end
   // copy-engine FSM state (declared before dstate_q: strict SV frontends
   // reject the forward reference that Verilator tolerated)
   typedef enum logic [3:0] {
@@ -360,11 +405,16 @@ module cgra_top #(
   // the beat is consumed only on the handshake (valid && ready), never on valid alone
   // dma_tgt = IMEM: the same beat stream feeds the instruction memory instead of
   // the scratchpad (bulk program load; see docs/architecture/cgra.md).
-  assign spad_dma_we0    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && (dma_tgt == 2'd0);
-  assign spad_dma_addr0  = dma_cur[9:0];
+  // 预取引擎共用这条 spad 写口：主 DMA 与预取不会同时占用（预取只在 D_ARR 里跑，
+  // 且 D_NEXT 在 pf_busy 清零前不往下走），所以两个写使能互斥。
+  assign spad_dma_we0    = ((dstate == D_SIN) && m_axi_rvalid && m_axi_rready &&
+                            (dma_tgt == 2'd0)) || pf_we;
+  assign spad_dma_addr0  = pf_we ? pf_cur[9:0] : dma_cur[9:0];
   assign spad_dma_wdata0 = m_axi_rdata[31:0];
-  assign spad_dma_we1    = (dstate == D_SIN) && m_axi_rvalid && m_axi_rready && (dma_tgt == 2'd0) && !dma_last_odd;
-  assign spad_dma_addr1  = dma_nxt_cur[9:0];
+  assign spad_dma_we1    = (((dstate == D_SIN) && m_axi_rvalid && m_axi_rready &&
+                             (dma_tgt == 2'd0) && !dma_last_odd) ||
+                            (pf_we && !pf_last_odd));
+  assign spad_dma_addr1  = pf_we ? pf_nxt_cur[9:0] : dma_nxt_cur[9:0];
   assign spad_dma_wdata1 = m_axi_rdata[63:32];
   assign spad_rd_addr0   = dma_cur[9:0];
   assign spad_rd_addr1   = dma_nxt_cur[9:0];
@@ -407,15 +457,18 @@ module cgra_top #(
     // register only, and the state advances exclusively on valid && ready, so
     // the hold requirement is structural.  Ready may come and go freely; the
     // payload never changes while a valid is waiting.
-    m_axi_arvalid = (dstate == D_AR);
+    m_axi_arvalid = ((dstate == D_AR) && (pf_state == PF_IDLE)) || (pf_state == PF_AR);
     m_axi_arid    = 4'd0;
-    m_axi_araddr  = rd_desc ? (ring_base + (desc64 ? {ring_head, 6'b0}
-                                                          : {ring_head, 5'b0}))
+    // 预取的 AR 优先：它只在阵列运行时在飞，越早拿到越能藏住延迟。
+    m_axi_araddr  = (pf_state == PF_AR) ? pf_baddr
+                  : rd_desc ? (ring_base + (desc64 ? {ring_head, 6'b0}
+                                                        : {ring_head, 5'b0}))
                                     : dma_baddr;
-    m_axi_arlen   = rd_desc ? (desc64 ? 8'd7 : 8'd3) : (dma_nb - 8'd1);
+    m_axi_arlen   = (pf_state == PF_AR) ? (pf_nb - 8'd1)
+                  : rd_desc ? (desc64 ? 8'd7 : 8'd3) : (dma_nb - 8'd1);
     m_axi_arsize  = 3'b011;      // 8 bytes per beat
     m_axi_arburst = 2'b01;       // INCR
-    m_axi_rready  = (dstate == D_RDESC) || (dstate == D_SIN);
+    m_axi_rready  = (dstate == D_RDESC) || (dstate == D_SIN) || (pf_state == PF_R);
 
     // write channel
     m_axi_awvalid = (dstate == D_AW);
@@ -491,6 +544,15 @@ module cgra_top #(
       arr_run_q     <= 1'b0;
       out_run_q     <= 1'b0;
       rep_left      <= 16'd1;
+      // prefetch descriptor latches（工作寄存器在预取引擎自己的 always_ff 里复位）
+      pf_req      <= 1'b0;
+      pf_en_q     <= 1'b0;
+      pf_src_q    <= 32'b0;
+      pf_len_q    <= 16'd0;
+      pf_spad_q   <= 16'd0;
+      pf_page_q   <= 1'b0;
+      pf_stride_q <= 16'd1;
+      pf_row_q    <= 16'd0;
     end else begin
       dma_irq_evt <= 1'b0;
       if (win_bad) win_err <= 1'b1;
@@ -506,7 +568,8 @@ module cgra_top #(
       unique case (dstate)
         D_IDLE: begin
           // ring mode: fetch the next descriptor as soon as there is work
-          if (ring_en && !dma_busy && (ring_size != 16'd0) && (ring_head != ring_tail_n)) begin
+          if (ring_en && !dma_busy && !pf_busy &&
+              (ring_size != 16'd0) && (ring_head != ring_tail_n)) begin
             dma_busy  <= 1'b1;
             dma_done  <= 1'b0;
             dma_beat  <= 3'd0;
@@ -574,11 +637,24 @@ module cgra_top #(
           arr_imem_q     <= d64_arr_imem(desc_buf[3]);
           arr_cycles_q   <= (d64_cycles(desc_buf[3]) > 16'(MAXCYC))
                           ? 16'(MAXCYC) : d64_cycles(desc_buf[3]);
+          // 预取声明（只在本条描述符里有效；老描述符/非 64B 模式一律清零）。
+          // 注意：引擎退休时把状态字写回 desc_addr+16（word 4/5），所以
+          // pf_src/pf_len/pf_spad 必须放在状态字之外（word 14/15）。
+          pf_en_q        <= desc64 ? d64_pf_en(desc_buf[5])     : 1'b0;
+          pf_src_q       <= desc64 ? d64_pf_src(desc_buf[7])    : 32'd0;
+          pf_len_q       <= desc64 ? d64_pf_len(desc_buf[7])    : 16'd0;
+          pf_spad_q      <= desc64 ? d64_pf_spad(desc_buf[7])   : 16'd0;
+          pf_page_q      <= desc64 ? d64_pf_page(desc_buf[3])   : 1'b0;
+          pf_stride_q    <= desc64 ? d64_pf_stride(desc_buf[3]) : 16'd1;
+          pf_row_q       <= desc64 ? d64_pf_row(desc_buf[5])    : 16'd0;
           dma_idx        <= 16'd0;
           dma_row_cnt    <= 16'd0;
           dma_bcnt       <= 8'd0;
           rd_desc        <= 1'b0;
-          dstate         <= d0_dir ? D_AW : D_AR;
+          /* pf_in：这一块的搬入已经由上一条描述符的预取完成，直接走
+           * 阵列 → 搬出；不能先搬一遍，否则会覆盖同一个 page 上的预取结果。 */
+          dstate         <= d0_dir ? D_AW
+                          : ((desc64 && d64_pf_in(desc_buf[5])) ? D_NEXT : D_AR);
         end
         D_SIN: begin
           // streaming in: the beat that arrives is written to the scratchpad
@@ -667,11 +743,17 @@ module cgra_top #(
           // 不能直接看 done：上一次运行的 done 还是 1，会立刻误判完成。
           case (arr_phase)
             2'd0: begin
-              arr_req   <= 1'b1;
-              arr_phase <= 2'd1;
+              /* pf_in 描述符的阵列数据来自上一条描述符的预取：必须等预取
+               * 真正把最后一拍写进 spad 才启动阵列，否则会读到半块数据。 */
+              if (!pf_busy) begin
+                arr_req   <= 1'b1;
+                pf_req    <= pf_en_q;
+                arr_phase <= 2'd1;
+              end
             end
             2'd1: begin
               arr_req <= 1'b0;
+              pf_req  <= 1'b0;
               if (busy) arr_phase <= 2'd2;
             end
             default: begin
@@ -684,11 +766,15 @@ module cgra_top #(
           endcase
         end
         D_NEXT: begin
-          // 复合描述符：搬入 → 阵列 → 搬出 → 写状态 → 退休/重复
-          if (arr_en_q && !arr_run_q)        dstate <= D_ARR;
-          else if (out_en_q && !out_run_q)   dstate <= D_OUT;
-          else if (rep_left > 16'd1)         dstate <= D_RETIRE;  // 中间轮次不写状态
-          else begin wr_status <= 1'b1; dstate <= D_AW; end
+          // 复合描述符：搬入 → 阵列 → 搬出 → 写状态 → 退休/重复。
+          // 预取还在飞时原地等：搬出要读当前 page，而预取正在写另一个 page，
+          // 两个方向共用同一个 dma_page，不能重叠。
+          if (!pf_busy) begin
+            if (arr_en_q && !arr_run_q)        dstate <= D_ARR;
+            else if (out_en_q && !out_run_q)   dstate <= D_OUT;
+            else if (rep_left > 16'd1)         dstate <= D_RETIRE;  // 中间轮次不写状态
+            else begin wr_status <= 1'b1; dstate <= D_AW; end
+          end
         end
         D_OUT: begin
           // 启动搬出：spad 起点/长度来自 w4，RAM 目标来自 w5
@@ -707,6 +793,9 @@ module cgra_top #(
           dstate         <= D_AW;
         end
         D_RETIRE: begin
+          // 预取在飞时不取指、不推进环（预取的源/page 锁存在 pf_* 里，
+          // 下一条描述符的 D_DESC_SET 会覆盖它们）。
+          if (!pf_busy) begin
           if (rep_left > 16'd1) begin
             rep_left       <= rep_left - 16'd1;
             /* D_OUT 会把 dma_run_src 改成搬出目标，所以搬入基址单独记在
@@ -738,6 +827,7 @@ module cgra_top #(
           end else begin
             dma_busy <= 1'b0;
             dstate   <= D_IDLE;
+          end
           end
           end
         end
@@ -796,6 +886,73 @@ module cgra_top #(
     end
   end
 
+  // ---------------- prefetch engine ----------------
+  // 独立的小 FSM：只在 D_ARR 期间被 pf_req 启动，按和主引擎相同的突发规划
+  // （dma_plan_burst）把下一块搬进另一个 page。工作寄存器在 PF_IDLE 整组拷贝，
+  // 在飞期间完全不受描述符锁存值影响。
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      pf_state    <= PF_IDLE;
+      pf_busy     <= 1'b0;
+      pf_wsrc     <= 32'b0;
+      pf_wleft    <= 16'd0;
+      pf_baddr_lo <= 12'd0;
+      pf_idx      <= 16'd0;
+      pf_wstride  <= 16'd1;
+      pf_wrow     <= 16'd0;
+      pf_wpage    <= 1'b0;
+      pf_cur      <= 16'd0;
+      pf_row_cnt  <= 16'd0;
+      pf_bcnt     <= 8'd0;
+    end else begin
+      unique case (pf_state)
+        PF_IDLE: begin
+          if (pf_req && pf_en_q && (pf_len_q != 16'd0)) begin
+            pf_wsrc     <= pf_src_q;
+            pf_wleft    <= pf_len_q;
+            pf_baddr_lo <= pf_src_q[11:0];
+            pf_idx      <= 16'd0;
+            pf_bcnt     <= 8'd0;
+            pf_cur      <= pf_spad_q;
+            pf_row_cnt  <= 16'd0;
+            pf_wpage    <= pf_page_q;
+            pf_wstride  <= pf_stride_q;
+            pf_wrow     <= pf_row_q;
+            pf_busy     <= 1'b1;
+            pf_state    <= PF_AR;
+          end
+        end
+        PF_AR: begin
+          if (m_axi_arvalid && m_axi_arready) begin
+            pf_bcnt  <= 8'd0;
+            pf_state <= PF_R;
+          end
+        end
+        default: begin   // PF_R
+          if (m_axi_rvalid && m_axi_rready) begin
+            if (pf_last_odd) {pf_cur, pf_row_cnt} <= {pf_nxt_cur,  pf_nxt_cnt};
+            else             {pf_cur, pf_row_cnt} <= {pf_nxt2_cur, pf_nxt2_cnt};
+            if (m_axi_rlast) begin
+              pf_bcnt     <= 8'd0;
+              pf_idx      <= pf_idx + pf_bw;
+              pf_wleft    <= pf_wleft - pf_bw;
+              pf_baddr_lo <= (pf_baddr_lo + {4'b0, pf_bw[9:0], 2'b00}) & 12'hFFF;
+              // 完成条件只在最后一拍的握手上判：busy 必须覆盖到最后一次写 spad
+              if (pf_wleft <= pf_bw) begin
+                pf_busy  <= 1'b0;
+                pf_state <= PF_IDLE;
+              end else begin
+                pf_state <= PF_AR;
+              end
+            end else begin
+              pf_bcnt <= pf_bcnt + 8'd1;
+            end
+          end
+        end
+      endcase
+    end
+  end
+
   // ---------------- 事务级断言：长度 / 窗口 / 4 KiB 的可执行契约 ----------------
   // 只在仿真里生效（综合忽略）。任何一条触发都说明突发规划或描述符越界，
   // 不要等到下游数据算错才发现。
@@ -835,6 +992,17 @@ module cgra_top #(
       if ((dstate == D_SOUT) && m_axi_wvalid && m_axi_wready && !wr_status && !win_bad)
         if ((m_axi_wstrb != 8'hFF) && !dma_last_odd)
           $error("[cgra] 非末拍出现部分 wstrb: bcnt=%0d nb=%0d", dma_bcnt, dma_nb);
+      // 预取引擎的协议不变量（见 D_ARR / D_NEXT / D_RETIRE 的门控）
+      if (pf_we && ((dstate == D_SIN) || (dstate == D_SOUT)))
+        $error("[cgra] 预取与主 DMA 同时使用 spad 口: dstate=%0d", dstate);
+      if (pf_we && busy && (buf_page == pf_wpage))
+        $error("[cgra] 预取写到了阵列正在读的 page %0d", pf_wpage);
+      if ((pf_state != PF_IDLE) && !((dstate == D_ARR) || (dstate == D_NEXT)))
+        $error("[cgra] 预取在飞但主 FSM 已经离开 D_ARR/D_NEXT: dstate=%0d", dstate);
+      // 启动拍被吞会让 D_ARR 误以为阵列跑完了（done 还是上一次的 1）
+      if (arr_req && (busy || (arr_cycles_q == 16'd0)))
+        $error("[cgra] 阵列启动被吞: busy=%b cycles=%0d dstate=%0d",
+               busy, arr_cycles_q, dstate);
     end
   end
 `endif
@@ -1013,7 +1181,9 @@ module cgra_top #(
       .rot_tbl(rot_tbl),
       .rot_zc (rot_zc),
       .buf_page (buf_page),
-      .dma_page (dma_page),
+      // 预取写 spad 的那一拍把 DMA 写口切到预取的目标 page；其余时候仍是
+      // 拷贝引擎的 page。主 DMA 与预取不会同时占这条口（见 D_NEXT 的门控）。
+      .dma_page (pf_we ? pf_wpage : dma_page),
       .dma_we0   (spad_dma_we0),
       .dma_addr0 (spad_dma_addr0),
       .dma_wdata0(spad_dma_wdata0),

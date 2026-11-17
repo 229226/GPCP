@@ -206,4 +206,84 @@ static inline uint32_t gpcp_d64_out_step(const uint32_t *d)
     return (d[13] >> 0) & 0x0000ffffu;
 }
 
+/* pf_src: word 14 [31:0] */
+static inline void gpcp_d64_set_pf_src(uint32_t *d, uint32_t v)
+{
+    d[14] = (d[14] & ~0xffffffffu) | ((v & 0xffffffffu) << 0);
+}
+static inline uint32_t gpcp_d64_pf_src(const uint32_t *d)
+{
+    return (d[14] >> 0) & 0xffffffffu;
+}
+
+/* pf_len: word 15 [15:0] */
+static inline void gpcp_d64_set_pf_len(uint32_t *d, uint32_t v)
+{
+    d[15] = (d[15] & ~0x0000ffffu) | ((v & 0x0000ffffu) << 0);
+}
+static inline uint32_t gpcp_d64_pf_len(const uint32_t *d)
+{
+    return (d[15] >> 0) & 0x0000ffffu;
+}
+
+/* pf_spad: word 15 [31:16] */
+static inline void gpcp_d64_set_pf_spad(uint32_t *d, uint32_t v)
+{
+    d[15] = (d[15] & ~0xffff0000u) | ((v & 0x0000ffffu) << 16);
+}
+static inline uint32_t gpcp_d64_pf_spad(const uint32_t *d)
+{
+    return (d[15] >> 16) & 0x0000ffffu;
+}
+
+/* pf_page: word 7 [0:0] */
+static inline void gpcp_d64_set_pf_page(uint32_t *d, uint32_t v)
+{
+    d[7] = (d[7] & ~0x00000001u) | ((v & 0x00000001u) << 0);
+}
+static inline uint32_t gpcp_d64_pf_page(const uint32_t *d)
+{
+    return (d[7] >> 0) & 0x00000001u;
+}
+
+/* pf_stride: word 7 [31:16] */
+static inline void gpcp_d64_set_pf_stride(uint32_t *d, uint32_t v)
+{
+    d[7] = (d[7] & ~0xffff0000u) | ((v & 0x0000ffffu) << 16);
+}
+static inline uint32_t gpcp_d64_pf_stride(const uint32_t *d)
+{
+    return (d[7] >> 16) & 0x0000ffffu;
+}
+
+/* pf_row: word 11 [15:0] */
+static inline void gpcp_d64_set_pf_row(uint32_t *d, uint32_t v)
+{
+    d[11] = (d[11] & ~0x0000ffffu) | ((v & 0x0000ffffu) << 0);
+}
+static inline uint32_t gpcp_d64_pf_row(const uint32_t *d)
+{
+    return (d[11] >> 0) & 0x0000ffffu;
+}
+
+/* pf_in: word 11 [30:30] */
+static inline void gpcp_d64_set_pf_in(uint32_t *d, uint32_t v)
+{
+    d[11] = (d[11] & ~0x40000000u) | ((v & 0x00000001u) << 30);
+}
+static inline uint32_t gpcp_d64_pf_in(const uint32_t *d)
+{
+    return (d[11] >> 30) & 0x00000001u;
+}
+
+/* pf_en: word 11 [31:31] */
+static inline void gpcp_d64_set_pf_en(uint32_t *d, uint32_t v)
+{
+    d[11] = (d[11] & ~0x80000000u) | ((v & 0x00000001u) << 31);
+}
+static inline uint32_t gpcp_d64_pf_en(const uint32_t *d)
+{
+    return (d[11] >> 31) & 0x00000001u;
+}
+
 #endif /* GPCP_DESC64_H */

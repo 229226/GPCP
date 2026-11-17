@@ -31,3 +31,11 @@ fields:
   rep:       {word: 12, hi: 15, lo: 0}     # 重复次数（1 = 不重复）
   in_step:   {word: 12, hi: 31, lo: 16}    # 每轮搬入源地址步进（字节）
   out_step:  {word: 13, hi: 15, lo: 0}     # 每轮搬出目标步进（字节）
+  pf_src:    {word: 14, hi: 31, lo: 0}     # 预取源地址（RAM）
+  pf_len:    {word: 15, hi: 15, lo: 0}     # 预取字数
+  pf_spad:   {word: 15, hi: 31, lo: 16}    # 预取 spad 起始索引
+  pf_page:   {word: 7,  hi: 0,  lo: 0}     # 预取目标 spad page
+  pf_stride: {word: 7,  hi: 31, lo: 16}    # 预取 2D 走位：行间步进
+  pf_row:    {word: 11, hi: 15, lo: 0}     # 预取 2D 走位：每行字数（0 = 线性）
+  pf_in:     {word: 11, hi: 30, lo: 30}    # 本条描述符的搬入已由上一条预取完成，跳过
+  pf_en:     {word: 11, hi: 31, lo: 31}    # 阵列运行时预取下一块
