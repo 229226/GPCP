@@ -1,0 +1,66 @@
+# 架构 1：GPCP 8x8 —— **只给 YAML 的接口验证模型**（没有对应 RTL）
+#
+# 目的：证明"同族架构只需要 model.yaml"。与 4x4 的差异只有：
+#   阵列 16 -> 64 units；spad 8 KiB -> 32 KiB（64 bank/页 x 2 页，64 字/bank）；
+#   IMEM 仍是 8192 词，所以单次 run = 8192/64 = 128 拍。
+# 若以后把 IMEM 也扩到 16384 词，只改 max_run_cycles，不改编译器。
+api_version: 1
+name: gpcp-8x8
+
+time_model:
+  kind: synchronous_static
+  max_run_cycles: 128            # 8192 词 / 64 PE
+
+compute:
+  units: 64
+  issue_per_unit_per_cycle: 1
+  registers: 8
+  acc: true
+  link: true
+  ops:
+    nop:   {inputs: 0, latency: 1, writes: []}
+    mov:   {inputs: 1, latency: 1, writes: [dst]}
+    add:   {inputs: 2, latency: 1, writes: [dst]}
+    sub:   {inputs: 2, latency: 1, writes: [dst]}
+    mul:   {inputs: 2, latency: 1, writes: [dst]}
+    mac:   {inputs: 2, latency: 1, writes: [acc]}
+    lacc:  {inputs: 1, latency: 1, writes: [acc]}
+    shr:   {inputs: 1, latency: 1, writes: [dst]}
+    shl:   {inputs: 1, latency: 1, writes: [dst]}
+    and:   {inputs: 2, latency: 1, writes: [dst]}
+    xor:   {inputs: 2, latency: 1, writes: [dst]}
+    max:   {inputs: 2, latency: 1, writes: [dst]}
+    min:   {inputs: 2, latency: 1, writes: [dst]}
+    macl:  {inputs: 2, latency: 1, writes: [acc, link]}
+    ld:    {inputs: 0, latency: 1, writes: [dst]}
+    st:    {inputs: 1, latency: 1, writes: [mem]}
+
+store:
+  spaces:
+    spad:
+      banks: 128                 # 2 页 x 64 bank
+      words_per_bank: 64         # 128 x 64 x 4B = 32 KiB
+      pages: 2
+      read_ports_per_bank: 1
+      write_ports_per_bank: 1
+      read_timing: combinational
+      write_timing: next_cycle
+      broadcast: same_word
+    imem:
+      banks: 2
+      words_per_bank: 128        # 128 行 x 64 PE x 32 bit
+      pages: 1
+      read_ports_per_bank: 1
+      write_ports_per_bank: 1
+      read_timing: registered
+      write_timing: next_cycle
+      broadcast: none
+
+move:
+  engines:
+    dma:
+      beat_bits: 64
+      max_burst_beats: 32
+      overlap_compute: true
+      targets: [spad, imem]
+      sync: descriptor_ring

@@ -5,6 +5,7 @@ import argparse
 import sys
 
 from .archreg import DEFAULT_ROOT, load_arch
+from .conformance import run_all
 from .ir.dfg import load_dfg
 from .ir.schedule import load_schedule
 from .sched.list_sched import ListScheduler
@@ -23,6 +24,22 @@ def cmd_info(args) -> int:
     model, _ = load_arch(args.arch, args.root)
     print(model.summary())
     return 0
+
+
+def cmd_conformance(args) -> int:
+    model, _ = load_arch(args.arch, args.root)
+    results = run_all(model)
+    bad = 0
+    for r in results:
+        if r.ok:
+            print(f"[ OK ] {r.name}")
+        else:
+            bad += 1
+            print(f"[FAIL] {r.name}")
+            for f in r.failures:
+                print(f"       {f}")
+    print(f"conformance: {len(results) - bad} passed, {bad} failed")
+    return 1 if bad else 0
 
 
 def cmd_schedule(args) -> int:
@@ -64,6 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("info", help="打印架构模型摘要")
     s.add_argument("--arch", required=True)
     s.set_defaults(func=cmd_info)
+
+    s = sub.add_parser("conformance", help="跑接入验收用例（5 正向 + 4 负向）")
+    s.add_argument("--arch", required=True)
+    s.set_defaults(func=cmd_conformance)
 
     s = sub.add_parser("schedule", help="DFG -> Schedule")
     s.add_argument("--arch", required=True)

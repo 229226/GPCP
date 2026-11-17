@@ -19,6 +19,8 @@ class Slot:
     dst: str | None = None
     addr: int | None = None
     space: str | None = None          # 这条 LD/ST 访问哪个存储空间
+    page: int | None = None           # 双缓冲页号；None = 不涉及页
+    agent: str = "array"              # 谁发起这次访问：array / dma（页分离规则用）
 
 
 @dataclass(frozen=True)

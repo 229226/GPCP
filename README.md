@@ -22,7 +22,11 @@ python3 -m cgracc check --arch gpcp_4x4 --dfg examples/dot4.json --schedule buil
 # 4) 发射（参考发射器，输出人读的 listing，不是真微码）
 python3 -m cgracc emit --arch gpcp_4x4 --dfg examples/dot4.json --schedule build/schedule.json
 
-# 5) 自测
+# 5) 接入验收：5 正向 + 4 负向（新架构必须全绿）
+python3 -m cgracc conformance --arch gpcp_4x4
+python3 -m cgracc conformance --arch gpcp_8x8
+
+# 6) 自测
 python3 -m unittest discover -s tests -v
 ```
 
@@ -37,13 +41,17 @@ cgracc/
     sched/base.py       # Scheduler 接口
     sched/list_sched.py # 参考实现：列表调度（够跑通，不追求 QoR）
     verify/legality.py  # 合法性检查器（规则全部来自 model）
-    emit/base.py        # Emitter 接口
-    cli.py              # info / schedule / check / emit
+    emit/base.py        # Emitter 接口（通用 listing 在 emit/listing.py）
+    conformance.py      # 接入验收：5 正向 + 4 负向
+    cli.py              # info / conformance / schedule / check / emit
   arch/
     gpcp_4x4/           # 架构 0：GPCP 4x4（model.yaml + emitter.py）
+    gpcp_8x8/           # 架构 1：只给 model.yaml（接口验证，无 RTL）
   examples/dot4.json    # 最小 DFG
+  examples/wide20.json  # 20 个独立算子：看阵列规模对调度的影响
   docs/porting.md       # 接入新架构的 checklist
   tests/test_smoke.py   # 端到端 + 负例（必须被拒绝）
+  tests/test_mutation.py # 检查器失效时，4 个负向用例必须全部失败
 ```
 
 ## 边界
@@ -58,4 +66,4 @@ cgracc/
 - 真实 IMEM 编码（`emitter.py` 只是 listing）；
 - DMA / 描述符环的调度（model 里有字段，检查器暂未用）；
 - 多页分离检查、旋转表约束；
-- conformance 的 4 正向 + 1 负向用例集（现在只有 1 个示例 + 1 个负例测试）。
+- conformance 目前是**结构级**（合法性 + 长度），数值级对拍要等 DFG 带算子语义并接黄金模型。

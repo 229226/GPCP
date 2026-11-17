@@ -1,0 +1,25 @@
+{
+  "name": "wide20",
+  "nodes": [
+    {"id": "m0",  "op": "mul", "inputs": ["a0",  "b0"],  "dst": "r0"},
+    {"id": "m1",  "op": "mul", "inputs": ["a1",  "b1"],  "dst": "r1"},
+    {"id": "m2",  "op": "mul", "inputs": ["a2",  "b2"],  "dst": "r2"},
+    {"id": "m3",  "op": "mul", "inputs": ["a3",  "b3"],  "dst": "r3"},
+    {"id": "m4",  "op": "mul", "inputs": ["a4",  "b4"],  "dst": "r4"},
+    {"id": "m5",  "op": "mul", "inputs": ["a5",  "b5"],  "dst": "r5"},
+    {"id": "m6",  "op": "mul", "inputs": ["a6",  "b6"],  "dst": "r6"},
+    {"id": "m7",  "op": "mul", "inputs": ["a7",  "b7"],  "dst": "r7"},
+    {"id": "m8",  "op": "mul", "inputs": ["a8",  "b8"],  "dst": "r0"},
+    {"id": "m9",  "op": "mul", "inputs": ["a9",  "b9"],  "dst": "r1"},
+    {"id": "m10", "op": "mul", "inputs": ["a10", "b10"], "dst": "r2"},
+    {"id": "m11", "op": "mul", "inputs": ["a11", "b11"], "dst": "r3"},
+    {"id": "m12", "op": "mul", "inputs": ["a12", "b12"], "dst": "r4"},
+    {"id": "m13", "op": "mul", "inputs": ["a13", "b13"], "dst": "r5"},
+    {"id": "m14", "op": "mul", "inputs": ["a14", "b14"], "dst": "r6"},
+    {"id": "m15", "op": "mul", "inputs": ["a15", "b15"], "dst": "r7"},
+    {"id": "m16", "op": "mul", "inputs": ["a16", "b16"], "dst": "r0"},
+    {"id": "m17", "op": "mul", "inputs": ["a17", "b17"], "dst": "r1"},
+    {"id": "m18", "op": "mul", "inputs": ["a18", "b18"], "dst": "r2"},
+    {"id": "m19", "op": "mul", "inputs": ["a19", "b19"], "dst": "r3"}
+  ]
+}

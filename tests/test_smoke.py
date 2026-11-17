@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from cgracc.archreg import load_arch                      # noqa: E402
+from cgracc.conformance import run_all                    # noqa: E402
+from cgracc.emit.listing import ListingEmitter            # noqa: E402
 from cgracc.ir.dfg import DFG, Node, load_dfg             # noqa: E402
 from cgracc.ir.schedule import Schedule, Slot             # noqa: E402
 from cgracc.sched.list_sched import ListScheduler         # noqa: E402
@@ -76,6 +78,31 @@ class TestSmoke(unittest.TestCase):
         ))
         rules = {v.rule for v in check(sched, dfg, self.model)}
         self.assertIn("R3", rules)
+
+    def test_second_arch_needs_only_yaml(self):
+        """架构 1 只提供 model.yaml（没有 emitter.py），接口仍然成立。"""
+        model8, emitter8 = load_arch("gpcp_8x8", ROOT / "arch")
+        self.assertEqual(model8.compute.units, 64)
+        self.assertEqual(model8.time.max_run_cycles, 128)
+        self.assertEqual(model8.store["spad"].banks, 128)
+        self.assertIsInstance(emitter8, ListingEmitter)
+
+        dfg = load_dfg(ROOT / "examples" / "wide20.json")
+        s8 = ListScheduler().schedule(dfg, model8)
+        self.assertEqual(check(s8, dfg, model8), [])
+        self.assertEqual(s8.run_cycles, 1)          # 20 个独立 op < 64 units
+
+        # 同一 DFG 在 4x4 上要两拍（16 units），说明差异确实来自模型
+        s4 = ListScheduler().schedule(dfg, self.model)
+        self.assertEqual(check(s4, dfg, self.model), [])
+        self.assertEqual(s4.run_cycles, 2)
+
+    def test_conformance_on_every_arch(self):
+        for name in ("gpcp_4x4", "gpcp_8x8"):
+            model, _ = load_arch(name, ROOT / "arch")
+            results = run_all(model)
+            failed = [r.name for r in results if not r.ok]
+            self.assertEqual(failed, [], f"{name}: {failed}")
 
 
 if __name__ == "__main__":

@@ -6,10 +6,13 @@
 
 ```
 arch/<name>/
-  __init__.py
   model.yaml      # 五段契约
-  emitter.py      # class XxxEmitter(cgracc.emit.base.Emitter)
+  emitter.py      # 可选：class XxxEmitter(cgracc.emit.base.Emitter)
 ```
+
+**没有 `emitter.py` 时会自动回退到通用 `ListingEmitter`**——同族架构（算子集、
+时序模型相同）因此只需要 `model.yaml`，这就是 `arch/gpcp_8x8/` 演示的路径。
+`__init__.py` 也不是必需的（Python 命名空间包）。
 
 ## 2. model.yaml 必须写清的五段
 
@@ -46,9 +49,18 @@ python3 -m cgracc emit     --arch <name> --dfg examples/dot4.json --schedule bui
 
 ## 5. 验收标准
 
-- 正向用例（向量加 / 点积 / 小 FFT 蝶形 / 矩阵乘）全部 `0 violation`；
-- 负向用例（同 bank 双写、超长 run、依赖倒置）**必须**报出对应规则；
+```bash
+python3 -m cgracc conformance --arch <name>
+```
+
+- 五个正向用例（`vec_add` / `dot4` / `fft8` / `matmul4` / `bank_split`）**全绿**；
+- 四个负向用例必须被拒绝：
+  `neg_bank`（同拍同 bank 两次读 → R6）、`neg_run`（超长 run → R3）、
+  `neg_reg`（`r<registers>` 越界 → R5）、`neg_page`（array 与 dma 同页 → R9）；
 - 编译器核心无改动（`git diff --stat` 只应出现 `arch/<name>/`）。
+
+`bank_split` 是"正向负例"：addr 0 与 addr `words_per_bank` 同拍必须**不报** R6——
+用来卡住 bank 宽度是否真的来自模型。依赖倒置（R7）由 `tests/test_smoke.py` 覆盖。
 
 ## 6. 什么时候需要写调度器插件
 

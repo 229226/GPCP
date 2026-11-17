@@ -12,6 +12,7 @@
   R6 存储端口超限（每拍每 bank 的读/写）
   R7 依赖顺序（生产者延迟未满足）
   R8 DFG 节点覆盖（遗漏 / 重复 / 算子不匹配）
+  R9 页分离（双缓冲：同拍两个 agent 访问同一空间时必须异页；page 越界）
 """
 from __future__ import annotations
 
@@ -120,6 +121,29 @@ def check(schedule: Schedule, dfg: DFG, model: MachineModel) -> list[Violation]:
     if run > model.time.max_run_cycles:
         out.append(Violation(
             "R3", f"run 长度 {run} 超过上限 {model.time.max_run_cycles}"))
+
+    # R9: 页分离（双缓冲）。同拍、同一空间、两个 agent -> 必须异页。
+    page_use: dict[tuple[int, str], dict[str, set[int]]] = defaultdict(
+        lambda: defaultdict(set))
+    for s in schedule.slots:
+        if s.space is None or s.space not in model.store:
+            continue
+        sp = model.store[s.space]
+        if s.page is not None and not (0 <= s.page < sp.pages):
+            out.append(Violation(
+                "R9", f"page={s.page} 越界（{s.space} 只有 0..{sp.pages - 1} 页）", s.node))
+            continue
+        if s.page is not None:
+            page_use[(s.cycle, s.space)][s.agent].add(s.page)
+
+    for (cyc, space), by_agent in page_use.items():
+        if model.store[space].pages <= 1 or len(by_agent) < 2:
+            continue
+        common = set.intersection(*by_agent.values())
+        if common:
+            agents = ", ".join(f"{a}{sorted(p)}" for a, p in sorted(by_agent.items()))
+            out.append(Violation(
+                "R9", f"{space} 第 {cyc} 拍页冲突：{agents}（双缓冲必须异页）"))
 
     # R7: 依赖顺序（生产者延迟）
     ids = {n.id for n in dfg.nodes}

@@ -28,7 +28,7 @@ compute:
     max:   {inputs: 2, latency: 1, writes: [dst]}
     min:   {inputs: 2, latency: 1, writes: [dst]}
     macl:  {inputs: 2, latency: 1, writes: [acc, link]}
-    ld:    {inputs: 0, latency: 0, writes: [dst]}   # 组合读：同拍地址、同拍出数（本项目约定）
+    ld:    {inputs: 0, latency: 1, writes: [dst]}   # 存储组合读，写回寄存器在下一拍可见
     st:    {inputs: 1, latency: 1, writes: [mem]}   # 同步写：下一拍可见
 
 store:
