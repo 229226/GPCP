@@ -11,7 +11,7 @@ from collections import defaultdict
 
 from ..ir.dfg import DFG
 from ..ir.model import MachineModel
-from ..ir.schedule import Schedule, Slot
+from ..ir.schedule import Schedule, Slot, plan_trips
 from .base import Scheduler
 
 
@@ -21,10 +21,10 @@ class ListScheduler(Scheduler):
     def __init__(self, order: str = "topo", bind: str = "rotate"):
         if order not in ("topo", "height"):
             raise ValueError(f"未知排序 '{order}'（topo / height）")
-        if bind not in ("rotate", "decl"):
-            raise ValueError(f"未知绑定 '{bind}'（rotate / decl）")
+        if bind not in ("rotate", "decl", "pack"):
+            raise ValueError(f"未知绑定 '{bind}'（rotate / decl / pack）")
         self.order = order
-        self.bind = bind            # decl = 按分量出现顺序依次占 unit 0,1,2…
+        self.bind = bind            # decl = 首次适配；pack = 按分量大小 LPT 预分配 unit
 
     def schedule(self, dfg: DFG, model: MachineModel) -> Schedule:
         order = self._ordered(dfg, model)
@@ -34,6 +34,13 @@ class ListScheduler(Scheduler):
         # 私有寄存器堆：同一依赖分量的节点必须落在同一个 unit
         comp = dfg.components() if model.compute.private_registers else {}
         unit_of_comp: dict[str, int] = {}
+        if comp and self.bind == "pack":
+            # 分量多于 unit 时按"链长"做 LPT 装箱，避免长链和短链挤在同一颗 PE
+            load: dict[str, int] = defaultdict(int)
+            for n in dfg.nodes:
+                load[comp[n.id]] += 1
+            for idx, root in enumerate(sorted(load, key=lambda c: -load[c])):
+                unit_of_comp[root] = idx % model.compute.units
 
         issue: dict[tuple[int, int], int] = defaultdict(int)
         rd: dict[tuple[str, int, int], set[int]] = defaultdict(set)
@@ -92,8 +99,11 @@ class ListScheduler(Scheduler):
                 dst=node.dst, addr=addr, space=space,
             ))
 
-        run = max(when.values(), default=-1) + 1
-        return Schedule(name=dfg.name, run_cycles=run, slots=tuple(slots))
+        span = max(when.values(), default=-1) + 1
+        tpr, runs = plan_trips(max(dfg.trip_count, 1), None, span,
+                               model.time.max_run_cycles)
+        return Schedule(name=dfg.name, run_cycles=span * tpr, slots=tuple(slots),
+                        trips_per_run=tpr, runs=runs)
 
     @staticmethod
     def _pick_unit(i: int, cycle: int, model: MachineModel,

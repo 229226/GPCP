@@ -7,6 +7,10 @@
 逐字写进 IMEM，3 拍后 spad[0,1] = 75。**add2 与规则映射器的产物 64/64 字逐字一致**
 （`python3 tools/compare_add2.py`）。
 
+落点搜索已覆盖三个维度：`list/{拓扑序, 关键路径序}/{首次适配, 分量装箱}`、
+`modulo/II=k`，以及**多 run 切分**——循环展开超过 `max_run_cycles` 时自动求
+`trips_per_run`（必须整除 `trip_count`）并给出 `runs` 次数，代价按 run 启动开销累加。
+
 ## 快速开始
 
 ```bash
@@ -31,7 +35,7 @@ python3 -m cgracc schedule --arch gpcp_4x4 --scheduler modulo \
     --dfg examples/loop_dot.json -o build/loop.json
 python3 -m cgracc check --arch gpcp_4x4 --dfg examples/loop_dot.json --schedule build/loop.json
 
-# 6) 落点搜索：list/modulo × II -> 合法性检查 -> 代价 -> 选最优
+# 6) 落点搜索：list/{topo,height}/{decl,pack} × modulo/II -> 检查 -> 代价 -> 选最优
 python3 -m cgracc search --arch gpcp_4x4 --dfg examples/loop_dot.json -o build/best.json
 
 # 7) 接入验收：6 正向 + 4 负向（新架构必须全绿）
@@ -78,10 +82,27 @@ cgracc/
 - **架构方拥有**：`model.yaml`（五段契约）+ `emitter.py`（Schedule → 该机器的微码/位流）。
 - 编译器核心**不允许出现任何架构名**（后续加 CI grep 检查）。
 
+## 搜索维度与多 run 切分
+
+| 维度 | 取值 | 由模型驱动 |
+|---|---|---|
+| 调度器 | `list`（DAG）/ `modulo`（有回边或 `trip_count > 1`） | — |
+| 排序 | `topo` / `height` | — |
+| 分量绑定 | `decl`（首次适配）/ `pack`（按分量大小 LPT 装箱） | `compute.private_registers` |
+| 启动间隔 | `II ∈ [MII, MII + 4)` | `ops[].latency`、单元数 |
+| run 切分 | `trips_per_run × runs = trip_count` | `time_model.max_run_cycles` |
+
+`plan_trips()` 只在"展开后的跨度装不下一个 run"时启用：取不超过上限的最大
+`trips_per_run`，且必须是 `trip_count` 的因子——否则最后一次 run 会多跑几次迭代，
+对累加器是错的。`Schedule.total_cycles()` = `runs × per_run_cycles()`；代价模型把
+`run_overhead_cycles` 按 `runs` 累加；emitter 导出 `_PROG_CYCLES`（单次 run 长度）、
+`_PROG_TRIPS_PER_RUN`、`_PROG_RUNS`，寄存器/spad 跨 run 保持，主机重复启动
+`RUNS` 次即可。检查器 R3 只校验单次 run 不超 `max_run_cycles`。
+
 ## 尚未实现（刻意留白）
 
 - 代价模型只算周期（计算 + `run_overhead_cycles`），不含面积/能耗；
-- 搜索维度只有 list/modulo × 排序 × II，还没有 tile 划分与银行落点；
+- 搜索还没有 tile 划分与银行落点（多 run 切分与分量装箱已实现）；
 - 发射器只覆盖 GPCP 4x4 的 ISA（8x8 仍回退到 listing）；
 - DMA / 描述符环参与调度（model 里有字段，检查器暂未用）；
 - 多页分离检查、旋转表约束（R9 已覆盖页冲突）；

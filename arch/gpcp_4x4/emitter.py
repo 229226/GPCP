@@ -56,11 +56,12 @@ class Gpcp4x4Emitter(Emitter):
         units = model.compute.units
         span = schedule.cycles()
         step = schedule.ii or span
-        trip = max(dfg.trip_count, 1)
-        total = schedule.total_cycles(trip)
+        trip = schedule.trips_per_run or max(dfg.trip_count, 1)
+        runs = max(schedule.runs, 1)
+        total = schedule.per_run_cycles(dfg.trip_count)
         if total > model.time.max_run_cycles:
             raise EmitError(
-                f"展开后 {total} 拍超过一次 run 上限 {model.time.max_run_cycles}（需要拆 run）")
+                f"单次 run 需要 {total} 拍，超过上限 {model.time.max_run_cycles}")
         if units != 16:
             raise EmitError(f"GPCP 4x4 的 IMEM 一行是 16 个 PE，模型里是 {units}")
 
@@ -83,7 +84,8 @@ class Gpcp4x4Emitter(Emitter):
                         f"(cycle {t}, unit {slot.unit}) 被两条指令占用（展开后冲突）")
                 grid[t][slot.unit] = self._encode(by_id[slot.node], by_id)
 
-        return self._header(dfg, schedule, total, units, grid, model, mem_pts)
+        return self._header(dfg, schedule, total, units, grid, model, mem_pts,
+                            trip, runs)
 
     # ---------------- 单条指令 ----------------
     def _encode(self, node: Node, by_id: dict[str, Node]) -> int:
@@ -130,19 +132,23 @@ class Gpcp4x4Emitter(Emitter):
     @staticmethod
     def _header(dfg: DFG, schedule: Schedule, total: int, units: int,
                 grid: list[list[int]], model: MachineModel,
-                mem_pts: list[tuple[str, str, int]]) -> str:
+                mem_pts: list[tuple[str, str, int]], trip: int, runs: int) -> str:
         sym = "".join(c if c.isalnum() else "_" for c in dfg.name).lower()
         macro = sym.upper()
         lines = [
             "/* 由 cgracc 生成，勿手改。",
             f" * DFG {dfg.name}：{len(dfg.nodes)} 个算子，"
             f"span {schedule.cycles()}，II {schedule.ii or '-'}，"
-            f"迭代 {dfg.trip_count} 次 → 展开 {total} 拍 x {units} PE。",
-            " * 编码：pack_inst(op, src_a, src_b, dst, imm)；PE0 在每行低 32 位。 */",
+            f"迭代 {dfg.trip_count} 次 → 每次 run 展开 {trip} 次、共 {runs} 次 run，"
+            f"单次 {total} 拍 x {units} PE。",
+            " * 编码：pack_inst(op, src_a, src_b, dst, imm)；PE0 在每行低 32 位。"
+            " 寄存器/spad 跨 run 保持，主机重复 RUNS 次即可。 */",
             f"#ifndef {macro}_PROG_H",
             f"#define {macro}_PROG_H",
             "",
             f"#define {macro}_PROG_CYCLES {total}",
+            f"#define {macro}_PROG_RUNS {runs}",
+            f"#define {macro}_PROG_TRIPS_PER_RUN {trip}",
             f"#define {macro}_PROG_PES {units}",
         ]
         for nid, space, addr in mem_pts:

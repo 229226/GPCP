@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from cgracc.archreg import load_arch                          # noqa: E402
-from cgracc.ir.dfg import load_dfg                            # noqa: E402
+from cgracc.ir.dfg import BackEdge, DFG, Node, load_dfg       # noqa: E402
 from cgracc.sched.list_sched import ListScheduler             # noqa: E402
 from cgracc.sched.modulo import ModuloScheduler               # noqa: E402
 from arch.gpcp_4x4.emitter import EmitError, unpack_inst      # noqa: E402
@@ -97,6 +97,29 @@ class TestImemEmitter(unittest.TestCase):
         # 存储访问点由编译器导出，C 侧不再写死 bank/word
         self.assertIn("#define IMEM_DOT_ST0_BANK 0", header)
         self.assertIn("#define IMEM_DOT_ST0_WORD 1", header)
+
+    def test_multi_run_header(self):
+        """1024 次迭代装不进 512 拍 -> 拆成 4 次 run，每次展开 256 次。"""
+        dfg = DFG("imem_long", (
+            Node("mul", "mul", ("r0", "r1"), dst="r2"),
+            Node("acc", "mac", ("mul", "r3")),
+        ), back_edges=(BackEdge("acc", "acc", 1),), trip_count=1024)
+        sched = ModuloScheduler().schedule(dfg, self.model)
+        self.assertEqual((sched.trips_per_run, sched.runs), (256, 4))
+        header = self.emitter.emit(sched, dfg, self.model)
+        self.assertIn("#define IMEM_LONG_PROG_CYCLES 512", header)
+        self.assertIn("#define IMEM_LONG_PROG_RUNS 4", header)
+        self.assertIn("#define IMEM_LONG_PROG_TRIPS_PER_RUN 256", header)
+        words = parse_words(header)
+        self.assertEqual(len(words), 512 * 16)
+
+        # 最后一次展开的最后一拍：同 PE 上只有第 256 次迭代的 mac
+        mul = sched.slot("mul")
+        mac = sched.slot("acc")
+        self.assertEqual(mul.unit, mac.unit)
+        last = 511
+        self.assertEqual(unpack_inst(words[last * 16 + mul.unit])["op"], 5)
+        self.assertEqual(unpack_inst(words[510 * 16 + mul.unit])["op"], 4)
 
 
     def test_add2_parity_with_rule_mapper(self):

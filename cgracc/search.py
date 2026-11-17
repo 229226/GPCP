@@ -51,12 +51,15 @@ def _eval(label: str, sched: Schedule, dfg: DFG, model: MachineModel) -> Candida
 def search(dfg: DFG, model: MachineModel, ii_window: int = 4) -> SearchResult:
     cands: list[Candidate] = []
 
-    for order in ("topo", "height"):
-        label = f"list/{order}"
-        try:
-            cands.append(_eval(label, ListScheduler(order).schedule(dfg, model), dfg, model))
-        except Exception as e:                      # 调度器抛错也算一个失败的候选
-            cands.append(Candidate(label, None, None, (), f"{type(e).__name__}: {e}"))
+    binds = ("decl", "pack") if model.compute.private_registers else ("rotate",)
+    for bind in binds:
+        for order in ("topo", "height"):
+            label = f"list/{order}/{bind}"
+            try:
+                sched = ListScheduler(order=order, bind=bind).schedule(dfg, model)
+                cands.append(_eval(label, sched, dfg, model))
+            except Exception as e:                  # 调度器抛错也算一个失败的候选
+                cands.append(Candidate(label, None, None, (), f"{type(e).__name__}: {e}"))
 
     # modulo 只对"会重复执行"的 kernel 有意义（有回边或 trip_count > 1）；
     # 单次 DAG 上强行给 II 只会让标签失真。

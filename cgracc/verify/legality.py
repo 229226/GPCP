@@ -132,13 +132,14 @@ def check(schedule: Schedule, dfg: DFG, model: MachineModel) -> list[Violation]:
             out.append(Violation(
                 "R6", f"{space} 槽位 {cyc} 物理 bank {bank} 写了 {len(words)} 个不同字（上限 {cap}）"))
 
-    # R3: 总周期 = (迭代数-1)*II + kernel 跨度（非流水时 = 跨度*迭代数）
+    # R3: 单次 run 的周期上限（循环拆成多次 run 时，每次都要装得下）
     span = schedule.cycles()
-    total = schedule.total_cycles(dfg.trip_count)
-    if total > model.time.max_run_cycles:
+    per_run = schedule.per_run_cycles(dfg.trip_count)
+    if per_run > model.time.max_run_cycles:
         out.append(Violation(
-            "R3", f"run 长度 {total} 超过上限 {model.time.max_run_cycles}"
-                  f"（{dfg.trip_count} 次迭代，II={ii or '无'}，跨度 {span}）"))
+            "R3", f"单次 run {per_run} 拍超过上限 {model.time.max_run_cycles}"
+                  f"（{dfg.trip_count} 次迭代，每次 {schedule.trips_per_run or dfg.trip_count} 次，"
+                  f"共 {schedule.runs} 次 run，II={ii or '无'}，跨度 {span}）"))
 
     # R9: 页分离（双缓冲）。同拍、同一空间、两个 agent -> 必须异页。
     page_use: dict[tuple[int, str], dict[str, set[int]]] = defaultdict(

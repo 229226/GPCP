@@ -72,3 +72,11 @@ python3 -m cgracc conformance --arch <name>
 | 需要精确最优（小规模） | 新增 `sched/cpsat.py` |
 
 调度器只依赖 `Scheduler` 接口；不许在 emitter 或 checker 里出现架构名。
+
+两个自动生效的维度（不用写调度器插件）：
+
+- `time_model.max_run_cycles` 是单次 run 的长度上限。循环展开装不下时，
+  调度器自动拆成 `runs` 次（`trips_per_run` 取 `trip_count` 的最大因子），
+  代价模型按 `run_overhead_cycles × runs` 累加，emitter 导出 `_PROG_RUNS`。
+- `compute.private_registers: true` 时，搜索会枚举 `decl`（首次适配）与
+  `pack`（按依赖分量大小 LPT 装箱）两种绑定；分量必须整条落在同一颗 PE（R10）。

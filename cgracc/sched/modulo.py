@@ -19,7 +19,7 @@ from math import ceil
 
 from ..ir.dfg import DFG
 from ..ir.model import MachineModel
-from ..ir.schedule import Schedule, Slot
+from ..ir.schedule import Schedule, Slot, plan_trips
 from .base import Scheduler
 
 
@@ -189,16 +189,19 @@ class ModuloScheduler(Scheduler):
                 (wr if is_write else rd)[(cyc % ii, space, bank)].add(pword)
 
         span = max(t.values(), default=-1) + 1
-        total = (max(dfg.trip_count, 1) - 1) * ii + span
+        tpr, runs = plan_trips(max(dfg.trip_count, 1), ii, span,
+                               model.time.max_run_cycles)
+        total = (tpr - 1) * ii + span
         if total > model.time.max_run_cycles:
-            raise _Fail(f"循环总周期 {total} 超过 run 上限 {model.time.max_run_cycles}")
+            raise _Fail(f"单次 run 需要 {total} 拍，超过上限 {model.time.max_run_cycles}")
 
         slots = []
         for n in dfg.nodes:
             unit, space, addr = placed_at[n.id]
             slots.append(Slot(node=n.id, op=n.op, unit=unit, cycle=t[n.id],
                               dst=n.dst, addr=addr, space=space))
-        return Schedule(name=dfg.name, run_cycles=total, slots=tuple(slots), ii=ii)
+        return Schedule(name=dfg.name, run_cycles=total, slots=tuple(slots), ii=ii,
+                        trips_per_run=tpr, runs=runs)
 
     @staticmethod
     def _free_unit(slot: int, model: MachineModel,
