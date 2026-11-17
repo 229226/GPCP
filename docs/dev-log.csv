@@ -130,3 +130,7 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-17,,,60,verif,feature,cgracc 硬件闭环：cgracc_dot_bm + check_cgracc_dot + run-cgracc-dot,fbf7bb6,estimate,"8/8 [OK]；spad[bank0,word1]=75；exit 0x600D；1291 cycles"
 2026-11-17,,,90,sw,feature,FFT tile 流水：in/out DMA 与阵列双页重叠（ssb_fft.inc）,aaf049f,estimate,run-ifft 217098->110861（1.96x）; ssbfft 4.38M->3.13M; pdsch 2.344M->2.188M / U_time 17.8%; verify slow --force 86 passed
 2026-11-17,,,30,sw,feature,LDPC 派生表构建改为按边散射（build_tables）,01fb1a1,estimate,encode 266802->149394; pdsch 2.187M->2.069M / U_time 18.8%; run-pdsch-loop 2.046M; 16qam 门通过
+2026-11-18,,,120,rtl,feature,描述符环两级预取：独立 PF FSM + AR/R 仲裁 + 描述符字段；定位 word4/5 状态字覆盖 bug,6fa6f34,estimate,"run-proto-nr_pdsch 2,069,754->2,033,428; decode 787,158->752,996; 86 gates pass"
+2026-11-18,,,40,sw,feature,CN 行双 page 预取编排 + 双 page 哨兵初始化 + 预取窗口校验,6fa6f34,estimate,"码字 1040/1040、TB 80/80、720/720 LLR；run-pdsch-loop 2,010,222"
+2026-11-18,,,40,verif,feature,全量回归 + 同族基准重测与文档对齐,6fa6f34,measured,verify.sh smart: 86 passed / 0 failed / 1460 s
+2026-11-18,,,20,synth,feature,ITER-10 PPA 复测（Nangate45 / IMEM_MACRO）,6fa6f34,measured,"235,168 um2 / 8,369 flop / slack -0.023ns / 1.189 W"
