@@ -52,7 +52,8 @@ int main(void)
     res[0] = 0x0FF1C1A1u;
     res[1] = IMEM_DOT_PROG_CYCLES;
     res[2] = status;
-    res[3] = gpcp_cgra_read(CGRA_BASE, GPCP_SPAD_ADDR(0, 1));   /* 期望 75 */
+    res[3] = gpcp_cgra_read(CGRA_BASE,
+                            GPCP_SPAD_ADDR(IMEM_DOT_ST0_BANK, IMEM_DOT_ST0_WORD));
     res[4] = gpcp_cgra_read(CGRA_BASE, GPCP_CGRA_CYCLE_CNT);
     res[5] = 0x600Du;
 

@@ -48,7 +48,9 @@ from pathlib import Path
 ROOT = Path(_ROOT)
 TOKEN = "gpcp_cgra_inst"
 # 合法的生成器：统一入口 + 两个兼容薄壳（它们内部 import gen_kernel_prog）。
-BLESSED = ("gen_kernel_prog.py", "gen_bn_prog.py", "gen_cn_prog.py")
+# "由 cgracc 生成" 是独立项目 d:/Data/GPCP/cgracc 的发射器横幅：它有自己的
+# 编码往返测试与 RTL 闭环门禁（run-cgracc-dot），同样不是手工维护的微码。
+BLESSED = ("gen_kernel_prog.py", "gen_bn_prog.py", "gen_cn_prog.py", "由 cgracc 生成")
 
 STAGES = {
     "P1": "已有编译器产物，纯重复",

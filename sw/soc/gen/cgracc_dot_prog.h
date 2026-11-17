@@ -6,6 +6,12 @@
 
 #define IMEM_DOT_PROG_CYCLES 3
 #define IMEM_DOT_PROG_PES 16
+#define IMEM_DOT_LD0_SPACE "spad"
+#define IMEM_DOT_LD0_BANK 0
+#define IMEM_DOT_LD0_WORD 0
+#define IMEM_DOT_ST0_SPACE "spad"
+#define IMEM_DOT_ST0_BANK 0
+#define IMEM_DOT_ST0_WORD 1
 
 static const unsigned int imem_dot_prog[48]
     __attribute__((aligned(8))) = {
