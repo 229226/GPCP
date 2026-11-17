@@ -1,0 +1,9 @@
+{
+  "name": "dot4",
+  "nodes": [
+    {"id": "n0", "op": "mul", "inputs": ["a", "b"], "dst": "r0"},
+    {"id": "n1", "op": "mul", "inputs": ["c", "d"], "dst": "r1"},
+    {"id": "n2", "op": "add", "inputs": ["n0", "n1"], "dst": "r2"},
+    {"id": "n3", "op": "mul", "inputs": ["n2", "n2"], "dst": "r3"}
+  ]
+}

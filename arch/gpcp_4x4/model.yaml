@@ -1,0 +1,62 @@
+# 架构 0：GPCP 4x4（对应 GPCP 仓库 cgra/target.yaml + rtl/cgra）
+# 五段契约见 docs/porting.md。字段要么被生成器查询，要么被检查器验证。
+api_version: 1
+name: gpcp-4x4
+
+time_model:
+  kind: synchronous_static       # 全局同步拍；一次 run 是一条静态微码，无分支
+  max_run_cycles: 512            # IMEM 8192 词 / 16 PE
+
+compute:
+  units: 16                      # 4x4 阵列
+  issue_per_unit_per_cycle: 1
+  registers: 8                   # r0..r7
+  acc: true                      # 隐式累加器（MAC/LACC 写，不能做 dst）
+  link: true                     # 跨 PE 1 拍管道寄存器
+  ops:
+    nop:   {inputs: 0, latency: 1, writes: []}
+    mov:   {inputs: 1, latency: 1, writes: [dst]}
+    add:   {inputs: 2, latency: 1, writes: [dst]}
+    sub:   {inputs: 2, latency: 1, writes: [dst]}
+    mul:   {inputs: 2, latency: 1, writes: [dst]}
+    mac:   {inputs: 2, latency: 1, writes: [acc]}
+    lacc:  {inputs: 1, latency: 1, writes: [acc]}
+    shr:   {inputs: 1, latency: 1, writes: [dst]}
+    shl:   {inputs: 1, latency: 1, writes: [dst]}
+    and:   {inputs: 2, latency: 1, writes: [dst]}
+    xor:   {inputs: 2, latency: 1, writes: [dst]}
+    max:   {inputs: 2, latency: 1, writes: [dst]}
+    min:   {inputs: 2, latency: 1, writes: [dst]}
+    macl:  {inputs: 2, latency: 1, writes: [acc, link]}
+    ld:    {inputs: 0, latency: 0, writes: [dst]}   # 组合读：同拍地址、同拍出数（本项目约定）
+    st:    {inputs: 1, latency: 1, writes: [mem]}   # 同步写：下一拍可见
+
+store:
+  spaces:
+    spad:
+      banks: 64                  # 物理 bank = 2 页 x 32
+      words_per_bank: 32
+      pages: 2
+      read_ports_per_bank: 1     # 1R1W
+      write_ports_per_bank: 1
+      read_timing: combinational
+      write_timing: next_cycle
+      broadcast: same_word       # 同一 bank 同一字的多读免费
+    imem:
+      banks: 2                   # 双 bank 微码
+      words_per_bank: 512        # 512 行 x 16 PE x 32 bit
+      pages: 1
+      read_ports_per_bank: 1
+      write_ports_per_bank: 1
+      read_timing: registered
+      write_timing: next_cycle
+      broadcast: none
+
+move:
+  engines:
+    dma:
+      beat_bits: 64
+      max_burst_beats: 32
+      overlap_compute: true      # 双页 ping-pong：DMA 写 B 页时阵列跑 A 页
+      targets: [spad, imem]
+      sync: descriptor_ring      # 描述符环 + 进度字 + 中断
