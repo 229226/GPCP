@@ -14,7 +14,7 @@ BUILD := ../../build/sw
 BENCH := bench
 VPATH := bench:gen:stages:ops:lib
 
-PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm pdcch_loop_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm pbch_pack_bm ifft_bm overhead_bm ssb_tx_bm ldpc_enc_bm dl_mod_bm pdcch_tx_bm pdsch_loop_bm new_kernels_bm
+PROGS := cgra_bm dma_bm irq_bm ring_bm rxchain_bm fft_bm slot_rtos sync_bm sss_bm polar_sc_bm ssb_bm ssb_fft_bm ssb_slot_bm fftprobe_bm ssb_fid_bm pdsch_bm pdsch_bg2_bm pdsch_bn1_bm pdsch_gather_bm pdsch_iter_bm pdsch_full_bm pdsch_harq_bm pdcch_bm pdcch_loop_bm link_e2e_bm pusch_bm sib1_bm pucch_bm prach_bm pdsch_16qam_bm pdsch_64qam_bm pusch_tp_bm csi_bm mimo_ce_bm mimo_bm prach_cgra_bm pdsch_zc64_bm pdsch_bg1_bm pbch_tx_bm pbch_pack_bm ifft_bm overhead_bm ssb_tx_bm ldpc_enc_bm dl_mod_bm pdcch_tx_bm pdsch_loop_bm new_kernels_bm cgracc_dot_bm
 
 all: $(PROGS:%=$(BUILD)/%.bin)
 
@@ -53,6 +53,9 @@ $(BUILD)/pdsch_bg1_bm.elf: pdsch_cn20_prog.h ../include/ldpc_bg1.h
 
 # PRACH 相关微码由编译器生成（cgra/kernels/prach_corr.yaml）
 $(BUILD)/prach_bm.elf: prach_corr_prog.h zc_corr.inc
+
+# cgracc 生成的微码（独立项目 d:/Data/GPCP/cgracc，examples/imem_dot.json）
+$(BUILD)/cgracc_dot_bm.elf: cgracc_dot_prog.h
 
 # 编译器生成的 PRACH 相关微码（cgra/kernels/prach_corr.yaml）
 gen/prach_corr_prog.h: ../../cgra/tools/gen_kernel_prog.py ../../cgra/tools/rule_map.py ../../cgra/tools/kernel_spec.py ../../cgra/tools/bank_alloc.py ../../cgra/kernels/prach_corr.yaml

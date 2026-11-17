@@ -40,7 +40,7 @@ VFLAGS := --cc --exe --build -O3 --build-jobs 4 --threads 1 \
 	-Wno-WIDTHEXPAND -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNUSEDSIGNAL \
 	-Wno-UNUSEDPARAM -Wno-DECLFILENAME -Wno-INITIALDLY
 
-.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be
+.PHONY: all run run-dma run-irq run-ring run-rxchain run-fft run-sync run-sss run-polar run-ssb run-ssbfft run-fftprobe run-slot run-ssb-slot linux clean run-ssb-fid run-pdsch-full run-pdsch-harq run-pdsch-16qam run-pdsch-64qam run-pdcch run-link-e2e run-pusch run-pusch-tp run-sib1 run-pucch run-csi run-mimo-ce run-mimo run-prach run-prach-cgra run-rach run-ifft run-overhead run-ssb-tx run-ldpc-enc run-dl-mod run-pdcch-tx run-proto-nr_pdcch run-proto-nr_pdsch run-proto-nr_csi run-proto-nr_prach run-proto-nr_pucch run-proto-nr_mimo run-proto-nr_pusch run-proto-nr_ssb run-proto-lte_pdsch run-proto-nr_pdsch_16qam run-proto-nr_pdsch_64qam run-proto-nr_pdsch_harq run-proto-nr_pusch_tp run-proto-lte_pusch run-proto-lte_prach run-proto-lte_cell_search run-proto-wifi_11be run-cgracc-dot
 
 # The model is only rebuilt when one of its inputs changes; `make all` used to
 # re-run Verilator every time (~35 s), which made the run-* targets painful to
@@ -704,6 +704,16 @@ run-overhead: all
 		--dump $(ROOT)/$(OBJ)/overhead_dump.txt \
 		--max-cycles 10000000
 	python3 $(ROOT)/tools/checks/check_overhead.py $(ROOT)/$(OBJ)/overhead_dump.txt
+
+# ---- cgracc: compiler-generated microcode on the real RTL -------------------
+run-cgracc-dot: all
+	env -u LD_LIBRARY_PATH $(MAKE) -C $(ROOT)/sw/soc
+	env -u LD_LIBRARY_PATH $(BIN) \
+		--load $(ROOT)/build/sw/cgracc_dot_bm.bin@0x80000000 \
+		--results 0x80010000 --nwords 8 \
+		--dump $(ROOT)/$(OBJ)/cgracc_dot_dump.txt \
+		--max-cycles 2000000
+	python3 $(ROOT)/tools/checks/check_cgracc_dot.py $(ROOT)/$(OBJ)/cgracc_dot_dump.txt
 
 # ---- G1/A4: 4-symbol SSB TX + hardware loopback (MIB 32/32) ----------------
 # One gate, two simulations: ssb_tx_bm produces the waveform on the CGRA,
