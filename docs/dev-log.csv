@@ -128,3 +128,4 @@ date,start,end,minutes,domain,kind,task,commit,confidence,evidence
 2026-11-17,,,120,synth,fix,ITER-7：宏化网表低频率定位与修复（观测计数器锥体 + 综合后扇出缓冲）,5d1e657,estimate,"344,477→236,845 um^2；4.63→1.965 ns @500 MHz；slack -0.002；1.276 W"
 2026-11-17,,,45,verif,infra,cgracc 硬件闭环注册进门禁：run-cgracc-dot + 生成物横幅 + 布局宏,fc26d9e,estimate,"GATES=run-cgracc-dot verify smart --force: 1 passed / 0 failed / 20 s；spad[0,1]=75；exit 0x600D"
 2026-11-17,,,60,verif,feature,cgracc 硬件闭环：cgracc_dot_bm + check_cgracc_dot + run-cgracc-dot,fbf7bb6,estimate,"8/8 [OK]；spad[bank0,word1]=75；exit 0x600D；1291 cycles"
+2026-11-17,,,90,sw,feature,FFT tile 流水：in/out DMA 与阵列双页重叠（ssb_fft.inc）,aaf049f,estimate,run-ifft 217098->110861（1.96x）; ssbfft 4.38M->3.13M; pdsch 2.344M->2.188M / U_time 17.8%; verify slow --force 86 passed
