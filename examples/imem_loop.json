@@ -1,0 +1,8 @@
+{
+  "name": "imem_loop",
+  "trip_count": 4,
+  "nodes": [
+    {"id": "mul", "op": "mul", "inputs": ["r0", "r1"], "dst": "r2"},
+    {"id": "mac", "op": "mac", "inputs": ["mul", "r3"]}
+  ]
+}

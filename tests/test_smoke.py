@@ -39,11 +39,11 @@ class TestSmoke(unittest.TestCase):
         self.assertGreaterEqual(sched.run_cycles, 3)   # mul -> add -> mul 链
 
     def test_emit(self):
-        dfg = load_dfg(ROOT / "examples" / "dot4.json")
+        dfg = load_dfg(ROOT / "examples" / "imem_dot.json")
         sched = ListScheduler().schedule(dfg, self.model)
         text = self.emitter.emit(sched, dfg, self.model)
-        self.assertIn("run_cycles", text)
-        self.assertIn("cyc", text)
+        self.assertIn("_PROG_CYCLES", text)
+        self.assertIn("_PROG_H", text)
 
     def test_bank_conflict_is_rejected(self):
         dfg = DFG("two_loads", (

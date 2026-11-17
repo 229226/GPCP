@@ -19,8 +19,10 @@ python3 -m cgracc schedule --arch gpcp_4x4 --dfg examples/dot4.json -o build/sch
 # 3) 合法性检查（空输出 = 通过）
 python3 -m cgracc check --arch gpcp_4x4 --dfg examples/dot4.json --schedule build/schedule.json
 
-# 4) 发射（参考发射器，输出人读的 listing，不是真微码）
-python3 -m cgracc emit --arch gpcp_4x4 --dfg examples/dot4.json --schedule build/schedule.json
+# 4) 发射：真实 IMEM 编码（GPCP 的 32-bit 指令字，输出 C 头文件）
+python3 -m cgracc schedule --arch gpcp_4x4 --dfg examples/imem_dot.json -o build/imem_dot.json
+python3 -m cgracc emit --arch gpcp_4x4 --dfg examples/imem_dot.json \
+    --schedule build/imem_dot.json -o build/imem_dot_prog.h
 
 # 5) 循环 kernel：modulo 调度（求启动间隔 II）
 python3 -m cgracc schedule --arch gpcp_4x4 --scheduler modulo \
@@ -56,11 +58,13 @@ cgracc/
     conformance.py      # 接入验收：6 正向 + 4 负向
     cli.py              # info / conformance / schedule / search / check / emit
   arch/
-    gpcp_4x4/           # 架构 0：GPCP 4x4（model.yaml + emitter.py）
+    gpcp_4x4/           # 架构 0：GPCP 4x4（model.yaml + 真实 IMEM 编码的 emitter）
     gpcp_8x8/           # 架构 1：只给 model.yaml（接口验证，无 RTL）
-  examples/dot4.json    # 最小 DFG
+  examples/dot4.json    # 最小 DFG（抽象操作数）
   examples/wide20.json  # 20 个独立算子：看阵列规模对调度的影响
   examples/loop_dot.json # 带自回边的循环（modulo 调度）
+  examples/imem_dot.json # 可编码成真实 IMEM 的 4 算子 DFG
+  examples/imem_loop.json # 可编码的循环（4 次迭代 → 展开 5 拍）
   docs/porting.md       # 接入新架构的 checklist
   tests/test_smoke.py   # 端到端 + 负例（必须被拒绝）
   tests/test_mutation.py # 检查器失效时，4 个负向用例必须全部失败
@@ -76,7 +80,7 @@ cgracc/
 
 - 代价模型只算周期（计算 + `run_overhead_cycles`），不含面积/能耗；
 - 搜索维度只有 list/modulo × 排序 × II，还没有 tile 划分与银行落点；
-- 真实 IMEM 编码（`emitter.py` 只是 listing）；
+- 发射器只覆盖 GPCP 4x4 的 ISA（8x8 仍回退到 listing）；
 - DMA / 描述符环参与调度（model 里有字段，检查器暂未用）；
 - 多页分离检查、旋转表约束（R9 已覆盖页冲突）；
 - conformance 目前是**结构级**（合法性 + 长度），数值级对拍要等 DFG 带算子语义并接黄金模型。
