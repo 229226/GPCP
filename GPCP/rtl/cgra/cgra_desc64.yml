@@ -1,0 +1,41 @@
+# 64 字节复合描述符（16 × 32-bit words）的字段契约 —— 单一事实来源。
+#
+# 由 tools/gen_cgra_desc.py 生成三份视图（**不要手改生成物**）：
+#   rtl/cgra/cgra_desc_pkg.sv   RTL 解析函数（按 64-bit AXI beat 取字段）
+#   sw/include/gpcp_desc64.h    C 构造 / 读取
+#   sim/cgra/desc64.py          台架构造 / 校验
+#
+# 每个字段必须落在单个 32-bit word 内：word + [hi:lo]（hi/lo 是 word 内的位号）。
+# 以前 RTL 写 desc_buf[1][47:32]、C 写 d[3] = WORDS | (ZC << 16)，同一字段
+# 在两边各算一遍；现在两边都只调用生成出来的取值/置值函数。
+#
+# 用法：python3 tools/gen_cgra_desc.py [--check]
+fields:
+  src:       {word: 0,  hi: 31, lo: 0}     # RAM 源地址（搬入）/ 目标地址（搬出）
+  spad:      {word: 1,  hi: 15, lo: 0}     # spad 起始索引（bank*32 + word）
+  page:      {word: 1,  hi: 16, lo: 16}    # spad page（0/1）
+  dir:       {word: 1,  hi: 17, lo: 17}    # 1 = spad→RAM（搬出）
+  irq:       {word: 1,  hi: 18, lo: 18}    # 完成时是否拉中断
+  tgt_rot:   {word: 1,  hi: 19, lo: 19}    # 1 = 目标是每 bank 旋转表
+  in_len:    {word: 2,  hi: 15, lo: 0}     # 搬入字数（<= 1024）
+  stride:    {word: 3,  hi: 15, lo: 0}     # 2D 走位：spad 行间步进
+  row:       {word: 3,  hi: 31, lo: 16}    # 每行字数（0 = 线性）
+  cycles:    {word: 6,  hi: 15, lo: 0}     # 阵列拍数
+  arr_page:  {word: 6,  hi: 16, lo: 16}    # 阵列读哪个 spad page
+  arr_imem:  {word: 6,  hi: 17, lo: 17}    # 阵列从哪个 IMEM bank 取指（0/1）
+  arr_en:    {word: 6,  hi: 31, lo: 31}    # 搬入后是否跑一次阵列
+  out_len:   {word: 8,  hi: 15, lo: 0}     # 搬出字数
+  out_spad:  {word: 8,  hi: 31, lo: 16}    # 搬出起点（spad 索引）
+  out_en:    {word: 9,  hi: 0,  lo: 0}     # 是否搬出
+  out_dst:   {word: 10, hi: 31, lo: 0}     # 搬出目标（RAM）
+  rep:       {word: 12, hi: 15, lo: 0}     # 重复次数（1 = 不重复）
+  in_step:   {word: 12, hi: 31, lo: 16}    # 每轮搬入源地址步进（字节）
+  out_step:  {word: 13, hi: 15, lo: 0}     # 每轮搬出目标步进（字节）
+  pf_src:    {word: 14, hi: 31, lo: 0}     # 预取源地址（RAM）
+  pf_len:    {word: 15, hi: 15, lo: 0}     # 预取字数
+  pf_spad:   {word: 15, hi: 31, lo: 16}    # 预取 spad 起始索引
+  pf_page:   {word: 7,  hi: 0,  lo: 0}     # 预取目标 spad page
+  pf_stride: {word: 7,  hi: 31, lo: 16}    # 预取 2D 走位：行间步进
+  pf_row:    {word: 11, hi: 15, lo: 0}     # 预取 2D 走位：每行字数（0 = 线性）
+  pf_in:     {word: 11, hi: 30, lo: 30}    # 本条描述符的搬入已由上一条预取完成，跳过
+  pf_en:     {word: 11, hi: 31, lo: 31}    # 阵列运行时预取下一块

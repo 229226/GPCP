@@ -1,0 +1,27 @@
+name: bpsk_corr
+kind: dfg
+desc: "BPSK/SSS 相关部分和：每实例 8 tap，rx 窗口与 ref 广播按 IN / REF 命名区域装载；只算实部（BPSK ref 为实数）"
+leaves:
+  xr0..xr7: {at: {region: "IN", slot: "2*k", pe_per_bank: 2}}
+  xi0..xi7: {at: {region: "IN", slot: "1 + 2*k", pe_per_bank: 2}}
+  r0..r7: {at: {region: "REF", slot: "k", pe_per_bank: 4}}
+ops:
+  - {name: pr0, op: mul, a: xr0, b: r0}
+  - {name: accr0, op: mov, a: pr0}
+  - {name: pr1, op: mul, a: xr1, b: r1}
+  - {name: accr1, op: add, a: accr0, b: pr1}
+  - {name: pr2, op: mul, a: xr2, b: r2}
+  - {name: accr2, op: add, a: accr1, b: pr2}
+  - {name: pr3, op: mul, a: xr3, b: r3}
+  - {name: accr3, op: add, a: accr2, b: pr3}
+  - {name: pr4, op: mul, a: xr4, b: r4}
+  - {name: accr4, op: add, a: accr3, b: pr4}
+  - {name: pr5, op: mul, a: xr5, b: r5}
+  - {name: accr5, op: add, a: accr4, b: pr5}
+  - {name: pr6, op: mul, a: xr6, b: r6}
+  - {name: accr6, op: add, a: accr5, b: pr6}
+  - {name: pr7, op: mul, a: xr7, b: r7}
+  - {name: part_r, op: add, a: accr6, b: pr7}
+sinks:
+  part_r: {at: {region: "OUT", slot: 0, pe_per_bank: 16}}
+parallelism: full

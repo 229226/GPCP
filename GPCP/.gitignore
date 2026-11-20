@@ -1,0 +1,30 @@
+# build products
+build/
+sim/*/build/
+*.o
+*.a
+*.vcd
+*.fst
+*.wlf
+
+# python
+__pycache__/
+*.pyc
+
+# third-party checkouts are not vendored
+third_party/*
+!third_party/.gitkeep
+
+# CVA6 instruction tracer output
+trace_hart_*.dasm
+trace_hart_*.log
+
+# iEDA runtime log (written to the cwd by syn/sta.tcl runs)
+glog_dump.log
+
+# generated performance report (tools/perf_report.py)
+perf-report.html
+perf-summary.csv
+
+# IDE share-package temp exports
+.trae-html-share-packages/

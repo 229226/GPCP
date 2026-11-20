@@ -1,0 +1,93 @@
+# GPCP kernel: QAM 比特 -> 星座电平映射（docs/21 A5 / docs/22 待补项）
+#
+# 16 个 PE 各映射一个符号，输出 I / Q 定标电平。三个变体共用同一份
+# 布局契约；一个符号的 Gray 位与幅度常数都由 C 侧按 IN 区的逻辑槽位
+# 写入（每 PE 一份），符号位 -> ±1、Gray 幅度解码、尺度相乘都在阵列上。
+# 常数不使用广播槽位，避免与 IN 区逐 PE 布局落在同一个 spad 字。
+#
+# 与 tools/nr_qam.py 的一致性由 tools/check_new_kernels.py 独立对账。
+name: qam_map
+kind: dfg
+desc: "QAM 比特到星座电平映射：每 PE 一个符号，输出 I/Q 定标电平；变体覆盖 QPSK/16QAM/64QAM"
+variants:
+  - name: qam_qpsk
+    desc: "QPSK：I=(1-2b0)*A，Q=(1-2q0)*A，A 由 IN 区的幅度槽位提供"
+    leaves:
+      b0: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+      q0: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+      one: {at: {region: "IN", slot: 6, pe_per_bank: 1}}
+      amp: {at: {region: "IN", slot: 8, pe_per_bank: 1}}
+    ops:
+      - {name: b0x2, op: shl, a: b0, imm: 1}
+      - {name: si, op: sub, a: one, b: b0x2}
+      - {name: q0x2, op: shl, a: q0, imm: 1}
+      - {name: sq, op: sub, a: one, b: q0x2}
+      - {name: ilev, op: mul, a: si, b: amp}
+      - {name: qlev, op: mul, a: sq, b: amp}
+    sinks:
+      ilev: {at: {region: "OUT", slot: 0, pe_per_bank: 1}}
+      qlev: {at: {region: "OUT", slot: 1, pe_per_bank: 1}}
+    parallelism: full
+
+  - name: qam_16qam
+    desc: "16QAM：mag=3-2b1，I=(1-2b0)*mag*A；A 由 IN 区的幅度槽位提供"
+    leaves:
+      b0: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+      b1: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+      q0: {at: {region: "IN", slot: 2, pe_per_bank: 1}}
+      q1: {at: {region: "IN", slot: 3, pe_per_bank: 1}}
+      one: {at: {region: "IN", slot: 6, pe_per_bank: 1}}
+      three: {at: {region: "IN", slot: 7, pe_per_bank: 1}}
+      amp: {at: {region: "IN", slot: 8, pe_per_bank: 1}}
+    ops:
+      - {name: b0x2, op: shl, a: b0, imm: 1}
+      - {name: si, op: sub, a: one, b: b0x2}
+      - {name: b1x2, op: shl, a: b1, imm: 1}
+      - {name: mi, op: sub, a: three, b: b1x2}
+      - {name: pi, op: mul, a: si, b: mi}
+      - {name: ilev, op: mul, a: pi, b: amp}
+      - {name: q0x2, op: shl, a: q0, imm: 1}
+      - {name: sq, op: sub, a: one, b: q0x2}
+      - {name: q1x2, op: shl, a: q1, imm: 1}
+      - {name: mq, op: sub, a: three, b: q1x2}
+      - {name: pq, op: mul, a: sq, b: mq}
+      - {name: qlev, op: mul, a: pq, b: amp}
+    sinks:
+      ilev: {at: {region: "OUT", slot: 0, pe_per_bank: 1}}
+      qlev: {at: {region: "OUT", slot: 1, pe_per_bank: 1}}
+    parallelism: full
+
+  - name: qam_64qam
+    desc: "64QAM：Gray 幅度解码 val=2b1+(b1 xor b2)，mag=1+2val，I=(1-2b0)*mag*A"
+    leaves:
+      b0: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+      b1: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+      b2: {at: {region: "IN", slot: 2, pe_per_bank: 1}}
+      q0: {at: {region: "IN", slot: 3, pe_per_bank: 1}}
+      q1: {at: {region: "IN", slot: 4, pe_per_bank: 1}}
+      q2: {at: {region: "IN", slot: 5, pe_per_bank: 1}}
+      one: {at: {region: "IN", slot: 6, pe_per_bank: 1}}
+      amp: {at: {region: "IN", slot: 8, pe_per_bank: 1}}
+    ops:
+      - {name: b0x2, op: shl, a: b0, imm: 1}
+      - {name: si, op: sub, a: one, b: b0x2}
+      - {name: b1x2, op: shl, a: b1, imm: 1}
+      - {name: gxi, op: xor, a: b1, b: b2}
+      - {name: vali, op: add, a: b1x2, b: gxi}
+      - {name: vali2, op: shl, a: vali, imm: 1}
+      - {name: mi, op: add, a: one, b: vali2}
+      - {name: pi, op: mul, a: si, b: mi}
+      - {name: ilev, op: mul, a: pi, b: amp}
+      - {name: q0x2, op: shl, a: q0, imm: 1}
+      - {name: sq, op: sub, a: one, b: q0x2}
+      - {name: q1x2, op: shl, a: q1, imm: 1}
+      - {name: gxq, op: xor, a: q1, b: q2}
+      - {name: valq, op: add, a: q1x2, b: gxq}
+      - {name: valq2, op: shl, a: valq, imm: 1}
+      - {name: mq, op: add, a: one, b: valq2}
+      - {name: pq, op: mul, a: sq, b: mq}
+      - {name: qlev, op: mul, a: pq, b: amp}
+    sinks:
+      ilev: {at: {region: "OUT", slot: 0, pe_per_bank: 1}}
+      qlev: {at: {region: "OUT", slot: 1, pe_per_bank: 1}}
+    parallelism: full

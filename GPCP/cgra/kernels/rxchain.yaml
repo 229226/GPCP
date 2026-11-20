@@ -1,0 +1,142 @@
+name: rxchain
+kind: image
+desc: "LS -> MMSE -> 16QAM(I/Q) -> LDPC CN(abs/sign) -> min-sum；段间靠 spad word 传值"
+parallelism: full
+parts:
+  - name: ls
+    leaves:
+      yr: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+      yi: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+      xr: {at: {region: "IN", slot: 2, pe_per_bank: 1}}
+      xi: {at: {region: "IN", slot: 3, pe_per_bank: 1}}
+    ops:
+      - {name: pr, op: mul, a: yr, b: xr}
+      - {name: pi, op: mul, a: yi, b: xi}
+      - {name: hr0, op: add, a: pr, b: pi}
+      - {name: hr, op: shr, a: hr0, imm: 15}
+      - {name: qr, op: mul, a: yi, b: xr}
+      - {name: qi, op: mul, a: yr, b: xi}
+      - {name: hi0, op: sub, a: qr, b: qi}
+      - {name: hi, op: shr, a: hi0, imm: 15}
+    sinks:
+      hr: {at: {region: "IN", slot: 4, pe_per_bank: 1}}
+      hi: {at: {region: "IN", slot: 5, pe_per_bank: 1}}
+  - name: mmse
+    leaves:
+      hr: {at: {region: "IN", slot: 4, pe_per_bank: 1}}
+      hi: {at: {region: "IN", slot: 5, pe_per_bank: 1}}
+      yr: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+      yi: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+    ops:
+      - {name: npr, op: mul, a: hr, b: yr}
+      - {name: npi, op: mul, a: hi, b: yi}
+      - {name: nr0, op: add, a: npr, b: npi}
+      - {name: nr, op: shr, a: nr0, imm: 15}
+      - {name: nqr, op: mul, a: hi, b: yr}
+      - {name: nqi, op: mul, a: hr, b: yi}
+      - {name: ni0, op: sub, a: nqr, b: nqi}
+      - {name: ni, op: shr, a: ni0, imm: 15}
+      - {name: m2r, op: mul, a: hr, b: hr}
+      - {name: m2i, op: mul, a: hi, b: hi}
+      - {name: mag0, op: add, a: m2r, b: m2i}
+      - {name: mag, op: shr, a: mag0, imm: 15}
+    sinks:
+      nr: {at: {region: "IN", slot: 20, pe_per_bank: 1}}
+      ni: {at: {region: "IN", slot: 21, pe_per_bank: 1}}
+      mag: {at: {region: "IN", slot: 22, pe_per_bank: 1}}
+  - name: llr_i
+    leaves:
+      r: {at: {region: "IN", slot: 20, pe_per_bank: 1}}
+      m: {at: {region: "IN", slot: 22, pe_per_bank: 1}}
+      three: {at: {region: "IN", slot: 28, broadcast: True}}
+    ops:
+      - {name: two, op: shl, a: r, imm: 1}
+      - {name: six, op: mul, a: two, b: three}
+      - {name: m8, op: shl, a: m, imm: 3}
+      - {name: m9, op: add, a: m8, b: m}
+      - {name: mp1, op: sub, a: m, b: two}
+      - {name: mm1, op: add, a: m, b: two}
+      - {name: mp3, op: sub, a: m9, b: six}
+      - {name: mm3, op: add, a: m9, b: six}
+      - {name: npos, op: min, a: mp1, b: mp3}
+      - {name: nneg, op: min, a: mm1, b: mm3}
+      - {name: dmsb, op: sub, a: nneg, b: npos}
+      - {name: msb, op: shr, a: dmsb, imm: 10}
+      - {name: lsb1, op: min, a: mm3, b: mp1}
+      - {name: lsb0, op: min, a: mm1, b: mp3}
+      - {name: dlsb, op: sub, a: lsb1, b: lsb0}
+      - {name: lsb, op: shr, a: dlsb, imm: 10}
+    sinks:
+      msb: {at: {region: "IN", slot: 24, pe_per_bank: 1}}
+      lsb: {at: {region: "IN", slot: 25, pe_per_bank: 1}}
+  - name: llr_q
+    leaves:
+      r: {at: {region: "IN", slot: 21, pe_per_bank: 1}}
+      m: {at: {region: "IN", slot: 22, pe_per_bank: 1}}
+      three: {at: {region: "IN", slot: 28, broadcast: True}}
+    ops:
+      - {name: two, op: shl, a: r, imm: 1}
+      - {name: six, op: mul, a: two, b: three}
+      - {name: m8, op: shl, a: m, imm: 3}
+      - {name: m9, op: add, a: m8, b: m}
+      - {name: mp1, op: sub, a: m, b: two}
+      - {name: mm1, op: add, a: m, b: two}
+      - {name: mp3, op: sub, a: m9, b: six}
+      - {name: mm3, op: add, a: m9, b: six}
+      - {name: npos, op: min, a: mp1, b: mp3}
+      - {name: nneg, op: min, a: mm1, b: mm3}
+      - {name: dmsb, op: sub, a: nneg, b: npos}
+      - {name: msb, op: shr, a: dmsb, imm: 10}
+      - {name: lsb1, op: min, a: mm3, b: mp1}
+      - {name: lsb0, op: min, a: mm1, b: mp3}
+      - {name: dlsb, op: sub, a: lsb1, b: lsb0}
+      - {name: lsb, op: shr, a: dlsb, imm: 10}
+    sinks:
+      msb: {at: {region: "IN", slot: 26, pe_per_bank: 1}}
+      lsb: {at: {region: "IN", slot: 27, pe_per_bank: 1}}
+  - name: cn_abs
+    leaves:
+      i1: {at: {region: "IN", slot: 24, pe_per_bank: 1}}
+      i0: {at: {region: "IN", slot: 25, pe_per_bank: 1}}
+      q1: {at: {region: "IN", slot: 26, pe_per_bank: 1}}
+      q0: {at: {region: "IN", slot: 27, pe_per_bank: 1}}
+    ops:
+      - {name: s0, op: shr, a: i1, imm: 31}
+      - {name: x0, op: xor, a: i1, b: s0}
+      - {name: a0, op: sub, a: x0, b: s0}
+      - {name: s1, op: shr, a: i0, imm: 31}
+      - {name: x1, op: xor, a: i0, b: s1}
+      - {name: a1, op: sub, a: x1, b: s1}
+      - {name: s2, op: shr, a: q1, imm: 31}
+      - {name: x2, op: xor, a: q1, b: s2}
+      - {name: a2, op: sub, a: x2, b: s2}
+      - {name: s3, op: shr, a: q0, imm: 31}
+      - {name: x3, op: xor, a: q0, b: s3}
+      - {name: a3, op: sub, a: x3, b: s3}
+      - {name: sg01, op: xor, a: s0, b: s1}
+      - {name: sg012, op: xor, a: sg01, b: s2}
+      - {name: sg, op: xor, a: sg012, b: s3}
+    sinks:
+      a0: {at: {region: "IN", slot: 8, pe_per_bank: 1}}
+      a1: {at: {region: "IN", slot: 9, pe_per_bank: 1}}
+      a2: {at: {region: "IN", slot: 10, pe_per_bank: 1}}
+      a3: {at: {region: "IN", slot: 11, pe_per_bank: 1}}
+      sg: {at: {region: "IN", slot: 6, pe_per_bank: 1}}
+  - name: cn_min
+    leaves:
+      a0: {at: {region: "IN", slot: 8, pe_per_bank: 1}}
+      a1: {at: {region: "IN", slot: 9, pe_per_bank: 1}}
+      a2: {at: {region: "IN", slot: 10, pe_per_bank: 1}}
+      a3: {at: {region: "IN", slot: 11, pe_per_bank: 1}}
+    ops:
+      - {name: s1, op: min, a: a0, b: a1}
+      - {name: h1, op: max, a: a0, b: a1}
+      - {name: s2, op: min, a: a2, b: a3}
+      - {name: h2, op: max, a: a2, b: a3}
+      - {name: min1, op: min, a: s1, b: s2}
+      - {name: lo, op: max, a: s1, b: s2}
+      - {name: hi2, op: min, a: h1, b: h2}
+      - {name: min2, op: min, a: lo, b: hi2}
+    sinks:
+      min1: {at: {region: "IN", slot: 4, pe_per_bank: 1}}
+      min2: {at: {region: "IN", slot: 5, pe_per_bank: 1}}

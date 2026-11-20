@@ -1,0 +1,87 @@
+name: cn10
+kind: dfg
+desc: "10 输入 sentinel min-sum 校验节点：min1/min2/sign；消息在 IN 区按 k 展开，结果写 MIN1/MIN2/SIGN 区"
+leaves:
+  m0..m9: {at: {region: "IN + k", slot: "SHIFT", pe_per_bank: 32}}
+  inf: {at: {region: "SENTINEL", slot: "SHIFT", pe_per_bank: 32}}
+ops:
+  - {name: s0, op: shr, a: m0, imm: 31}
+  - {name: x0, op: xor, a: m0, b: s0}
+  - {name: a0, op: sub, a: x0, b: s0}
+  - {name: mn1_0, op: mov, a: a0}
+  - {name: mn2_0, op: mov, a: inf}
+  - {name: sg_0,  op: mov, a: s0}
+  - {name: s1, op: shr, a: m1, imm: 31}
+  - {name: x1, op: xor, a: m1, b: s1}
+  - {name: a1, op: sub, a: x1, b: s1}
+  - {name: sg_1, op: xor, a: sg_0, b: s1}
+  - {name: t1, op: min, a: mn2_0, b: a1}
+  - {name: mn2_1, op: max, a: mn1_0, b: t1}
+  - {name: mn1_1, op: min, a: mn1_0, b: a1}
+  - {name: s2, op: shr, a: m2, imm: 31}
+  - {name: x2, op: xor, a: m2, b: s2}
+  - {name: a2, op: sub, a: x2, b: s2}
+  - {name: sg_2, op: xor, a: sg_1, b: s2}
+  - {name: t2, op: min, a: mn2_1, b: a2}
+  - {name: mn2_2, op: max, a: mn1_1, b: t2}
+  - {name: mn1_2, op: min, a: mn1_1, b: a2}
+  - {name: s3, op: shr, a: m3, imm: 31}
+  - {name: x3, op: xor, a: m3, b: s3}
+  - {name: a3, op: sub, a: x3, b: s3}
+  - {name: sg_3, op: xor, a: sg_2, b: s3}
+  - {name: t3, op: min, a: mn2_2, b: a3}
+  - {name: mn2_3, op: max, a: mn1_2, b: t3}
+  - {name: mn1_3, op: min, a: mn1_2, b: a3}
+  - {name: s4, op: shr, a: m4, imm: 31}
+  - {name: x4, op: xor, a: m4, b: s4}
+  - {name: a4, op: sub, a: x4, b: s4}
+  - {name: sg_4, op: xor, a: sg_3, b: s4}
+  - {name: t4, op: min, a: mn2_3, b: a4}
+  - {name: mn2_4, op: max, a: mn1_3, b: t4}
+  - {name: mn1_4, op: min, a: mn1_3, b: a4}
+  - {name: s5, op: shr, a: m5, imm: 31}
+  - {name: x5, op: xor, a: m5, b: s5}
+  - {name: a5, op: sub, a: x5, b: s5}
+  - {name: sg_5, op: xor, a: sg_4, b: s5}
+  - {name: t5, op: min, a: mn2_4, b: a5}
+  - {name: mn2_5, op: max, a: mn1_4, b: t5}
+  - {name: mn1_5, op: min, a: mn1_4, b: a5}
+  - {name: s6, op: shr, a: m6, imm: 31}
+  - {name: x6, op: xor, a: m6, b: s6}
+  - {name: a6, op: sub, a: x6, b: s6}
+  - {name: sg_6, op: xor, a: sg_5, b: s6}
+  - {name: t6, op: min, a: mn2_5, b: a6}
+  - {name: mn2_6, op: max, a: mn1_5, b: t6}
+  - {name: mn1_6, op: min, a: mn1_5, b: a6}
+  - {name: s7, op: shr, a: m7, imm: 31}
+  - {name: x7, op: xor, a: m7, b: s7}
+  - {name: a7, op: sub, a: x7, b: s7}
+  - {name: sg_7, op: xor, a: sg_6, b: s7}
+  - {name: t7, op: min, a: mn2_6, b: a7}
+  - {name: mn2_7, op: max, a: mn1_6, b: t7}
+  - {name: mn1_7, op: min, a: mn1_6, b: a7}
+  - {name: s8, op: shr, a: m8, imm: 31}
+  - {name: x8, op: xor, a: m8, b: s8}
+  - {name: a8, op: sub, a: x8, b: s8}
+  - {name: sg_8, op: xor, a: sg_7, b: s8}
+  - {name: t8, op: min, a: mn2_7, b: a8}
+  - {name: mn2_8, op: max, a: mn1_7, b: t8}
+  - {name: mn1_8, op: min, a: mn1_7, b: a8}
+  - {name: s9, op: shr, a: m9, imm: 31}
+  - {name: x9, op: xor, a: m9, b: s9}
+  - {name: a9, op: sub, a: x9, b: s9}
+  - {name: sg_9, op: xor, a: sg_8, b: s9}
+  - {name: t9, op: min, a: mn2_8, b: a9}
+  - {name: mn2_9, op: max, a: mn1_8, b: t9}
+  - {name: mn1_9, op: min, a: mn1_8, b: a9}
+  - {name: mn1, op: mov, a: mn1_9}
+  - {name: mn2, op: mov, a: mn2_9}
+  - {name: sg,  op: mov, a: sg_9}
+sinks:
+  mn1: {at: {region: "MIN1", slot: "SHIFT", pe_per_bank: 32}}
+  mn2: {at: {region: "MIN2", slot: "SHIFT", pe_per_bank: 32}}
+  sg: {at: {region: "SIGN", slot: "SHIFT", pe_per_bank: 32}}
+parallelism: full
+variants:
+  - {name: cn10_w0,  shift: 0}
+  - {name: cn10_w16, shift: 16}

@@ -1,0 +1,21 @@
+name: chnest16
+kind: dfg
+desc: "16 子载波 LS 信道估计：H = Y * conj(X) >> 15，一个 PE 一个子载波"
+leaves:
+  Yr: {bank: "IN"}
+  Yi: {bank: "IN + 1"}
+  Xr: {bank: "IN + 2"}
+  Xi: {bank: "IN + 3"}
+ops:
+  - {name: p1, op: mul, a: Yr, b: Xr}
+  - {name: p2, op: mul, a: Yi, b: Xi}
+  - {name: sr, op: add, a: p1, b: p2}
+  - {name: Hr, op: shr, a: sr, imm: 15}
+  - {name: p3, op: mul, a: Yi, b: Xr}
+  - {name: p4, op: mul, a: Yr, b: Xi}
+  - {name: si, op: sub, a: p3, b: p4}
+  - {name: Hi, op: shr, a: si, imm: 15}
+sinks:
+  Hr: {bank: "IN + 4"}
+  Hi: {bank: "IN + 5"}
+parallelism: full

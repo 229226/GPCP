@@ -1,0 +1,13 @@
+name: polar_word_d1
+kind: dfg
+desc: "Polar 编码字间级 d=1：w[i] ^= w[i+1] & m[i]（m 逐实例预装到输入区）"
+leaves:
+  wa: {at: {region: "IN", slot: 0, pe_per_bank: 32}}
+  wb: {at: {region: "IN", slot: 1, pe_per_bank: 32}}
+  m: {at: {region: "IN + 2", slot: 0, pe_per_bank: 32}}
+ops:
+  - {name: t, op: and, a: wb, b: m}
+  - {name: x, op: xor, a: wa, b: t}
+sinks:
+  x: {at: {region: "IN", slot: 0, pe_per_bank: 32}}
+parallelism: full

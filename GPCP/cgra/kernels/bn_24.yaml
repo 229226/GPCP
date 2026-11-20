@@ -1,0 +1,63 @@
+name: bn_24
+kind: bn
+desc: "LDPC 归一化最小和解码：24 槽 BN（直连 rule_map.schedule_bn_split）"
+rows: 20
+out: sw/soc/gen/pdsch_bn_prog.h
+# 以下为声明性描述（供人类阅读 + validate 引用完整性）；
+# 实际微码由 schedule_bn_split 生成，保证与仓库产物逐字节一致。
+leaves:
+  m0..m23: {bank: "IN + k"}
+  llr: {bank: "LLR"}
+ops:
+  - { name: A1,  op: add, a: m0,  b: m1 }
+  - { name: A2,  op: add, a: A1,  b: m2 }
+  - { name: A3,  op: add, a: A2,  b: m3 }
+  - { name: A4,  op: add, a: A3,  b: m4 }
+  - { name: A5,  op: add, a: A4,  b: m5 }
+  - { name: A6,  op: add, a: A5,  b: m6 }
+  - { name: A7,  op: add, a: A6,  b: m7 }
+  - { name: A8,  op: add, a: A7,  b: m8 }
+  - { name: A9,  op: add, a: A8,  b: m9 }
+  - { name: A10,  op: add, a: A9,  b: m10 }
+  - { name: A11,  op: add, a: A10,  b: m11 }
+  - { name: A12,  op: add, a: A11,  b: m12 }
+  - { name: A13,  op: add, a: A12,  b: m13 }
+  - { name: A14,  op: add, a: A13,  b: m14 }
+  - { name: A15,  op: add, a: A14,  b: m15 }
+  - { name: A16,  op: add, a: A15,  b: m16 }
+  - { name: A17,  op: add, a: A16,  b: m17 }
+  - { name: A18,  op: add, a: A17,  b: m18 }
+  - { name: A19,  op: add, a: A18,  b: m19 }
+  - { name: A20,  op: add, a: A19,  b: m20 }
+  - { name: A21,  op: add, a: A20,  b: m21 }
+  - { name: A22,  op: add, a: A21,  b: m22 }
+  - { name: A23,  op: add, a: A22,  b: m23 }
+  - { name: ALL, op: add, a: A23, b: llr }
+  - { name: S0,  op: sub, a: ALL, b: m0 }
+  - { name: S1,  op: sub, a: ALL, b: m1 }
+  - { name: S2,  op: sub, a: ALL, b: m2 }
+  - { name: S3,  op: sub, a: ALL, b: m3 }
+  - { name: S4,  op: sub, a: ALL, b: m4 }
+  - { name: S5,  op: sub, a: ALL, b: m5 }
+  - { name: S6,  op: sub, a: ALL, b: m6 }
+  - { name: S7,  op: sub, a: ALL, b: m7 }
+  - { name: S8,  op: sub, a: ALL, b: m8 }
+  - { name: S9,  op: sub, a: ALL, b: m9 }
+  - { name: S10,  op: sub, a: ALL, b: m10 }
+  - { name: S11,  op: sub, a: ALL, b: m11 }
+  - { name: S12,  op: sub, a: ALL, b: m12 }
+  - { name: S13,  op: sub, a: ALL, b: m13 }
+  - { name: S14,  op: sub, a: ALL, b: m14 }
+  - { name: S15,  op: sub, a: ALL, b: m15 }
+  - { name: S16,  op: sub, a: ALL, b: m16 }
+  - { name: S17,  op: sub, a: ALL, b: m17 }
+  - { name: S18,  op: sub, a: ALL, b: m18 }
+  - { name: S19,  op: sub, a: ALL, b: m19 }
+  - { name: S20,  op: sub, a: ALL, b: m20 }
+  - { name: S21,  op: sub, a: ALL, b: m21 }
+  - { name: S22,  op: sub, a: ALL, b: m22 }
+  - { name: S23,  op: sub, a: ALL, b: m23 }
+  - { name: H0,  op: shr, a: ALL, imm: 31 }
+sinks:
+  S0..S23: {bank: "IN + k"}
+  H0: {bank: "HARD"}

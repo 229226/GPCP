@@ -1,0 +1,15 @@
+digraph {
+  mul0 [opcode=mul];
+  mul1 [opcode=mul];
+  mul2 [opcode=mul];
+  mul3 [opcode=mul];
+  add0 [opcode=add];
+  mul0 -> add0 [operand=0];
+  mul1 -> add0 [operand=1];
+  add1 [opcode=add];
+  mul2 -> add1 [operand=0];
+  mul3 -> add1 [operand=1];
+  add2 [opcode=add];
+  add0 -> add2 [operand=0];
+  add1 -> add2 [operand=1];
+}

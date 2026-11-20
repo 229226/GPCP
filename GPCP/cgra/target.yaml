@@ -1,0 +1,60 @@
+# GPCP CGRA 硬件目标描述（AGENTS.md 4.19）
+#
+# 这是「硬件长什么样」的唯一真相。cgra/kernels/*.yaml 只允许引用这里的
+# 符号常量与命名区域（IN / REF / OUT / W / NPES / pe_per_bank ...），
+# 不允许再写 spad 平坦坐标、bank 号、PE 数或寄存器数。
+# 换阵列规模或存储几何时只改本文件，编译器重新 lower 全部 kernel。
+
+name: gpcp-cgra-4x4-v1
+
+# SoC 时钟：周期 <-> 毫秒换算的唯一依据（docs/20 的"按时率"判据用它，
+# proto/emit.py 只从 plan 的 target 字段读，不自己写死）。
+clock_hz: 100000000
+
+array:
+  rows: 4
+  cols: 4                        # npes = rows * cols
+
+pe:
+  regs: 8                        # r0..r7，活跃值超过就报「寄存器不够」
+
+spad:
+  banks: 32
+  words_per_bank: 32             # W：flat = bank * W + word
+  bank_bits: 5
+  word_bits: 5
+  flat_max: 1023                 # imm[9:0] 能寻址的最大 flat 下标
+  host_window: 0xA000            # AXI4-Lite 主机窗口基址
+
+isa:
+  op_bits: 5                     # OPS[op] << 27
+  imm_bits: 16
+  ops: {nop: 0, mov: 1, add: 2, sub: 3, mul: 4, mac: 5, lacc: 6,
+        shr: 7, shl: 8, and: 9, xor: 10, max: 11, min: 12, macl: 13,
+        ld: 14, st: 15}
+  src: {r0: 0, r1: 1, r2: 2, r3: 3, r4: 4, r5: 5, r6: 6, r7: 7,
+        n: 8, e: 9, s: 10, w: 11, zero: 12, imm: 13, acc: 14, link: 15}
+
+imem:
+  max_cycles: 512
+
+timing:
+  load: combinational
+  store: synchronous             # 同拍 LD/ST 命中同地址时不可重排，FFT 专用调度器的原因
+  default_src: zero
+
+# 命名区域：kernel 的 at.region / bank 只写这里的名字（或「名字 + k」表达式）。
+# 坐标在这里集中定义，YAML 侧看不到任何物理数字。
+regions:
+  IN: 0
+  CONST: 1
+  DATA: 2
+  REF: 8
+  MIN1: 10
+  MIN2: 11
+  SIGN: 12
+  OUT: 16
+  LLR: 24
+  SCRATCH: 24
+  HARD: 25
+  SENTINEL: 30

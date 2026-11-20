@@ -1,0 +1,28 @@
+# GPCP kernel: LTE Turbo 单步 ACS（docs/21 A4 / docs/22 待补项）
+#
+# Max-Log-MAP 的前向递推 alpha[k+1][ns] = max over (s,u)->ns (alpha[k][s] + gamma)，
+# 8 个状态里每个 ns 恰好有 2 个前驱分支，因此「一个 PE 算一个 ns 的两路候选再取 max」
+# 就能在**一次阵列运行内**完成完整的一步递推，不需要跨 PE 归约、也不需要循环式微码。
+# 16 个 PE = 8 状态 × 2 个半窗（docs/21 A4 的滑窗划分）；K=104 个 trellis 步与
+# 8 次迭代由 C 侧循环驱动 —— 与已有 Polar SC 树「C 侧遍历 + 阵列 node_run」同一范式。
+#
+# 反向 beta 递推形式相同（beta[k][s] = max over u (beta[k+1][ns] + gamma)），
+# 因此同一个镜像换输入即可复用。TURBO_NEG 初值由 C 侧喂入，微码里的
+# max(add(NEG, gamma), add(NEG, gamma)) 自然保持 -inf 语义，无需分支。
+#
+# 与 sw/soc/lte_stages.inc::siso 的逐值对账由 tools/check_new_kernels.py 完成。
+name: turbo_acs
+kind: dfg
+desc: "LTE Turbo 单步 ACS：每 PE 一个状态，两路前驱分支度量相加后取 max；前向/反向递推共用"
+leaves:
+  a0: {at: {region: "IN", slot: 0, pe_per_bank: 1}}
+  g0: {at: {region: "IN", slot: 1, pe_per_bank: 1}}
+  a1: {at: {region: "IN", slot: 2, pe_per_bank: 1}}
+  g1: {at: {region: "IN", slot: 3, pe_per_bank: 1}}
+ops:
+  - {name: v0, op: add, a: a0, b: g0}
+  - {name: v1, op: add, a: a1, b: g1}
+  - {name: m, op: max, a: v0, b: v1}
+sinks:
+  m: {at: {region: "OUT", slot: 0, pe_per_bank: 1}}
+parallelism: full
