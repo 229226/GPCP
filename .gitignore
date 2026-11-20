@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Build and distribution
+build/
+dist/
+out/
+obj/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Simulation and EDA artifacts
+*.vcd
+*.fst
+*.vpd
+*.wlf
+obj_dir/
+sim/*/build/
+trace_hart_*.dasm
+trace_hart_*.log
+glog_dump.log
+perf-report.html
+perf-summary.csv
+.trae-html-share-packages/
+
+# Benchmark artifacts
+wlbench/build/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*~
+.cache/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local screenshots
+.screenshots/
+
+# Accidental shell redirection files
+1.965
+236,845
