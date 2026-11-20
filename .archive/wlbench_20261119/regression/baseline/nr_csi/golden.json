@@ -1,0 +1,30 @@
+{
+ "scenario": "nr_csi",
+ "anchors": {
+  "cqi": 14,
+  "ncsi": 80,
+  "c_init": 3073,
+  "ps40": 1,
+  "pn10": 1,
+  "a0r": 1,
+  "a0i": 1,
+  "a1r": 1,
+  "a1i": 1,
+  "a2r": 1,
+  "a2i": 1,
+  "a3r": 1,
+  "a3i": 1
+ },
+ "tol": {
+  "cqi": 1
+ },
+ "windows": {
+  "snr_q8": [
+   18378,
+   46165
+  ]
+ },
+ "bits": {},
+ "params_hash": "0x3696874b",
+ "stimulus_words": 8768
+}
