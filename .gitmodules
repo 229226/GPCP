@@ -1,0 +1,9 @@
+[submodule "cgracc"]
+	path = cgracc
+	url = git@github.com:229226/GPCP.git
+[submodule "GPCP"]
+	path = GPCP
+	url = git@github.com:229226/GPCP.git
+[submodule "archive-wlbench"]
+	path = .archive/wlbench_20261119
+	url = git@github.com:229226/GPCP.git

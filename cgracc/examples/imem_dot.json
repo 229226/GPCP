@@ -1,9 +1,0 @@
-{
-  "name": "imem_dot",
-  "nodes": [
-    {"id": "m0", "op": "mul", "inputs": ["r0", "r1"], "dst": "r2"},
-    {"id": "m1", "op": "mul", "inputs": ["m0", "r1"], "dst": "r3"},
-    {"id": "ld0", "op": "ld", "imm": 0, "dst": "r4", "space": "spad"},
-    {"id": "st0", "op": "st", "inputs": ["m1"], "imm": 1, "space": "spad"}
-  ]
-}
